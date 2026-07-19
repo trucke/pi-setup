@@ -50,9 +50,7 @@
     ],
     "skills": [
       "./skills/background-terminals",
-      "./skills/subagents",
-      "./skills/svelte-code-writer",
-      "./skills/svelte-core-bestpractices"
+      "./skills/subagents"
     ],
     "themes": [
       "./themes/github-dark-default.json"
