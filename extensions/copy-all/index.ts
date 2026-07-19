@@ -32,9 +32,25 @@ function textFromContent(content: unknown) {
     .join("\n");
 }
 
-function copyToClipboard(text: string) {
+interface ClipboardCommand {
+  command: string;
+  args: string[];
+}
+
+export function clipboardCommand(
+  platform: NodeJS.Platform = process.platform,
+): ClipboardCommand {
+  if (platform === "darwin") return { command: "pbcopy", args: [] };
+  if (platform === "linux") return { command: "wl-copy", args: [] };
+
+  throw new Error(
+    `The copy-all command does not support the ${platform} platform.`,
+  );
+}
+
+function copyToClipboard(text: string, clipboard: ClipboardCommand) {
   return Effect.callback<void, ClipboardError>((resume) => {
-    const child = spawn("pbcopy");
+    const child = spawn(clipboard.command, clipboard.args);
     let stderr = "";
 
     child.stderr.on("data", (chunk) => {
@@ -75,7 +91,7 @@ function copyToClipboard(text: string) {
 
 async function runClipboardCopy(text: string, signal: AbortSignal | undefined) {
   const exit = await Effect.runPromiseExit(
-    copyToClipboard(text),
+    copyToClipboard(text, clipboardCommand()),
     signal ? { signal } : undefined,
   );
   if (Exit.isSuccess(exit)) return;

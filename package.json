@@ -32,7 +32,7 @@
     "typebox": "*"
   },
   "name": "@trucke/pi-setup",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "keywords": [
     "pi-package"
   ],
@@ -45,7 +45,8 @@
       "./extensions/git-info/index.ts",
       "./extensions/model-info/index.ts",
       "./extensions/subagents/index.ts",
-      "./extensions/ui-customization/index.ts"
+      "./extensions/ui-customization/index.ts",
+      "./extensions/copy-all/index.ts"
     ],
     "skills": [
       "./skills/background-terminals",
