@@ -30,10 +30,10 @@ import {
   SEARCH_TOOL_DESCRIPTION,
 } from "./prompt.ts";
 
-function readEnvValue(name: string) {
-  if (process.env[name]) return process.env[name];
-
-  const envPath = join(homedir(), ".pi", "agent", ".env");
+function readEnvFileValue(
+  name: string,
+  envPath = join(homedir(), ".pi", "agent", ".env"),
+) {
   let envText = "";
 
   try {
@@ -69,21 +69,54 @@ class MissingApiKeyError extends Data.TaggedError("MissingApiKeyError")<{
   readonly message: string;
 }> {}
 
-function createClient() {
-  const apiKey = readEnvValue("FIRECRAWL_API_KEY");
-  if (!apiKey) {
-    return Effect.fail(
-      new MissingApiKeyError({
-        message:
-          "Missing FIRECRAWL_API_KEY in the environment or ~/.pi/agent/.env",
-      }),
+type CommandExecutor = Pick<ExtensionAPI, "exec">;
+
+interface ApiKeyOptions {
+  env?: NodeJS.ProcessEnv;
+  envPath?: string;
+}
+
+export async function resolveApiKey(
+  pi: CommandExecutor,
+  signal?: AbortSignal,
+  options: ApiKeyOptions = {},
+) {
+  const processApiKey = (options.env ?? process.env).FIRECRAWL_API_KEY?.trim();
+  if (processApiKey) return processApiKey;
+
+  try {
+    const result = await pi.exec(
+      "infisical",
+      ["secrets", "get", "FIRECRAWL_API_KEY", "--plain", "--silent"],
+      {
+        cwd: join(homedir(), ".pi", "agent"),
+        signal,
+        timeout: 15_000,
+      },
     );
+    const infisicalApiKey = result.code === 0 ? result.stdout.trim() : "";
+    if (infisicalApiKey) return infisicalApiKey;
+  } catch (error) {
+    if (signal?.aborted) throw error;
   }
 
-  return Effect.try({
-    try: () => new Firecrawl({ apiKey }),
+  const fileApiKey = readEnvFileValue("FIRECRAWL_API_KEY", options.envPath);
+  if (fileApiKey) return fileApiKey;
+
+  throw new MissingApiKeyError({
+    message:
+      "Missing FIRECRAWL_API_KEY in the process environment, Infisical, or ~/.pi/agent/.env",
+  });
+}
+
+function createClient(pi: CommandExecutor) {
+  return Effect.tryPromise({
+    try: async (signal) =>
+      new Firecrawl({ apiKey: await resolveApiKey(pi, signal) }),
     catch: (cause) =>
-      new FirecrawlError({ message: errorMessage(cause), cause }),
+      cause instanceof MissingApiKeyError
+        ? cause
+        : new FirecrawlError({ message: errorMessage(cause), cause }),
   });
 }
 
@@ -188,6 +221,7 @@ function operationError(operation: string, error: unknown) {
 
 /** Shared Effect pipeline with a single Promise boundary for the tool API. */
 async function runFirecrawl<T>(
+  pi: CommandExecutor,
   operation: string,
   status: string,
   timeout: number,
@@ -201,7 +235,7 @@ async function runFirecrawl<T>(
   >,
 ) {
   const program = Effect.gen(function* () {
-    const client = yield* createClient();
+    const client = yield* createClient(pi);
     yield* Effect.sync(() =>
       onUpdate?.({
         content: [{ type: "text", text: status }],
@@ -233,7 +267,7 @@ async function runFirecrawl<T>(
 
 export default function firecrawlTools(pi: ExtensionAPI) {
   pi.registerTool({
-    name: "search",
+    name: "firecrawl_search",
     label: "Search Web",
     description: SEARCH_TOOL_DESCRIPTION,
     promptSnippet: SEARCH_PROMPT_SNIPPET,
@@ -258,6 +292,7 @@ export default function firecrawlTools(pi: ExtensionAPI) {
     }),
     execute: (_toolCallId, params, signal, onUpdate) =>
       runFirecrawl(
+        pi,
         "search",
         `Searching Firecrawl for: ${params.query}`,
         35_000,
@@ -278,7 +313,7 @@ export default function firecrawlTools(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "crawl",
+    name: "firecrawl_crawl",
     label: "Crawl Website",
     description: CRAWL_TOOL_DESCRIPTION,
     promptSnippet: CRAWL_PROMPT_SNIPPET,
@@ -334,6 +369,7 @@ export default function firecrawlTools(pi: ExtensionAPI) {
     }),
     execute: (_toolCallId, params, signal, onUpdate) =>
       runFirecrawl(
+        pi,
         "crawl",
         `Crawling up to ${params.limit ?? 20} pages from: ${params.url}`,
         ((params.timeout ?? 120) + 5) * 1_000,
@@ -359,7 +395,7 @@ export default function firecrawlTools(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "scrape",
+    name: "firecrawl_scrape",
     label: "Scrape Page",
     description: SCRAPE_TOOL_DESCRIPTION,
     promptSnippet: SCRAPE_PROMPT_SNIPPET,
@@ -391,6 +427,7 @@ export default function firecrawlTools(pi: ExtensionAPI) {
     }),
     execute: (_toolCallId, params, signal, onUpdate) =>
       runFirecrawl(
+        pi,
         "scrape",
         `Scraping page with Firecrawl: ${params.url}`,
         (params.timeout ?? 30_000) + 5_000,

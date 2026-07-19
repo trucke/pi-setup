@@ -74,10 +74,7 @@ import {
   runTool,
   type SubagentRuntime,
 } from "./src/runtime.ts";
-import {
-  openSubagentPicker,
-  openSubagentTakeover,
-} from "./src/ui/takeover.ts";
+import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 
 const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
 const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
@@ -627,10 +624,7 @@ export default function (pi: ExtensionAPI) {
       const icon = failed ? theme.fg("error", "x") : theme.fg("success", "■");
       const header =
         `${icon} ` +
-        theme.fg(
-          "accent",
-          theme.bold(`by the way · ${data?.title ?? "?"}`),
-        ) +
+        theme.fg("accent", theme.bold(`by the way · ${data?.title ?? "?"}`)) +
         theme.fg(
           "muted",
           ` · ${failed ? "failed" : "answered"} · ${data?.id ?? "?"}`,
@@ -669,10 +663,7 @@ export default function (pi: ExtensionAPI) {
 
   // --- Commands -----------------------------------------------------------
 
-  const runByTheWay = async (
-    rawArgs: string,
-    ctx: ExtensionCommandContext,
-  ) => {
+  const runByTheWay = async (rawArgs: string, ctx: ExtensionCommandContext) => {
     if (ctx.mode !== "tui") {
       if (ctx.hasUI)
         ctx.ui.notify("by the way is only available in the TUI", "error");
@@ -681,10 +672,7 @@ export default function (pi: ExtensionAPI) {
 
     let prompt = rawArgs.trim();
     if (!prompt) {
-      const input = await ctx.ui.input(
-        "by the way",
-        "Ask a one-off question…",
-      );
+      const input = await ctx.ui.input("by the way", "Ask a one-off question…");
       prompt = input?.trim() ?? "";
       if (!prompt) return;
     }
@@ -724,7 +712,8 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.registerCommand("btw", {
-    description: "Ask a one-off side question while the main agent keeps working",
+    description:
+      "Ask a one-off side question while the main agent keeps working",
     handler: runByTheWay,
   });
 

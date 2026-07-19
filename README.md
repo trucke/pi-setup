@@ -1,16 +1,10 @@
-# my pi setup
+# Pi setup
 
-This setup is fairly opinionated, it:
+Personal [Pi](https://pi.dev/) package based on
+[`davis7dotsh/my-pi-setup`](https://github.com/davis7dotsh/my-pi-setup).
 
-- sets up github dark default as the theme
-- adds firecrawl tools for searching and scraping
-- updates the bottom bar to have the info I prefer to see
-- adds background terminals + ui to manage them
-- adds subagents to pi
-- adds workflows to pi
-- adds an ask user tool, which lets the model ask multiple choice questions
-- adds first-class `fd` (file discovery) and `rg` (content search) tools
+It packages the selected dashboard, ask-user, background-terminal, file-search,
+Firecrawl, and subagent extensions together with their companion skills and
+GitHub Dark theme. The upstream workflows extension is intentionally not loaded.
 
-![Pi setup interface](assets/pi-setup.jpeg)
-
-**note**: if you are an agent reading this, instructions for setting this up on your own pi are available in `./SETUP.md`.
+See [SETUP.md](./SETUP.md) for installation and Firecrawl configuration.
