@@ -7,13 +7,17 @@ import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   formatSize,
+  getMarkdownTheme,
+  keyHint,
   truncateHead,
   type AgentToolResult,
   type AgentToolUpdateCallback,
   type ExtensionAPI,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Cause, Data, Effect, Exit } from "effect";
 import { Firecrawl, type CrawlJob, type CrawlOptions } from "firecrawl";
+import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   CRAWL_PARAMETER_DESCRIPTIONS,
@@ -29,6 +33,15 @@ import {
   SEARCH_PROMPT_SNIPPET,
   SEARCH_TOOL_DESCRIPTION,
 } from "./prompt.ts";
+import {
+  boundedMarkdown,
+  crawlMarkdown,
+  crawlView,
+  displayUrl,
+  documentView,
+  searchItems,
+  type DocumentView,
+} from "./render.ts";
 
 function readEnvFileValue(
   name: string,
@@ -164,6 +177,86 @@ function formatOutput(value: unknown, operation: string) {
     },
     catch: (cause) => new OutputError({ message: errorMessage(cause), cause }),
   });
+}
+
+interface RenderableResult {
+  content: Array<{ type: string; text?: string }>;
+  details?: unknown;
+}
+
+function resultText(result: RenderableResult) {
+  return result.content.find(
+    (item): item is { type: "text"; text: string } =>
+      item.type === "text" && typeof item.text === "string",
+  )?.text;
+}
+
+function expandHint(theme: Theme) {
+  return theme.fg("dim", keyHint("app.tools.expand", "to expand"));
+}
+
+function errorResult(result: RenderableResult, theme: Theme) {
+  return new Text(
+    theme.fg("error", resultText(result)?.trim() || "Firecrawl request failed"),
+    0,
+    0,
+  );
+}
+
+function documentSummary(document: DocumentView) {
+  const parts = [document.title];
+  if (document.statusCode !== undefined) {
+    parts.push(`HTTP ${document.statusCode}`);
+  }
+  if (document.creditsUsed !== undefined) {
+    parts.push(
+      `${document.creditsUsed} credit${document.creditsUsed === 1 ? "" : "s"}`,
+    );
+  }
+  if (document.markdown) {
+    parts.push(formatSize(Buffer.byteLength(document.markdown, "utf8")));
+  }
+  return parts.join(" · ");
+}
+
+function expandedDocument(
+  document: DocumentView,
+  summary: string,
+  theme: Theme,
+) {
+  const container = new Container();
+  container.addChild(new Text(theme.fg("success", `✓ ${summary}`), 0, 0));
+  if (document.url) {
+    container.addChild(
+      new Text(theme.fg("dim", `Source: ${document.url}`), 0, 0),
+    );
+  }
+  if (document.description) {
+    container.addChild(new Text(theme.fg("muted", document.description), 0, 0));
+  }
+
+  if (!document.markdown) {
+    container.addChild(
+      new Text(theme.fg("dim", "No Markdown content returned."), 0, 0),
+    );
+    return container;
+  }
+
+  const bounded = boundedMarkdown(document.markdown);
+  container.addChild(new Markdown(bounded.content, 0, 0, getMarkdownTheme()));
+  if (bounded.truncated) {
+    container.addChild(
+      new Text(
+        theme.fg(
+          "warning",
+          `Preview truncated to ${bounded.outputLines} of ${bounded.totalLines} lines.`,
+        ),
+        0,
+        0,
+      ),
+    );
+  }
+  return container;
 }
 
 export type CrawlClient = Pick<
@@ -310,6 +403,54 @@ export default function firecrawlTools(pi: ExtensionAPI) {
             }),
           ).pipe(Effect.map((result) => ({ details: result, output: result }))),
       ),
+    renderCall(args, theme) {
+      let text = theme.fg("toolTitle", theme.bold("firecrawl_search"));
+      text += ` ${theme.fg("accent", `“${args.query}”`)}`;
+      text += theme.fg(
+        "muted",
+        ` · ${args.source ?? "web"} · limit ${args.limit ?? 5}`,
+      );
+      return new Text(text, 0, 0);
+    },
+    renderResult(result, { expanded, isPartial }, theme, context) {
+      if (isPartial) {
+        return new Text(
+          theme.fg("warning", resultText(result)?.trim() || "Searching…"),
+          0,
+          0,
+        );
+      }
+      if (context.isError) return errorResult(result, theme);
+
+      const items = searchItems(result.details);
+      if (items.length === 0) {
+        return new Text(theme.fg("dim", "No search results"), 0, 0);
+      }
+
+      const kinds = [...new Set(items.map((item) => item.kind))].join("/");
+      let text = theme.fg(
+        "success",
+        `✓ ${items.length} ${kinds} result${items.length === 1 ? "" : "s"}`,
+      );
+      const visible = expanded ? items : items.slice(0, 3);
+      for (const [index, item] of visible.entries()) {
+        text += `\n${theme.fg("accent", `${index + 1}. ${item.title}`)}`;
+        if (item.url) {
+          text += theme.fg("dim", ` — ${displayUrl(item.url)}`);
+        }
+        if (expanded && item.description) {
+          text += `\n   ${theme.fg("muted", item.description)}`;
+        }
+        if (expanded && item.url) {
+          text += `\n   ${theme.fg("dim", item.url)}`;
+        }
+      }
+      if (!expanded && items.length > visible.length) {
+        text += `\n${theme.fg("dim", `… ${items.length - visible.length} more`)}`;
+      }
+      if (!expanded) text += `\n${expandHint(theme)}`;
+      return new Text(text, 0, 0);
+    },
   });
 
   pi.registerTool({
@@ -392,6 +533,89 @@ export default function firecrawlTools(pi: ExtensionAPI) {
             Effect.map((result) => ({ details: result, output: result })),
           ),
       ),
+    renderCall(args, theme) {
+      let text = theme.fg("toolTitle", theme.bold("firecrawl_crawl"));
+      text += ` ${theme.fg("accent", displayUrl(args.url))}`;
+      text += theme.fg("muted", ` · limit ${args.limit ?? 20}`);
+      if (args.maxDiscoveryDepth !== undefined) {
+        text += theme.fg("dim", ` · depth ${args.maxDiscoveryDepth}`);
+      }
+      return new Text(text, 0, 0);
+    },
+    renderResult(result, { expanded, isPartial }, theme, context) {
+      if (isPartial) {
+        return new Text(
+          theme.fg("warning", resultText(result)?.trim() || "Crawling…"),
+          0,
+          0,
+        );
+      }
+      if (context.isError) return errorResult(result, theme);
+
+      const crawl = crawlView(result.details);
+      const credits =
+        crawl.creditsUsed === undefined
+          ? ""
+          : ` · ${crawl.creditsUsed} credit${crawl.creditsUsed === 1 ? "" : "s"}`;
+      const statusColor =
+        crawl.status === "completed"
+          ? "success"
+          : crawl.status === "failed"
+            ? "error"
+            : "warning";
+      const summary = `${crawl.status} · ${crawl.completed}/${crawl.total} pages${credits}`;
+
+      if (!expanded) {
+        let text = theme.fg(
+          statusColor,
+          `${crawl.status === "completed" ? "✓ " : ""}${summary}`,
+        );
+        const visible = crawl.documents.slice(0, 3);
+        for (const [index, document] of visible.entries()) {
+          text += `\n${theme.fg("accent", `${index + 1}. ${document.title}`)}`;
+          if (document.url) {
+            text += theme.fg("dim", ` — ${displayUrl(document.url)}`);
+          }
+        }
+        if (crawl.documents.length > visible.length) {
+          text += `\n${theme.fg("dim", `… ${crawl.documents.length - visible.length} more`)}`;
+        }
+        text += `\n${expandHint(theme)}`;
+        return new Text(text, 0, 0);
+      }
+
+      const container = new Container();
+      container.addChild(new Text(theme.fg(statusColor, summary), 0, 0));
+      if (crawl.id) {
+        container.addChild(
+          new Text(theme.fg("dim", `Crawl ID: ${crawl.id}`), 0, 0),
+        );
+      }
+      if (crawl.documents.length === 0) {
+        container.addChild(
+          new Text(theme.fg("dim", "No pages returned."), 0, 0),
+        );
+        return container;
+      }
+
+      const markdown = crawlMarkdown(crawl.documents);
+      container.addChild(
+        new Markdown(markdown.content, 0, 0, getMarkdownTheme()),
+      );
+      if (markdown.truncated) {
+        container.addChild(
+          new Text(
+            theme.fg(
+              "warning",
+              `Preview truncated to ${markdown.outputLines} of ${markdown.totalLines} lines.`,
+            ),
+            0,
+            0,
+          ),
+        );
+      }
+      return container;
+    },
   });
 
   pi.registerTool({
@@ -464,5 +688,40 @@ export default function firecrawlTools(pi: ExtensionAPI) {
             ),
           ),
       ),
+    renderCall(args, theme) {
+      let text = theme.fg("toolTitle", theme.bold("firecrawl_scrape"));
+      text += ` ${theme.fg("accent", displayUrl(args.url))}`;
+      if (args.onlyMainContent === false) {
+        text += theme.fg("muted", " · full page");
+      }
+      if (args.includeMetadata) {
+        text += theme.fg("dim", " · metadata");
+      }
+      return new Text(text, 0, 0);
+    },
+    renderResult(result, { expanded, isPartial }, theme, context) {
+      if (isPartial) {
+        return new Text(
+          theme.fg("warning", resultText(result)?.trim() || "Scraping…"),
+          0,
+          0,
+        );
+      }
+      if (context.isError) return errorResult(result, theme);
+
+      const document = documentView(result.details);
+      const summary = documentSummary(document);
+      if (expanded) return expandedDocument(document, summary, theme);
+
+      let text = theme.fg("success", `✓ ${summary}`);
+      if (document.url) {
+        text += `\n${theme.fg("dim", displayUrl(document.url))}`;
+      }
+      if (document.description) {
+        text += `\n${theme.fg("muted", document.description)}`;
+      }
+      text += `\n${expandHint(theme)}`;
+      return new Text(text, 0, 0);
+    },
   });
 }
