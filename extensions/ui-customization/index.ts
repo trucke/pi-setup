@@ -12,13 +12,13 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import {
-  emptyGitInfoState,
   emptyModelInfoState,
-  GIT_INFO_CHANNEL,
+  emptyVcsInfoState,
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
-  isGitInfoState,
+  VCS_INFO_CHANNEL,
   isModelInfoState,
+  isVcsInfoState,
 } from "../shared/dashboard-state.ts";
 
 type Rgb = [number, number, number];
@@ -172,7 +172,7 @@ function columns(left: string, right: string, width: number) {
 export default function uiCustomization(pi: ExtensionAPI) {
   let title = "pi";
   let modelInfo = emptyModelInfoState();
-  let gitInfo = emptyGitInfoState();
+  let vcsInfo = emptyVcsInfoState();
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
   let themeRemovalTimers: Array<ReturnType<typeof setTimeout>> = [];
@@ -183,9 +183,9 @@ export default function uiCustomization(pi: ExtensionAPI) {
     requestRender?.();
   });
 
-  const stopGitListener = pi.events.on(GIT_INFO_CHANNEL, (value) => {
-    if (!isGitInfoState(value)) return;
-    gitInfo = value;
+  const stopVcsListener = pi.events.on(VCS_INFO_CHANNEL, (value) => {
+    if (!isVcsInfoState(value)) return;
+    vcsInfo = value;
     requestRender?.();
   });
 
@@ -232,17 +232,18 @@ export default function uiCustomization(pi: ExtensionAPI) {
         invalidate() {},
         render(width: number) {
           const directory = theme.fg("text", formatDirectory(ctx.cwd));
-          const fileLabel = gitInfo.changedFiles === 1 ? "file" : "files";
-          let git = gitInfo.branch
-            ? `${gitInfo.branch} · ${gitInfo.changedFiles} ${fileLabel} changed`
-            : "";
+          const fileLabel = vcsInfo.changedFiles === 1 ? "file" : "files";
+          let vcs =
+            vcsInfo.kind && vcsInfo.label
+              ? `${vcsInfo.kind} ${vcsInfo.label} · ${vcsInfo.changedFiles} ${fileLabel} changed`
+              : "";
 
-          if (gitInfo.pullRequest) {
-            const prLabel = `PR #${gitInfo.pullRequest.number}`;
+          if (vcsInfo.pullRequest) {
+            const prLabel = `PR #${vcsInfo.pullRequest.number}`;
             const linkedPr = getCapabilities().hyperlinks
-              ? hyperlink(prLabel, gitInfo.pullRequest.url)
+              ? hyperlink(prLabel, vcsInfo.pullRequest.url)
               : prLabel;
-            git += ` · ${linkedPr}`;
+            vcs += ` · ${linkedPr}`;
           }
 
           const contextPercent =
@@ -264,7 +265,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
 
           const lines = [
             columns(directory, theme.fg("muted", model), width),
-            columns(theme.fg("muted", usage), theme.fg("muted", git), width),
+            columns(theme.fg("muted", usage), theme.fg("muted", vcs), width),
           ];
 
           // Extension statuses render after the two dashboard lines, one per row.
@@ -290,7 +291,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     title = formatDirectory(ctx.cwd);
     modelInfo = emptyModelInfoState();
-    gitInfo = emptyGitInfoState();
+    vcsInfo = emptyVcsInfoState();
     install(ctx);
   });
 
@@ -300,7 +301,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", (_event, ctx) => {
     stopModelListener();
-    stopGitListener();
+    stopVcsListener();
     for (const timer of themeRemovalTimers) clearTimeout(timer);
     themeRemovalTimers = [];
     activeTui = undefined;

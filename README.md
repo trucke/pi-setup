@@ -5,6 +5,8 @@ Personal [Pi](https://pi.dev/) package based on
 
 It packages the selected dashboard, ask-user, background-terminal, copy-all,
 file-search, Firecrawl, and subagent extensions together with their companion
-skills and GitHub Dark theme. The upstream workflows extension is intentionally not loaded.
+skills and GitHub Dark theme. The dashboard's VCS status and changed-files view
+prefer JJ repositories and fall back to Git. The upstream workflows extension is
+intentionally not loaded.
 
 See [SETUP.md](./SETUP.md) for installation and Firecrawl configuration.

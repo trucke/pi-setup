@@ -4,10 +4,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Effect, Fiber, Schedule } from "effect";
 import {
-  emptyGitInfoState,
-  GIT_INFO_CHANNEL,
+  emptyVcsInfoState,
   REFRESH_CHANNEL,
   type PullRequestInfo,
+  VCS_INFO_CHANNEL,
 } from "../shared/dashboard-state.ts";
 import {
   loadChangedFiles,
@@ -18,17 +18,12 @@ import { makeRefreshCoordinator } from "./src/refresh-coordinator.ts";
 import {
   createRuntime,
   runEffect,
-  type GitInfoRuntime,
+  type VcsInfoRuntime,
 } from "./src/runtime.ts";
+import { loadVcsSnapshot } from "./src/vcs.ts";
 
 const POLL_INTERVAL_MS = 3_000;
-const GIT_TIMEOUT_MS = 3_000;
 const GH_TIMEOUT_MS = 10_000;
-
-function countChangedFiles(status: string) {
-  if (!status.trim()) return 0;
-  return status.split("\n").filter(Boolean).length;
-}
 
 function parsePullRequest(value: unknown) {
   if (typeof value !== "object" || value === null) return null;
@@ -51,103 +46,78 @@ function parsePullRequestJson(value: string) {
   }
 }
 
-export default function gitInfo(pi: ExtensionAPI) {
-  let state = emptyGitInfoState();
-  let runtime: GitInfoRuntime | undefined;
+export default function vcsInfo(pi: ExtensionAPI) {
+  let state = emptyVcsInfoState();
+  let runtime: VcsInfoRuntime | undefined;
   let pollingFiber: Fiber.Fiber<void> | undefined;
   let currentContext: ExtensionContext | undefined;
   let generation = 0;
-  let queriedPrBranch: string | null = null;
+  let queriedPullRequestKey: string | null = null;
   const refreshCoordinator = makeRefreshCoordinator();
 
   const getRuntime = () => (runtime ??= createRuntime());
-  const publish = () => pi.events.emit(GIT_INFO_CHANNEL, { ...state });
-  const run = (
-    command: string,
-    args: string[],
-    ctx: ExtensionContext,
-    timeout: number,
-  ) => runCommand(command, args, ctx.cwd, timeout);
+  const publish = () => pi.events.emit(VCS_INFO_CHANNEL, { ...state });
 
-  const lookupPullRequest = (ctx: ExtensionContext, branch: string) =>
+  const lookupPullRequest = (ctx: ExtensionContext, refs: string[]) =>
     Effect.gen(function* () {
-      const result = yield* run(
-        "gh",
-        ["pr", "view", branch, "--json", "number,url,state,isDraft"],
-        ctx,
-        GH_TIMEOUT_MS,
-      );
-      if (result.code !== 0) return null;
-      return parsePullRequestJson(result.stdout);
+      for (const ref of refs) {
+        const result = yield* runCommand(
+          "gh",
+          ["pr", "view", ref, "--json", "number,url,state,isDraft"],
+          ctx.cwd,
+          GH_TIMEOUT_MS,
+        );
+        if (result.code !== 0) continue;
+
+        const pullRequest = parsePullRequestJson(result.stdout);
+        if (pullRequest) return pullRequest;
+      }
+      return null;
     });
 
   const refreshEffect = (
     ctx: ExtensionContext,
     forcePullRequest: boolean,
     refreshGeneration: number,
+    snapshotWorkingCopy: boolean,
   ) =>
     Effect.suspend(() => {
       if (refreshGeneration !== generation) return Effect.void;
       currentContext = ctx;
 
       return Effect.gen(function* () {
-        const repo = yield* run(
-          "git",
-          ["rev-parse", "--is-inside-work-tree"],
-          ctx,
-          GIT_TIMEOUT_MS,
-        );
+        const snapshot = yield* loadVcsSnapshot(ctx.cwd, snapshotWorkingCopy);
         if (refreshGeneration !== generation) return;
 
-        if (repo.code !== 0 || repo.stdout.trim() !== "true") {
-          queriedPrBranch = null;
-          state = emptyGitInfoState();
+        if (!snapshot) {
+          queriedPullRequestKey = null;
+          state = emptyVcsInfoState();
           publish();
           return;
         }
 
-        const [branchResult, headResult, statusResult] = yield* Effect.all(
-          [
-            run("git", ["branch", "--show-current"], ctx, GIT_TIMEOUT_MS),
-            run("git", ["rev-parse", "--short", "HEAD"], ctx, GIT_TIMEOUT_MS),
-            run(
-              "git",
-              ["status", "--porcelain=v1", "--untracked-files=all"],
-              ctx,
-              GIT_TIMEOUT_MS,
-            ),
-          ],
-          { concurrency: "unbounded" },
-        );
-        if (refreshGeneration !== generation) return;
-
-        const branchName = branchResult.stdout.trim();
-        const shortHead = headResult.stdout.trim();
-        const branch =
-          branchName || (shortHead ? `detached@${shortHead}` : "detached");
-        const branchChanged = branchName !== queriedPrBranch;
-
+        const pullRequestKey = `${snapshot.kind}:${snapshot.pullRequestRefs.join("\0")}`;
+        const referenceChanged = pullRequestKey !== queriedPullRequestKey;
         state = {
-          ...state,
           isRepository: true,
-          branch,
-          changedFiles:
-            statusResult.code === 0
-              ? countChangedFiles(statusResult.stdout)
-              : 0,
-          pullRequest: branchChanged ? null : state.pullRequest,
+          kind: snapshot.kind,
+          label: snapshot.label,
+          changedFiles: snapshot.changedFiles,
+          pullRequest: referenceChanged ? null : state.pullRequest,
         };
         publish();
 
-        if (!branchName) {
-          // queriedPrBranch is never "", so branchChanged already cleared pullRequest.
-          queriedPrBranch = null;
+        if (snapshot.pullRequestRefs.length === 0) {
+          queriedPullRequestKey = null;
           return;
         }
 
-        if (forcePullRequest || branchChanged) {
-          queriedPrBranch = branchName;
-          const pullRequest = yield* lookupPullRequest(ctx, branchName);
+        if (forcePullRequest || referenceChanged) {
+          queriedPullRequestKey = pullRequestKey;
+          const pullRequest = yield* lookupPullRequest(
+            ctx,
+            snapshot.pullRequestRefs,
+          );
           if (refreshGeneration !== generation) return;
           state = { ...state, pullRequest };
           publish();
@@ -156,17 +126,21 @@ export default function gitInfo(pi: ExtensionAPI) {
     });
 
   const refresh = (ctx: ExtensionContext, forcePullRequest = false) =>
-    refreshCoordinator.run(refreshEffect(ctx, forcePullRequest, generation));
+    refreshCoordinator.run(
+      refreshEffect(ctx, forcePullRequest, generation, true),
+    );
 
-  const refreshIfIdle = (ctx: ExtensionContext) =>
-    refreshCoordinator.runIfIdle(refreshEffect(ctx, false, generation));
+  const refreshIfIdle = (ctx: ExtensionContext, snapshotWorkingCopy: boolean) =>
+    refreshCoordinator.runIfIdle(
+      refreshEffect(ctx, false, generation, snapshotWorkingCopy),
+    );
 
   const reportBackgroundDefect = (defect: unknown) =>
-    Effect.logError("git-info background task defect", defect);
+    Effect.logError("vcs-info background task defect", defect);
 
   const poll = () =>
     Effect.suspend(() =>
-      currentContext ? refreshIfIdle(currentContext) : Effect.void,
+      currentContext ? refreshIfIdle(currentContext, false) : Effect.void,
     ).pipe(
       Effect.catchDefect(reportBackgroundDefect),
       Effect.repeat(Schedule.fixed(POLL_INTERVAL_MS)),
@@ -180,7 +154,7 @@ export default function gitInfo(pi: ExtensionAPI) {
     );
 
   const refreshInBackground = (ctx: ExtensionContext) => {
-    forkBackground(refreshIfIdle(ctx));
+    forkBackground(refreshIfIdle(ctx, true));
   };
 
   pi.events.on(REFRESH_CHANNEL, () => {
@@ -189,7 +163,7 @@ export default function gitInfo(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     generation += 1;
-    queriedPrBranch = null;
+    queriedPullRequestKey = null;
 
     const previousPollingFiber = pollingFiber;
     pollingFiber = undefined;
@@ -235,11 +209,11 @@ export default function gitInfo(pi: ExtensionAPI) {
         interruptMessage: "Loading changed files was cancelled.",
       });
       if (files === null) {
-        ctx.ui.notify("Not a git repository", "warning");
+        ctx.ui.notify("Not a Git or JJ repository", "warning");
         return;
       }
       if (files.length === 0) {
-        ctx.ui.notify("Working tree is clean", "info");
+        ctx.ui.notify("Working copy is clean", "info");
         return;
       }
 
@@ -248,21 +222,21 @@ export default function gitInfo(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("pr", {
-    description: "Refresh git and pull request information",
+    description: "Refresh VCS and pull request information",
     handler: async (_args, ctx) => {
       await runEffect(getRuntime(), refresh(ctx, true), {
         signal: ctx.signal,
-        interruptMessage: "Git and pull request refresh was cancelled.",
+        interruptMessage: "VCS and pull request refresh was cancelled.",
       });
       if (!state.isRepository) {
-        ctx.ui.notify("Not a git repository", "warning");
+        ctx.ui.notify("Not a Git or JJ repository", "warning");
       } else if (state.pullRequest) {
         ctx.ui.notify(
           `PR #${state.pullRequest.number}: ${state.pullRequest.url}`,
           "info",
         );
       } else {
-        ctx.ui.notify(`No open PR found for ${state.branch}`, "info");
+        ctx.ui.notify(`No open PR found for ${state.label}`, "info");
       }
     },
   });

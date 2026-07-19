@@ -8,9 +8,11 @@ import {
 } from "@earendil-works/pi-tui";
 import { Effect } from "effect";
 import { runCommand } from "./process.ts";
+import { findVcs, type VcsKind } from "./vcs.ts";
 
 const DIFF_SCROLL_STEP = 5;
 const MAX_DIFF_LINES = 20_000;
+const JJ_CHANGED_FILES_TEMPLATE = 'path ++ "\\0" ++ status_char ++ "\\0"';
 
 interface ChangedPath {
   path: string;
@@ -25,7 +27,7 @@ export interface ChangedFile {
   path: string;
 }
 
-function parseChangedPaths(output: string) {
+export function parseGitChangedPaths(output: string) {
   const records = output.split("\0");
   const paths: ChangedPath[] = [];
 
@@ -44,6 +46,19 @@ function parseChangedPaths(output: string) {
   return [...new Map(paths.map((entry) => [entry.path, entry])).values()];
 }
 
+export function parseJjChangedPaths(output: string) {
+  const records = output.split("\0");
+  const paths: ChangedPath[] = [];
+
+  for (let index = 0; index + 1 < records.length; index += 2) {
+    const path = records[index];
+    const status = records[index + 1];
+    if (path && status) paths.push({ path, status });
+  }
+
+  return paths;
+}
+
 function parseNumstat(output: string) {
   const line = output.split("\n").find(Boolean);
   if (!line) return { additions: 0, deletions: 0 };
@@ -55,14 +70,40 @@ function parseNumstat(output: string) {
   };
 }
 
+export function countGitDiffLines(output: string) {
+  let additions = 0;
+  let deletions = 0;
+  let binary = false;
+
+  for (const line of output.split("\n")) {
+    if (
+      line.startsWith("Binary files ") ||
+      line.startsWith("GIT binary patch")
+    ) {
+      binary = true;
+    } else if (line.startsWith("+") && !line.startsWith("+++")) {
+      additions += 1;
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      deletions += 1;
+    }
+  }
+
+  return binary
+    ? { additions: null, deletions: null }
+    : { additions, deletions };
+}
+
 function cleanDisplayPath(path: string) {
   return path.replace(/[\r\n\t]/g, " ");
 }
 
-const run = (cwd: string, args: string[]) =>
+const runGit = (cwd: string, args: string[]) =>
   runCommand("git", args, cwd, 10_000);
 
-const loadFile = Effect.fn("git-info.loadFile")(function* (
+const runJj = (cwd: string, args: string[]) =>
+  runCommand("jj", ["--no-pager", "--color=never", ...args], cwd, 10_000);
+
+const loadGitFile = Effect.fn("vcs-info.loadGitFile")(function* (
   repoRoot: string,
   changedPath: ChangedPath,
   hasHead: boolean,
@@ -92,11 +133,43 @@ const loadFile = Effect.fn("git-info.loadFile")(function* (
     ? ["diff", "--no-index", "--numstat", "--", "/dev/null", changedPath.path]
     : ["diff", "--numstat", "HEAD", "--", changedPath.path];
   const [diffResult, statResult] = yield* Effect.all(
-    [run(repoRoot, diffArguments), run(repoRoot, statArguments)],
+    [runGit(repoRoot, diffArguments), runGit(repoRoot, statArguments)],
     { concurrency: "unbounded" },
   );
-  const stats = parseNumstat(statResult.stdout);
-  const allDiffLines = diffResult.stdout.trimEnd().split("\n");
+
+  return makeChangedFile(
+    changedPath.path,
+    diffResult.stdout,
+    parseNumstat(statResult.stdout),
+  );
+});
+
+const loadJjFile = Effect.fn("vcs-info.loadJjFile")(function* (
+  repoRoot: string,
+  changedPath: ChangedPath,
+) {
+  const diffResult = yield* runJj(repoRoot, [
+    "--ignore-working-copy",
+    "diff",
+    "--git",
+    "--context=3",
+    "--",
+    changedPath.path,
+  ]);
+
+  return makeChangedFile(
+    changedPath.path,
+    diffResult.stdout,
+    countGitDiffLines(diffResult.stdout),
+  );
+});
+
+function makeChangedFile(
+  path: string,
+  diffOutput: string,
+  stats: { additions: number | null; deletions: number | null },
+) {
+  const allDiffLines = diffOutput.trimEnd().split("\n");
   const diff =
     allDiffLines.length > MAX_DIFF_LINES
       ? [
@@ -111,35 +184,61 @@ const loadFile = Effect.fn("git-info.loadFile")(function* (
       diff.length === 1 && diff[0] === ""
         ? ["No textual diff available."]
         : diff,
-    name: cleanDisplayPath(basename(changedPath.path)),
-    path: cleanDisplayPath(changedPath.path),
+    name: cleanDisplayPath(basename(path)),
+    path: cleanDisplayPath(path),
   } satisfies ChangedFile;
+}
+
+const loadChangedPaths = Effect.fn("vcs-info.loadChangedPaths")(function* (
+  kind: VcsKind,
+  repoRoot: string,
+) {
+  if (kind === "jj") {
+    const result = yield* runJj(repoRoot, [
+      "diff",
+      "-T",
+      JJ_CHANGED_FILES_TEMPLATE,
+    ]);
+    return result.code === 0 ? parseJjChangedPaths(result.stdout) : null;
+  }
+
+  const result = yield* runGit(repoRoot, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+  ]);
+  return result.code === 0 ? parseGitChangedPaths(result.stdout) : null;
 });
 
-export const loadChangedFiles = Effect.fn("git-info.loadChangedFiles")(
+export const loadChangedFiles = Effect.fn("vcs-info.loadChangedFiles")(
   function* (cwd: string) {
-    const rootResult = yield* run(cwd, ["rev-parse", "--show-toplevel"]);
-    if (rootResult.code !== 0) return null;
+    const repository = yield* findVcs(cwd);
+    if (!repository) return null;
 
-    const repoRoot = rootResult.stdout.trim();
-    const [statusResult, headResult] = yield* Effect.all(
-      [
-        run(repoRoot, [
-          "status",
-          "--porcelain=v1",
-          "-z",
-          "--untracked-files=all",
-        ]),
-        run(repoRoot, ["rev-parse", "--verify", "HEAD"]),
-      ],
-      { concurrency: "unbounded" },
+    const changedPaths = yield* loadChangedPaths(
+      repository.kind,
+      repository.root,
     );
-    if (statusResult.code !== 0) return null;
+    if (!changedPaths) return null;
 
-    const changedPaths = parseChangedPaths(statusResult.stdout);
+    let hasHead = true;
+    if (repository.kind === "git") {
+      const headResult = yield* runGit(repository.root, [
+        "rev-parse",
+        "--verify",
+        "HEAD",
+      ]);
+      hasHead = headResult.code === 0;
+    }
+
     const files: ChangedFile[] = [];
     for (const changedPath of changedPaths) {
-      files.push(yield* loadFile(repoRoot, changedPath, headResult.code === 0));
+      files.push(
+        repository.kind === "jj"
+          ? yield* loadJjFile(repository.root, changedPath)
+          : yield* loadGitFile(repository.root, changedPath, hasHead),
+      );
     }
 
     return files;

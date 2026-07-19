@@ -10,7 +10,7 @@
 > `npm run check` there passes clean — use it as the reference implementation.
 >
 > Audience: the agents migrating `firecrawl-search`, `ask-user`, `model-info`,
-> `git-info`, `ui-customization`, and `copy-all`.
+> `vcs-info`, `ui-customization`, and `copy-all`.
 
 ---
 
@@ -25,8 +25,8 @@ Reach for Effect only where you actually get something from it:
 
 - **Yes:** async work that needs typed errors, cancellation via the tool `AbortSignal`,
   timeouts, retries/polling, or a resource whose lifetime must outlive one call
-  (child process, subscription) → child processes (`git-info`, `copy-all`), the
-  Firecrawl SDK calls (`firecrawl-search`), git/gh polling (`git-info`).
+  (child process, subscription) → child processes (`vcs-info`, `copy-all`), the
+  Firecrawl SDK calls (`firecrawl-search`), Git/JJ/GitHub polling (`vcs-info`).
 - **No / barely:** pure TUI popups and rendering (`ask-user`, `ui-customization`),
   cross-extension channel plumbing, cost/token bookkeeping (`model-info`). These are
   synchronous or already-Promise UI code; wrapping them in Effect adds ceremony and no
@@ -250,9 +250,9 @@ string trimming.
 
 ---
 
-## 5. Recipe: child processes + timeout + polling (git-info, copy-all)
+## 5. Recipe: child processes + timeout + polling (vcs-info, copy-all)
 
-`git-info` shells out to `git`/`gh` with per-command timeouts and polls on an interval;
+`vcs-info` shells out to `git`/`jj`/`gh` with per-command timeouts and polls on an interval;
 `copy-all` pipes text into `pbcopy`. Two viable levels — pick the lightest that fits.
 
 **Simple, one-shot, small:** if all you do is "run a command, capture stdout, with a

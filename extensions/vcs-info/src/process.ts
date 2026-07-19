@@ -20,7 +20,7 @@ interface CommandRunnerShape {
 export class CommandRunner extends Context.Service<
   CommandRunner,
   CommandRunnerShape
->()("git-info/CommandRunner") {}
+>()("vcs-info/CommandRunner") {}
 
 function appendCommandFailure(stderr: string, command: string, error: Error) {
   const failure = `Failed to run ${command}: ${error.message}`;

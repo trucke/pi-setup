@@ -42,7 +42,7 @@
       "./extensions/background-terminals/index.ts",
       "./extensions/file-search/index.ts",
       "./extensions/firecrawl-search/index.ts",
-      "./extensions/git-info/index.ts",
+      "./extensions/vcs-info/index.ts",
       "./extensions/model-info/index.ts",
       "./extensions/subagents/index.ts",
       "./extensions/ui-customization/index.ts",

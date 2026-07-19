@@ -1,5 +1,5 @@
 export const MODEL_INFO_CHANNEL = "dashboard:model-info";
-export const GIT_INFO_CHANNEL = "dashboard:git-info";
+export const VCS_INFO_CHANNEL = "dashboard:vcs-info";
 export const REFRESH_CHANNEL = "dashboard:refresh";
 
 export interface ModelInfoState {
@@ -21,9 +21,10 @@ export interface PullRequestInfo {
   isDraft: boolean;
 }
 
-export interface GitInfoState {
+export interface VcsInfoState {
   isRepository: boolean;
-  branch: string | null;
+  kind: "git" | "jj" | null;
+  label: string | null;
   changedFiles: number;
   pullRequest: PullRequestInfo | null;
 }
@@ -43,10 +44,11 @@ export function emptyModelInfoState(): ModelInfoState {
   };
 }
 
-export function emptyGitInfoState(): GitInfoState {
+export function emptyVcsInfoState(): VcsInfoState {
   return {
     isRepository: false,
-    branch: null,
+    kind: null,
+    label: null,
     changedFiles: 0,
     pullRequest: null,
   };
@@ -87,12 +89,13 @@ function isPullRequestInfo(value: unknown): value is PullRequestInfo {
   );
 }
 
-export function isGitInfoState(value: unknown): value is GitInfoState {
+export function isVcsInfoState(value: unknown): value is VcsInfoState {
   if (!isRecord(value)) return false;
 
   return (
     typeof value.isRepository === "boolean" &&
-    (value.branch === null || typeof value.branch === "string") &&
+    (value.kind === null || value.kind === "git" || value.kind === "jj") &&
+    (value.label === null || typeof value.label === "string") &&
     typeof value.changedFiles === "number" &&
     (value.pullRequest === null || isPullRequestInfo(value.pullRequest))
   );

@@ -8,10 +8,10 @@ export function createRuntime() {
   return ManagedRuntime.make(AppLayer);
 }
 
-export type GitInfoRuntime = ReturnType<typeof createRuntime>;
+export type VcsInfoRuntime = ReturnType<typeof createRuntime>;
 
 export async function runEffect<A, E>(
-  runtime: GitInfoRuntime,
+  runtime: VcsInfoRuntime,
   effect: Effect.Effect<A, E, CommandRunner>,
   options: { signal?: AbortSignal; interruptMessage?: string } = {},
 ) {

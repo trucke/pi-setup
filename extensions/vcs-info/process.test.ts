@@ -30,7 +30,7 @@ test("captures output and tolerates command failures", async () => {
 });
 
 test("renders platform failures without making callers handle them", async () => {
-  const command = "git-info-command-that-does-not-exist";
+  const command = "vcs-info-command-that-does-not-exist";
   const result = await runtime.runPromise(
     runCommand(command, [], process.cwd(), 1_000),
   );
