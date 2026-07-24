@@ -296,7 +296,7 @@ export default function (pi: ExtensionAPI) {
         }),
       ),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const manager = await getManager();
       const harness = params.harness;
 
@@ -328,6 +328,7 @@ export default function (pi: ExtensionAPI) {
             modelRegistry: ctx.modelRegistry,
           },
         }),
+        { signal, interruptMessage: "Subagent spawn aborted." },
       );
 
       return {
@@ -457,7 +458,7 @@ export default function (pi: ExtensionAPI) {
         description: SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS.ids,
       }),
     }),
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, signal) {
       const manager = await getManager();
       const ids = [...new Set(params.ids)];
       if (ids.length === 0)
@@ -477,7 +478,10 @@ export default function (pi: ExtensionAPI) {
         );
       }
 
-      const report = await runTool(getRuntime(), manager.cancel(ids));
+      const report = await runTool(getRuntime(), manager.cancel(ids), {
+        signal,
+        interruptMessage: "Subagent cancellation aborted.",
+      });
 
       const lines = report.map((entry) =>
         entry.cancelled

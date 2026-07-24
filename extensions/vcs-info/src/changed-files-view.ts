@@ -14,6 +14,24 @@ const DIFF_SCROLL_STEP = 5;
 const MAX_DIFF_LINES = 20_000;
 const JJ_CHANGED_FILES_TEMPLATE = 'path ++ "\\0" ++ status_char ++ "\\0"';
 
+// Strip terminal control sequences from repository-controlled paths and diff
+// text before applying trusted theme styling.
+// eslint-disable-next-line no-control-regex
+const OSC_PATTERN =
+  /(?:\u001b\]|\u009d)(?:[^\u0007\u001b\u009c]|\u001b(?!\\))*(?:\u0007|\u001b\\|\u009c)/g;
+// eslint-disable-next-line no-control-regex
+const CSI_PATTERN = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g;
+// eslint-disable-next-line no-control-regex
+const ESCAPE_PATTERN = /\u001b(?:[()][0-2A-Z]|[ -/]*[@-~])/g;
+
+export function sanitizeTerminalText(text: string) {
+  return text
+    .replace(OSC_PATTERN, "")
+    .replace(CSI_PATTERN, "")
+    .replace(ESCAPE_PATTERN, "")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
+}
+
 interface ChangedPath {
   path: string;
   status: string;
@@ -94,7 +112,7 @@ export function countGitDiffLines(output: string) {
 }
 
 function cleanDisplayPath(path: string) {
-  return path.replace(/[\r\n\t]/g, " ");
+  return sanitizeTerminalText(path).replace(/[\r\n\t]/g, " ");
 }
 
 const runGit = (cwd: string, args: string[]) =>
@@ -169,7 +187,10 @@ function makeChangedFile(
   diffOutput: string,
   stats: { additions: number | null; deletions: number | null },
 ) {
-  const allDiffLines = diffOutput.trimEnd().split("\n");
+  const allDiffLines = diffOutput
+    .trimEnd()
+    .split("\n")
+    .map(sanitizeTerminalText);
   const diff =
     allDiffLines.length > MAX_DIFF_LINES
       ? [

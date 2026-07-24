@@ -7,9 +7,9 @@
     "firecrawl": "^4.30.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.80.6",
-    "@earendil-works/pi-coding-agent": "^0.80.6",
-    "@earendil-works/pi-tui": "^0.80.6",
+    "@earendil-works/pi-ai": "^0.82.0",
+    "@earendil-works/pi-coding-agent": "^0.82.0",
+    "@earendil-works/pi-tui": "^0.82.0",
     "@effect/vitest": "4.0.0-beta.98",
     "@types/node": "^26.1.1",
     "acorn": "^8.17.0",
@@ -45,6 +45,7 @@
       "./extensions/vcs-info/index.ts",
       "./extensions/model-info/index.ts",
       "./extensions/subagents/index.ts",
+      "./extensions/summaries/index.ts",
       "./extensions/ui-customization/index.ts",
       "./extensions/copy-all/index.ts"
     ],
