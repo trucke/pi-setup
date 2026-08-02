@@ -1,25 +1,37 @@
-/** Model-facing schema descriptions for the ask_user question and answer options. */
+/** Model-facing schema descriptions for ask_user questions and answer options. */
 export const ASK_USER_PARAMETER_DESCRIPTIONS = {
   optionLabel: "Short display label for this option",
   optionDescription: "Optional one-line description shown below the label",
   question: "The question to ask the user",
+  questionLabel:
+    "Optional short contextual label for this question, such as 'Scope' or 'Priority'",
+  questions:
+    "Between 1 and 4 questions to ask together. Each question is single-select.",
   options:
     "Between 2 and 5 answer options. A free-form 'write my own answer' option is always appended automatically - never include one yourself.",
 };
 
-/** Describes the ask_user tool's question shape and dismissible free-form fallback. */
+/** Describes ask_user's single and batched single-select question shapes. */
 export const ASK_USER_TOOL_DESCRIPTION =
-  "Ask the user a single multiple-choice question (2-5 options). A free-form 'write my own answer' option is always added automatically, and the user may dismiss the question without answering. Ask exactly one question per call.";
+  "Ask the user one multiple-choice question or a batch of up to 4 questions. Each question has 2-5 options and accepts one answer. A free-form 'write my own answer' option is always added automatically, and the user may dismiss the questionnaire without answering. Use the single question/options fields for one question or questions for a batch.";
 
-/** Adds ask_user's multiple-choice capability to the model's available-tools prompt. */
+/** Adds ask_user's single and batched multiple-choice capability to the model prompt. */
 export const ASK_USER_PROMPT_SNIPPET =
-  "Ask the user a multiple-choice question (2-5 options plus a free-form answer)";
+  "Ask the user one or up to 4 batched multiple-choice questions (2-5 options each, plus a free-form answer)";
 
-/** Guides the model to use ask_user for enumerable answers and one question at a time. */
+/** Guides the model to use ask_user for enumerable answers and batch independent questions. */
 export const ASK_USER_PROMPT_GUIDELINES = [
   "When asking the user a question whose likely answers can be enumerated, use the ask_user tool instead of asking in plain text.",
-  "Ask one question per ask_user call; ask follow-up questions in subsequent calls.",
+  "Batch independent questions into one ask_user call when that is more efficient. Ask dependent follow-up questions only after receiving the earlier answer.",
+  "Each question is single-select. Never include a free-form option yourself; ask_user adds one automatically.",
 ];
+
+type ReportedAnswer = {
+  label: string;
+  answer: string;
+  wasCustom: boolean;
+  index?: number;
+};
 
 /** Builds the behavioral tool-result message returned to the parent model for an ask_user outcome. */
 export function buildAskUserResultMessage(
@@ -28,18 +40,28 @@ export function buildAskUserResultMessage(
     | { kind: "cancelled" }
     | { kind: "dismissed" }
     | { kind: "custom"; answer: string }
-    | { kind: "selected"; answer: string; index: number | undefined },
+    | { kind: "selected"; answer: string; index: number | undefined }
+    | { kind: "batch"; answers: ReportedAnswer[] },
 ) {
   switch (outcome.kind) {
     case "no-ui":
-      return "No interactive UI is available, so the question could not be shown. Ask the user in plain text instead.";
+      return "No interactive UI is available, so the questionnaire could not be shown. Ask the user in plain text instead.";
     case "cancelled":
       return "Cancelled";
     case "dismissed":
-      return "User dismissed the question without answering. Do not assume an answer; proceed accordingly or ask differently.";
+      return "User dismissed the questionnaire without submitting answers. Do not assume any answers; proceed accordingly or ask differently.";
     case "custom":
       return `User wrote their own answer: ${outcome.answer}`;
     case "selected":
       return `User selected option ${outcome.index}: ${outcome.answer}`;
+    case "batch":
+      return [
+        "User submitted these answers:",
+        ...outcome.answers.map((answer) =>
+          answer.wasCustom
+            ? `${answer.label}: user wrote: ${answer.answer}`
+            : `${answer.label}: user selected option ${answer.index}: ${answer.answer}`,
+        ),
+      ].join("\n");
   }
 }

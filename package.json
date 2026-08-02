@@ -39,6 +39,7 @@
   "pi": {
     "extensions": [
       "./extensions/ask-user/index.ts",
+      "./extensions/herdr-ask-user/index.ts",
       "./extensions/background-terminals/index.ts",
       "./extensions/file-search/index.ts",
       "./extensions/firecrawl-search/index.ts",
