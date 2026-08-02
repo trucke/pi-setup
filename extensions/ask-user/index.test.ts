@@ -227,6 +227,49 @@ test("collects a batch through question tabs and the submit tab", async () => {
   );
 });
 
+test("supports k/up and j/down option navigation", async () => {
+  const theme: TestTheme = {
+    fg: (_color, text) => text,
+    bg: (_color, text) => text,
+    bold: (text) => text,
+  };
+  const chooseWith = (inputs: string[]) =>
+    registeredTool().execute(
+      "ask-1",
+      {
+        question: "Choose one",
+        options: [{ label: "A" }, { label: "B" }],
+      },
+      undefined,
+      undefined,
+      {
+        mode: "tui",
+        ui: {
+          custom: (factory) =>
+            new Promise((resolve) => {
+              const component = factory(
+                { requestRender() {} },
+                theme,
+                {},
+                resolve,
+              );
+              for (const input of inputs) component.handleInput(input);
+            }),
+        },
+      },
+    );
+
+  for (const inputs of [
+    ["j", "\r"],
+    ["\u001b[B", "\r"],
+    ["k", "k", "\r"],
+    ["\u001b[A", "\u001b[A", "\r"],
+  ]) {
+    const result = await chooseWith(inputs);
+    assert.match(result.content[0].text, /option 2: B/);
+  }
+});
+
 test("rejects batches larger than the supported maximum", async () => {
   const questions = Array.from({ length: MAX_QUESTIONS + 1 }, (_, index) => ({
     question: `Question ${index + 1}`,

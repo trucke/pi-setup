@@ -422,12 +422,12 @@ export default function askUser(pi: ExtensionAPI) {
             }
 
             const options = currentOptions();
-            if (matchesKey(data, Key.up)) {
+            if (matchesKey(data, Key.up) || data === "k") {
               optionIndex = (optionIndex - 1 + options.length) % options.length;
               refresh();
               return;
             }
-            if (matchesKey(data, Key.down)) {
+            if (matchesKey(data, Key.down) || data === "j") {
               optionIndex = (optionIndex + 1) % options.length;
               refresh();
               return;
@@ -571,14 +571,14 @@ export default function askUser(pi: ExtensionAPI) {
               add(
                 theme.fg(
                   "dim",
-                  ` Tab/←→ navigate • ↑↓ or 1-${options.length} select • Enter confirm • Esc dismiss`,
+                  ` Tab/←→ navigate • k/↑ j/↓ or 1-${options.length} select • Enter confirm • Esc dismiss`,
                 ),
               );
             } else {
               add(
                 theme.fg(
                   "dim",
-                  ` ↑↓ or 1-${options.length} select • Enter confirm • Esc dismiss`,
+                  ` k/↑ j/↓ or 1-${options.length} select • Enter confirm • Esc dismiss`,
                 ),
               );
             }
