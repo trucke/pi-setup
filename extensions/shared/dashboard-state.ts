@@ -1,5 +1,6 @@
 export const MODEL_INFO_CHANNEL = "dashboard:model-info";
 export const VCS_INFO_CHANNEL = "dashboard:vcs-info";
+export const FIRECRAWL_USAGE_CHANNEL = "dashboard:firecrawl-usage";
 export const REFRESH_CHANNEL = "dashboard:refresh";
 
 export interface ModelInfoState {
@@ -13,6 +14,10 @@ export interface ModelInfoState {
   cost: number;
   tokensPerSecond: number | null;
   generating: boolean;
+}
+
+export interface FirecrawlUsageState {
+  creditsUsed: number;
 }
 
 export interface PullRequestInfo {
@@ -42,6 +47,10 @@ export function emptyModelInfoState(): ModelInfoState {
     tokensPerSecond: null,
     generating: false,
   };
+}
+
+export function emptyFirecrawlUsageState(): FirecrawlUsageState {
+  return { creditsUsed: 0 };
 }
 
 export function emptyVcsInfoState(): VcsInfoState {
@@ -76,6 +85,18 @@ export function isModelInfoState(value: unknown): value is ModelInfoState {
     typeof value.cost === "number" &&
     isNullableNumber(value.tokensPerSecond) &&
     typeof value.generating === "boolean"
+  );
+}
+
+export function isFirecrawlUsageState(
+  value: unknown,
+): value is FirecrawlUsageState {
+  if (!isRecord(value)) return false;
+
+  return (
+    typeof value.creditsUsed === "number" &&
+    Number.isFinite(value.creditsUsed) &&
+    value.creditsUsed >= 0
   );
 }
 

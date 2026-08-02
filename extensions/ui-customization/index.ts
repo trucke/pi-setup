@@ -12,11 +12,14 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import {
+  emptyFirecrawlUsageState,
   emptyModelInfoState,
   emptyVcsInfoState,
+  FIRECRAWL_USAGE_CHANNEL,
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
   VCS_INFO_CHANNEL,
+  isFirecrawlUsageState,
   isModelInfoState,
   isVcsInfoState,
 } from "../shared/dashboard-state.ts";
@@ -188,6 +191,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let title = "pi";
   let modelInfo = emptyModelInfoState();
   let vcsInfo = emptyVcsInfoState();
+  let firecrawlUsage = emptyFirecrawlUsageState();
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
   let themeRemovalTimers: Array<ReturnType<typeof setTimeout>> = [];
@@ -203,6 +207,15 @@ export default function uiCustomization(pi: ExtensionAPI) {
     vcsInfo = value;
     requestRender?.();
   });
+
+  const stopFirecrawlUsageListener = pi.events.on(
+    FIRECRAWL_USAGE_CHANNEL,
+    (value) => {
+      if (!isFirecrawlUsageState(value)) return;
+      firecrawlUsage = value;
+      requestRender?.();
+    },
+  );
 
   function scheduleThemeRemoval(tui: DashboardTui) {
     for (const timer of themeRemovalTimers) clearTimeout(timer);
@@ -273,7 +286,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
             modelInfo.tokensPerSecond === null
               ? "— tok/s"
               : `${Math.round(modelInfo.tokensPerSecond)} tok/s`;
-          const usage = `${contextPercent}%/${contextWindow} · $${modelInfo.cost.toFixed(2)} · ${tps}`;
+          const usage = `${contextPercent}%/${contextWindow} · $${modelInfo.cost.toFixed(2)} · FC ${firecrawlUsage.creditsUsed} cr · ${tps}`;
           const model = modelInfo.provider
             ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
             : modelInfo.modelId;
@@ -307,6 +320,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
     title = formatDirectory(ctx.cwd);
     modelInfo = emptyModelInfoState();
     vcsInfo = emptyVcsInfoState();
+    firecrawlUsage = emptyFirecrawlUsageState();
     install(ctx);
   });
 
@@ -317,6 +331,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   pi.on("session_shutdown", (_event, ctx) => {
     stopModelListener();
     stopVcsListener();
+    stopFirecrawlUsageListener();
     for (const timer of themeRemovalTimers) clearTimeout(timer);
     themeRemovalTimers = [];
     activeTui = undefined;
