@@ -14,6 +14,7 @@ type ToolResult = {
 
 type TestComponent = {
   handleInput(data: string): void;
+  render(width: number): string[];
 };
 
 type TestTheme = {
@@ -225,6 +226,61 @@ test("collects a batch through question tabs and the submit tab", async () => {
     (result.details as { answers: unknown[]; cancelled: boolean }).cancelled,
     false,
   );
+});
+
+test("wraps option descriptions instead of truncating them", async () => {
+  const theme: TestTheme = {
+    fg: (_color, text) => text,
+    bg: (_color, text) => text,
+    bold: (text) => text,
+  };
+  const description =
+    "Show the authenticated Firecrawl team's remaining credits, regardless of which client used them.";
+  let rendered: string[] = [];
+
+  await registeredTool().execute(
+    "ask-1",
+    {
+      question: "What should the displayed value represent?",
+      options: [
+        { label: "Session credits", description },
+        { label: "Account credits" },
+      ],
+    },
+    undefined,
+    undefined,
+    {
+      mode: "tui",
+      ui: {
+        custom: (factory) =>
+          new Promise((resolve) => {
+            const component = factory(
+              { requestRender() {} },
+              theme,
+              {},
+              resolve,
+            );
+            rendered = component.render(52);
+            component.handleInput("\u001b");
+          }),
+      },
+    },
+  );
+
+  const firstOption = rendered.findIndex((line) => line.includes("1. Session"));
+  const secondOption = rendered.findIndex((line) =>
+    line.includes("2. Account"),
+  );
+  assert.ok(firstOption >= 0 && secondOption > firstOption);
+  assert.equal(
+    rendered
+      .slice(firstOption + 1, secondOption)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(" "),
+    description,
+  );
+  assert.ok(rendered.every((line) => !line.includes("...")));
 });
 
 test("supports k/up and j/down option navigation", async () => {

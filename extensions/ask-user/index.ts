@@ -16,6 +16,7 @@ import {
   matchesKey,
   Text,
   truncateToWidth,
+  wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { Cause, Effect, Exit } from "effect";
 import { Type, type Static } from "typebox";
@@ -179,29 +180,6 @@ function detailsFor(
     answers,
     cancelled,
   };
-}
-
-function wrapText(text: string, width: number) {
-  const lines: string[] = [];
-  for (const paragraph of text.split("\n")) {
-    const words = paragraph.split(/\s+/).filter(Boolean);
-    if (words.length === 0) {
-      lines.push("");
-      continue;
-    }
-    let current = "";
-    for (const word of words) {
-      const candidate = current ? `${current} ${word}` : word;
-      if (candidate.length > width && current) {
-        lines.push(current);
-        current = word;
-      } else {
-        current = candidate;
-      }
-    }
-    if (current) lines.push(current);
-  }
-  return lines;
 }
 
 function isLegacyDetails(
@@ -516,33 +494,45 @@ export default function askUser(pi: ExtensionAPI) {
                 add(theme.fg("warning", ` Unanswered: ${missing}`));
               }
             } else if (question) {
-              for (const line of wrapText(
+              for (const line of wrapTextWithAnsi(
                 question.question,
-                Math.max(10, renderWidth - 2),
+                Math.max(1, renderWidth - 2),
               )) {
                 add(` ${theme.fg("text", theme.bold(line))}`);
               }
               lines.push("");
 
+              const optionIndent = "      ";
+              const optionTextWidth = Math.max(
+                1,
+                renderWidth - optionIndent.length,
+              );
               for (let index = 0; index < options.length; index++) {
                 const option = options[index];
                 const selected = index === optionIndex;
                 const prefix = selected ? theme.fg("accent", " ❯ ") : "   ";
                 const marker = option.isOther ? "✎" : `${index + 1}.`;
-                const label = `${marker} ${option.label}`;
-                add(
-                  prefix +
-                    theme.fg(
-                      selected || (option.isOther && editMode)
-                        ? "accent"
-                        : option.isOther
-                          ? "muted"
-                          : "text",
-                      label,
-                    ),
+                const color =
+                  selected || (option.isOther && editMode)
+                    ? "accent"
+                    : option.isOther
+                      ? "muted"
+                      : "text";
+                const [firstLabel = "", ...remainingLabels] = wrapTextWithAnsi(
+                  option.label,
+                  optionTextWidth,
                 );
+                add(`${prefix}${theme.fg(color, `${marker} ${firstLabel}`)}`);
+                for (const line of remainingLabels) {
+                  add(`${optionIndent}${theme.fg(color, line)}`);
+                }
                 if (option.description) {
-                  add(`      ${theme.fg("muted", option.description)}`);
+                  for (const line of wrapTextWithAnsi(
+                    option.description,
+                    optionTextWidth,
+                  )) {
+                    add(`${optionIndent}${theme.fg("muted", line)}`);
+                  }
                 }
               }
 
