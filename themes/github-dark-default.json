@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
   "name": "github-dark-default",
   "vars": {
     "bg": "#0d1117",
@@ -36,6 +36,7 @@
     "thinkingText": "muted",
 
     "selectedBg": "#13233a",
+    "scrollbarThumb": "focus",
     "userMessageBg": "surface",
     "userMessageText": "text",
     "customMessageBg": "surface",
@@ -78,6 +79,7 @@
     "thinkingMedium": "cyan",
     "thinkingHigh": "purple",
     "thinkingXhigh": "softRed",
+    "thinkingMax": "#ff5faf",
 
     "bashMode": "green"
   },
