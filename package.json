@@ -4,7 +4,7 @@
     "@effect/platform-node": "4.0.0-beta.98",
     "@effect/platform-node-shared": "4.0.0-beta.98",
     "effect": "4.0.0-beta.98",
-    "firecrawl": "^4.30.0"
+    "firecrawl": "^4.32.0"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.84.1",

@@ -3,13 +3,22 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 import { Effect } from "effect";
+import {
+  memoizedRequest,
+  restoreScrapeCache,
+  scrapeRequestKey,
+  seedFirecrawlResult,
+  type ScrapeCache,
+} from "./cache.ts";
 import firecrawlTools, {
   crawlEffect,
-  memoizedRequest,
+  createClientProvider,
   resolveApiKey,
-  scrapeRequestKey,
   type CrawlClient,
 } from "./index.ts";
 
@@ -70,6 +79,28 @@ test("falls back to the env file when Infisical is unavailable", async () => {
   }
 });
 
+test("reuses one Firecrawl client and credential lookup", async () => {
+  let executions = 0;
+  const pi = makeExecutor(async () => {
+    executions += 1;
+    return {
+      stdout: "infisical-key\n",
+      stderr: "",
+      code: 0,
+      killed: false,
+    };
+  });
+  const getClient = createClientProvider(pi, {
+    env: {},
+    envPath: "/not-used",
+  });
+
+  const [first, second] = await Promise.all([getClient(), getClient()]);
+
+  assert.strictEqual(second, first);
+  assert.equal(executions, 1);
+});
+
 test("registers namespaced tools with conservative defaults", () => {
   const tools: Array<{
     name: string;
@@ -77,6 +108,7 @@ test("registers namespaced tools with conservative defaults", () => {
     parameters?: { properties?: Record<string, unknown> };
   }> = [];
   const pi = {
+    on() {},
     registerTool(tool: (typeof tools)[number]) {
       tools.push(tool);
     },
@@ -103,6 +135,9 @@ test("registers namespaced tools with conservative defaults", () => {
 
   const crawl = tools.find((tool) => tool.name === "firecrawl_crawl");
   assert.match(crawl?.description ?? "", /Defaults to 5 pages/);
+
+  const scrape = tools.find((tool) => tool.name === "firecrawl_scrape");
+  assert.ok(scrape?.parameters?.properties?.fresh);
 });
 
 test("normalizes equivalent scrape requests without merging distinct options", () => {
@@ -162,6 +197,129 @@ test("reuses completed and in-flight requests but evicts failures", async () => 
     { value: "recovered", cacheHit: false },
   );
   assert.equal(attempts, 2);
+});
+
+test("restores direct scrapes and seeds pages returned by crawls", async () => {
+  const cache: ScrapeCache = new Map();
+  const entries = [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "scrape-1",
+            name: "firecrawl_scrape",
+            arguments: { url: "https://example.com/docs" },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "scrape-1",
+        toolName: "firecrawl_scrape",
+        isError: false,
+        details: {
+          markdown: "Direct content",
+          metadata: { sourceURL: "https://example.com/docs" },
+        },
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "scrape-2",
+            name: "firecrawl_scrape",
+            arguments: { url: "https://example.com/docs", fresh: true },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "scrape-2",
+        toolName: "firecrawl_scrape",
+        isError: false,
+        details: {
+          markdown: "Fresh content",
+          metadata: { sourceURL: "https://example.com/docs" },
+        },
+      },
+    },
+  ] as unknown as SessionEntry[];
+
+  assert.equal(restoreScrapeCache(cache, entries), 1);
+  assert.equal(
+    (await cache.get(scrapeRequestKey({ url: "https://example.com/docs" })))
+      ?.markdown,
+    "Fresh content",
+  );
+
+  assert.equal(
+    seedFirecrawlResult(
+      cache,
+      "firecrawl_crawl",
+      { onlyMainContent: true },
+      {
+        data: [
+          {
+            markdown: "Crawled content",
+            metadata: { sourceURL: "https://example.com/guide" },
+          },
+        ],
+      },
+    ),
+    1,
+  );
+  assert.equal(
+    (await cache.get(scrapeRequestKey({ url: "https://example.com/guide" })))
+      ?.markdown,
+    "Crawled content",
+  );
+});
+
+test("defers crawl pagination until the job reaches a terminal state", async () => {
+  const pagination: unknown[] = [];
+  const client: CrawlClient = {
+    startCrawl: async (url) => ({ id: "crawl-123", url }),
+    getCrawlStatus: async (_jobId, options) => {
+      pagination.push(options);
+      return options
+        ? {
+            id: "crawl-123",
+            status: "completed",
+            completed: 2,
+            total: 2,
+            next: "next-page",
+            data: [{ markdown: "first" }],
+          }
+        : {
+            id: "crawl-123",
+            status: "completed",
+            completed: 2,
+            total: 2,
+            data: [{ markdown: "first" }, { markdown: "second" }],
+          };
+    },
+    cancelCrawl: async () => true,
+  };
+
+  const result = await Effect.runPromise(
+    crawlEffect(client, "https://example.com", { limit: 2 }),
+  );
+
+  assert.equal(result.data.length, 2);
+  assert.deepEqual(pagination, [{ autoPaginate: false }, undefined]);
 });
 
 test("cancels the remote crawl when polling is interrupted", async () => {

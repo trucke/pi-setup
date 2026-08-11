@@ -16,14 +16,15 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Cause, Data, Effect, Exit } from "effect";
-import {
-  Firecrawl,
-  type CrawlJob,
-  type CrawlOptions,
-  type Document,
-} from "firecrawl";
+import { Firecrawl, type CrawlJob, type CrawlOptions } from "firecrawl";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import {
+  memoizedRequest,
+  registerScrapeCacheRestoration,
+  scrapeRequestKey,
+  type ScrapeCache,
+} from "./cache.ts";
 import {
   CRAWL_PARAMETER_DESCRIPTIONS,
   CRAWL_PROMPT_GUIDELINES,
@@ -51,49 +52,6 @@ import {
 } from "./render.ts";
 
 const DEFAULT_CRAWL_LIMIT = 5;
-
-interface ScrapeRequest {
-  url: string;
-  onlyMainContent?: boolean;
-  waitFor?: number;
-  timeout?: number;
-}
-
-export function scrapeRequestKey(request: ScrapeRequest) {
-  let url = request.url.trim();
-  try {
-    const parsed = new URL(url);
-    parsed.hash = "";
-    url = parsed.toString();
-  } catch {
-    // Firecrawl will report invalid URLs; keep the original value as the key.
-  }
-
-  return JSON.stringify({
-    url,
-    onlyMainContent: request.onlyMainContent ?? true,
-    waitFor: request.waitFor ?? 0,
-    timeout: request.timeout ?? 30_000,
-  });
-}
-
-export function memoizedRequest<T>(
-  cache: Map<string, Promise<T>>,
-  key: string,
-  request: () => Promise<T>,
-) {
-  const cached = cache.get(key);
-  if (cached) {
-    return cached.then((value) => ({ value, cacheHit: true }));
-  }
-
-  const pending = request();
-  cache.set(key, pending);
-  void pending.catch(() => {
-    if (cache.get(key) === pending) cache.delete(key);
-  });
-  return pending.then((value) => ({ value, cacheHit: false }));
-}
 
 function readEnvFileValue(
   name: string,
@@ -174,10 +132,34 @@ export async function resolveApiKey(
   });
 }
 
-function createClient(pi: CommandExecutor) {
+type ClientProvider = (signal?: AbortSignal) => Promise<Firecrawl>;
+
+export function createClientProvider(
+  pi: CommandExecutor,
+  options: ApiKeyOptions = {},
+): ClientProvider {
+  let client: Firecrawl | undefined;
+  let pending: Promise<Firecrawl> | undefined;
+
+  return async (signal) => {
+    if (client) return client;
+    pending ??= resolveApiKey(pi, signal, options).then(
+      (apiKey) => new Firecrawl({ apiKey }),
+    );
+
+    try {
+      client = await pending;
+      return client;
+    } catch (error) {
+      pending = undefined;
+      throw error;
+    }
+  };
+}
+
+function createClient(provider: ClientProvider) {
   return Effect.tryPromise({
-    try: async (signal) =>
-      new Firecrawl({ apiKey: await resolveApiKey(pi, signal) }),
+    try: (signal) => provider(signal),
     catch: (cause) =>
       cause instanceof MissingApiKeyError
         ? cause
@@ -320,16 +302,19 @@ function pollCrawl(
   client: CrawlClient,
   jobId: string,
 ): Effect.Effect<CrawlJob, FirecrawlError> {
-  return firecrawlRequest(() => client.getCrawlStatus(jobId)).pipe(
-    Effect.flatMap((job) =>
-      job.status === "scraping"
-        ? Effect.sleep("2 seconds").pipe(
-            Effect.flatMap(() =>
-              Effect.suspend(() => pollCrawl(client, jobId)),
-            ),
-          )
-        : Effect.succeed(job),
-    ),
+  return firecrawlRequest(() =>
+    client.getCrawlStatus(jobId, { autoPaginate: false }),
+  ).pipe(
+    Effect.flatMap((job) => {
+      if (job.status === "scraping") {
+        return Effect.sleep("2 seconds").pipe(
+          Effect.flatMap(() => Effect.suspend(() => pollCrawl(client, jobId))),
+        );
+      }
+      return job.next
+        ? firecrawlRequest(() => client.getCrawlStatus(jobId))
+        : Effect.succeed(job);
+    }),
   );
 }
 
@@ -366,7 +351,7 @@ function operationError(operation: string, error: unknown) {
 
 /** Shared Effect pipeline with a single Promise boundary for the tool API. */
 async function runFirecrawl<T>(
-  pi: CommandExecutor,
+  getClient: ClientProvider,
   operation: string,
   status: string,
   timeout: number,
@@ -380,7 +365,7 @@ async function runFirecrawl<T>(
   >,
 ) {
   const program = Effect.gen(function* () {
-    const client = yield* createClient(pi);
+    const client = yield* createClient(getClient);
     yield* Effect.sync(() =>
       onUpdate?.({
         content: [{ type: "text", text: status }],
@@ -411,7 +396,9 @@ async function runFirecrawl<T>(
 }
 
 export default function firecrawlTools(pi: ExtensionAPI) {
-  const scrapeCache = new Map<string, Promise<Document>>();
+  const scrapeCache: ScrapeCache = new Map();
+  const getClient = createClientProvider(pi);
+  registerScrapeCacheRestoration(pi, scrapeCache);
 
   pi.registerTool({
     name: "firecrawl_search",
@@ -434,7 +421,7 @@ export default function firecrawlTools(pi: ExtensionAPI) {
     }),
     execute: (_toolCallId, params, signal, onUpdate) =>
       runFirecrawl(
-        pi,
+        getClient,
         "search",
         `Searching Firecrawl for: ${params.query}`,
         35_000,
@@ -562,7 +549,7 @@ export default function firecrawlTools(pi: ExtensionAPI) {
     }),
     execute: (_toolCallId, params, signal, onUpdate) =>
       runFirecrawl(
-        pi,
+        getClient,
         "crawl",
         `Crawling up to ${params.limit ?? DEFAULT_CRAWL_LIMIT} pages from: ${params.url}`,
         ((params.timeout ?? 120) + 5) * 1_000,
@@ -703,6 +690,11 @@ export default function firecrawlTools(pi: ExtensionAPI) {
           maximum: 120_000,
         }),
       ),
+      fresh: Type.Optional(
+        Type.Boolean({
+          description: SCRAPE_PARAMETER_DESCRIPTIONS.fresh,
+        }),
+      ),
       includeMetadata: Type.Optional(
         Type.Boolean({
           description: SCRAPE_PARAMETER_DESCRIPTIONS.includeMetadata,
@@ -711,7 +703,7 @@ export default function firecrawlTools(pi: ExtensionAPI) {
     }),
     execute: (_toolCallId, params, signal, onUpdate) =>
       runFirecrawl(
-        pi,
+        getClient,
         "scrape",
         `Scraping page with Firecrawl: ${params.url}`,
         (params.timeout ?? 30_000) + 5_000,
@@ -724,8 +716,10 @@ export default function firecrawlTools(pi: ExtensionAPI) {
             waitFor: params.waitFor,
             timeout: params.timeout,
           };
+          const key = scrapeRequestKey(request);
+          if (params.fresh) scrapeCache.delete(key);
           return firecrawlRequest(() =>
-            memoizedRequest(scrapeCache, scrapeRequestKey(request), () =>
+            memoizedRequest(scrapeCache, key, () =>
               client.scrape(params.url, {
                 formats: ["markdown"],
                 onlyMainContent: params.onlyMainContent ?? true,
@@ -772,6 +766,9 @@ export default function firecrawlTools(pi: ExtensionAPI) {
       text += ` ${theme.fg("accent", displayUrl(args.url))}`;
       if (args.onlyMainContent === false) {
         text += theme.fg("muted", " · full page");
+      }
+      if (args.fresh) {
+        text += theme.fg("warning", " · fresh");
       }
       if (args.includeMetadata) {
         text += theme.fg("dim", " · metadata");

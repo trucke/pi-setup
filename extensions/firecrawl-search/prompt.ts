@@ -75,6 +75,7 @@ export const SCRAPE_PARAMETER_DESCRIPTIONS = {
   waitFor:
     "Milliseconds to wait before capture, useful for JavaScript-heavy pages.",
   timeout: "Request timeout in milliseconds. Defaults to 30000.",
+  fresh: "Bypass session reuse and scrape a fresh copy. Defaults to false.",
   includeMetadata:
     "Append page metadata to the markdown. Defaults to false; metadata remains available in tool details.",
 };
