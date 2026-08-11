@@ -7,7 +7,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Effect } from "effect";
 import firecrawlTools, {
   crawlEffect,
+  memoizedRequest,
   resolveApiKey,
+  scrapeRequestKey,
   type CrawlClient,
 } from "./index.ts";
 
@@ -68,21 +70,98 @@ test("falls back to the env file when Infisical is unavailable", async () => {
   }
 });
 
-test("registers namespaced tool names", () => {
-  const names: string[] = [];
+test("registers namespaced tools with conservative defaults", () => {
+  const tools: Array<{
+    name: string;
+    description: string;
+    parameters?: { properties?: Record<string, unknown> };
+  }> = [];
   const pi = {
-    registerTool(tool: { name: string }) {
-      names.push(tool.name);
+    registerTool(tool: (typeof tools)[number]) {
+      tools.push(tool);
     },
   } as unknown as ExtensionAPI;
 
   firecrawlTools(pi);
 
-  assert.deepEqual(names, [
-    "firecrawl_search",
-    "firecrawl_crawl",
-    "firecrawl_scrape",
+  assert.deepEqual(
+    tools.map((tool) => tool.name),
+    ["firecrawl_search", "firecrawl_crawl", "firecrawl_scrape"],
+  );
+  const search = tools.find((tool) => tool.name === "firecrawl_search");
+  assert.ok(search);
+  assert.deepEqual(Object.keys(search.parameters?.properties ?? {}), [
+    "query",
+    "limit",
+    "source",
   ]);
+  assert.equal(
+    (search.parameters?.properties?.limit as { maximum?: number } | undefined)
+      ?.maximum,
+    10,
+  );
+
+  const crawl = tools.find((tool) => tool.name === "firecrawl_crawl");
+  assert.match(crawl?.description ?? "", /Defaults to 5 pages/);
+});
+
+test("normalizes equivalent scrape requests without merging distinct options", () => {
+  assert.equal(
+    scrapeRequestKey({ url: " https://EXAMPLE.com/docs#first " }),
+    scrapeRequestKey({
+      url: "https://example.com/docs#second",
+      onlyMainContent: true,
+      waitFor: 0,
+      timeout: 30_000,
+    }),
+  );
+  assert.notEqual(
+    scrapeRequestKey({ url: "https://example.com/docs", waitFor: 1_000 }),
+    scrapeRequestKey({ url: "https://example.com/docs", waitFor: 0 }),
+  );
+});
+
+test("reuses completed and in-flight requests but evicts failures", async () => {
+  const cache = new Map<string, Promise<string>>();
+  let calls = 0;
+  let resolve!: (value: string) => void;
+  const pending = new Promise<string>((complete) => {
+    resolve = complete;
+  });
+  const request = () => {
+    calls += 1;
+    return pending;
+  };
+
+  const first = memoizedRequest(cache, "page", request);
+  const concurrent = memoizedRequest(cache, "page", request);
+  assert.equal(calls, 1);
+
+  resolve("content");
+  assert.deepEqual(await first, { value: "content", cacheHit: false });
+  assert.deepEqual(await concurrent, { value: "content", cacheHit: true });
+  assert.deepEqual(await memoizedRequest(cache, "page", request), {
+    value: "content",
+    cacheHit: true,
+  });
+  assert.equal(calls, 1);
+
+  let attempts = 0;
+  await assert.rejects(
+    memoizedRequest(cache, "retry", async () => {
+      attempts += 1;
+      throw new Error("failed");
+    }),
+    /failed/,
+  );
+  assert.deepEqual(
+    await memoizedRequest(cache, "retry", async () => {
+      attempts += 1;
+      return "recovered";
+    }),
+    { value: "recovered", cacheHit: false },
+  );
+  assert.equal(attempts, 2);
 });
 
 test("cancels the remote crawl when polling is interrupted", async () => {

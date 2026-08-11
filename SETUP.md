@@ -21,6 +21,16 @@ The package registers `firecrawl_search`, `firecrawl_scrape`, and
 For the file fallback, copy `.env.example` to `~/.pi/agent/.env` and replace the
 placeholder. Never commit the resulting file.
 
+Firecrawl retrieval is credit-aware:
+
+- `firecrawl_search` discovers at most 10 URLs and never scrapes result pages.
+- `firecrawl_crawl` defaults to 5 pages.
+- Equivalent page scrapes are reused within the active session.
+- The default session budget is 20 credits. Interactive sessions ask before
+  raising it; non-interactive sessions block requests that would exceed it.
+- Approved budget increases persist in the session, and the dashboard displays
+  `used/budget` credits.
+
 ## Theme
 
 The package provides `github-dark-default`. Activate it in

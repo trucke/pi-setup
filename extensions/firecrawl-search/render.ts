@@ -4,7 +4,7 @@ import {
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
 
-interface SearchItemView {
+export interface SearchItemView {
   kind: "web" | "news" | "images";
   title: string;
   url: string;
@@ -143,8 +143,26 @@ export function boundedMarkdown(markdown: string) {
   });
 }
 
-export function crawlMarkdown(documents: DocumentView[]) {
-  const markdown = documents
+export function searchResultText(value: unknown) {
+  const items = searchItems(value);
+  if (items.length === 0) return "No search results returned.";
+
+  return items
+    .map((item, index) => {
+      const description =
+        item.description.length > 500
+          ? `${item.description.slice(0, 499)}…`
+          : item.description;
+      const lines = [`${index + 1}. [${item.kind}] ${item.title}`];
+      if (item.url) lines.push(`   URL: ${item.url}`);
+      if (description) lines.push(`   ${description}`);
+      return lines.join("\n");
+    })
+    .join("\n\n");
+}
+
+export function crawlDocumentMarkdown(documents: DocumentView[]) {
+  return documents
     .map((document, index) => {
       const heading = `## ${index + 1}. ${document.title}`;
       const source = document.url ? `\n\nSource: ${document.url}` : "";
@@ -154,6 +172,21 @@ export function crawlMarkdown(documents: DocumentView[]) {
       return `${heading}${source}${content}`;
     })
     .join("\n\n---\n\n");
+}
 
-  return boundedMarkdown(markdown);
+export function crawlResultText(value: unknown) {
+  const crawl = crawlView(value);
+  const credits =
+    crawl.creditsUsed === undefined
+      ? ""
+      : ` · ${crawl.creditsUsed} credit${crawl.creditsUsed === 1 ? "" : "s"}`;
+  const summary = `Crawl ${crawl.status}: ${crawl.completed}/${crawl.total} pages${credits}`;
+  const markdown = crawlDocumentMarkdown(crawl.documents);
+  return markdown
+    ? `${summary}\n\n${markdown}`
+    : `${summary}\n\nNo pages returned.`;
+}
+
+export function crawlMarkdown(documents: DocumentView[]) {
+  return boundedMarkdown(crawlDocumentMarkdown(documents));
 }

@@ -16,7 +16,12 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Cause, Data, Effect, Exit } from "effect";
-import { Firecrawl, type CrawlJob, type CrawlOptions } from "firecrawl";
+import {
+  Firecrawl,
+  type CrawlJob,
+  type CrawlOptions,
+  type Document,
+} from "firecrawl";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
@@ -36,12 +41,59 @@ import {
 import {
   boundedMarkdown,
   crawlMarkdown,
+  crawlResultText,
   crawlView,
   displayUrl,
   documentView,
   searchItems,
+  searchResultText,
   type DocumentView,
 } from "./render.ts";
+
+const DEFAULT_CRAWL_LIMIT = 5;
+
+interface ScrapeRequest {
+  url: string;
+  onlyMainContent?: boolean;
+  waitFor?: number;
+  timeout?: number;
+}
+
+export function scrapeRequestKey(request: ScrapeRequest) {
+  let url = request.url.trim();
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    url = parsed.toString();
+  } catch {
+    // Firecrawl will report invalid URLs; keep the original value as the key.
+  }
+
+  return JSON.stringify({
+    url,
+    onlyMainContent: request.onlyMainContent ?? true,
+    waitFor: request.waitFor ?? 0,
+    timeout: request.timeout ?? 30_000,
+  });
+}
+
+export function memoizedRequest<T>(
+  cache: Map<string, Promise<T>>,
+  key: string,
+  request: () => Promise<T>,
+) {
+  const cached = cache.get(key);
+  if (cached) {
+    return cached.then((value) => ({ value, cacheHit: true }));
+  }
+
+  const pending = request();
+  cache.set(key, pending);
+  void pending.catch(() => {
+    if (cache.get(key) === pending) cache.delete(key);
+  });
+  return pending.then((value) => ({ value, cacheHit: false }));
+}
 
 function readEnvFileValue(
   name: string,
@@ -359,6 +411,8 @@ async function runFirecrawl<T>(
 }
 
 export default function firecrawlTools(pi: ExtensionAPI) {
+  const scrapeCache = new Map<string, Promise<Document>>();
+
   pi.registerTool({
     name: "firecrawl_search",
     label: "Search Web",
@@ -373,15 +427,10 @@ export default function firecrawlTools(pi: ExtensionAPI) {
         Type.Number({
           description: SEARCH_PARAMETER_DESCRIPTIONS.limit,
           minimum: 1,
-          maximum: 20,
+          maximum: 10,
         }),
       ),
       source: Type.Optional(StringEnum(["web", "news", "images"] as const)),
-      scrapeResults: Type.Optional(
-        Type.Boolean({
-          description: SEARCH_PARAMETER_DESCRIPTIONS.scrapeResults,
-        }),
-      ),
     }),
     execute: (_toolCallId, params, signal, onUpdate) =>
       runFirecrawl(
@@ -396,12 +445,15 @@ export default function firecrawlTools(pi: ExtensionAPI) {
             client.search(params.query, {
               limit: params.limit ?? 5,
               sources: [params.source ?? "web"],
-              scrapeOptions: params.scrapeResults
-                ? { formats: ["markdown"], timeout: 30_000 }
-                : undefined,
+              highlights: false,
               timeout: 30_000,
             }),
-          ).pipe(Effect.map((result) => ({ details: result, output: result }))),
+          ).pipe(
+            Effect.map((result) => ({
+              details: result,
+              output: searchResultText(result),
+            })),
+          ),
       ),
     renderCall(args, theme) {
       let text = theme.fg("toolTitle", theme.bold("firecrawl_search"));
@@ -512,13 +564,13 @@ export default function firecrawlTools(pi: ExtensionAPI) {
       runFirecrawl(
         pi,
         "crawl",
-        `Crawling up to ${params.limit ?? 20} pages from: ${params.url}`,
+        `Crawling up to ${params.limit ?? DEFAULT_CRAWL_LIMIT} pages from: ${params.url}`,
         ((params.timeout ?? 120) + 5) * 1_000,
         signal,
         onUpdate,
         (client) =>
           crawlEffect(client, params.url, {
-            limit: params.limit ?? 20,
+            limit: params.limit ?? DEFAULT_CRAWL_LIMIT,
             maxDiscoveryDepth: params.maxDiscoveryDepth,
             includePaths: params.includePaths,
             excludePaths: params.excludePaths,
@@ -530,13 +582,19 @@ export default function firecrawlTools(pi: ExtensionAPI) {
               onlyMainContent: params.onlyMainContent ?? true,
             },
           }).pipe(
-            Effect.map((result) => ({ details: result, output: result })),
+            Effect.map((result) => ({
+              details: result,
+              output: crawlResultText(result),
+            })),
           ),
       ),
     renderCall(args, theme) {
       let text = theme.fg("toolTitle", theme.bold("firecrawl_crawl"));
       text += ` ${theme.fg("accent", displayUrl(args.url))}`;
-      text += theme.fg("muted", ` · limit ${args.limit ?? 20}`);
+      text += theme.fg(
+        "muted",
+        ` · limit ${args.limit ?? DEFAULT_CRAWL_LIMIT}`,
+      );
       if (args.maxDiscoveryDepth !== undefined) {
         text += theme.fg("dim", ` · depth ${args.maxDiscoveryDepth}`);
       }
@@ -659,36 +717,55 @@ export default function firecrawlTools(pi: ExtensionAPI) {
         (params.timeout ?? 30_000) + 5_000,
         signal,
         onUpdate,
-        (client) =>
-          firecrawlRequest(() =>
-            client.scrape(params.url, {
-              formats: ["markdown"],
-              onlyMainContent: params.onlyMainContent ?? true,
-              waitFor: params.waitFor,
-              timeout: params.timeout ?? 30_000,
-            }),
+        (client) => {
+          const request = {
+            url: params.url,
+            onlyMainContent: params.onlyMainContent,
+            waitFor: params.waitFor,
+            timeout: params.timeout,
+          };
+          return firecrawlRequest(() =>
+            memoizedRequest(scrapeCache, scrapeRequestKey(request), () =>
+              client.scrape(params.url, {
+                formats: ["markdown"],
+                onlyMainContent: params.onlyMainContent ?? true,
+                waitFor: params.waitFor,
+                timeout: params.timeout ?? 30_000,
+              }),
+            ),
           ).pipe(
-            Effect.flatMap((document) =>
+            Effect.flatMap(({ value: document, cacheHit }) =>
               Effect.try({
                 try: () => {
+                  const details = cacheHit
+                    ? {
+                        ...document,
+                        metadata: { ...document.metadata, creditsUsed: 0 },
+                        localCacheHit: true,
+                      }
+                    : document;
                   const metadata =
-                    params.includeMetadata && document.metadata
-                      ? `\n\nMetadata:\n${stringify(document.metadata)}`
+                    params.includeMetadata && details.metadata
+                      ? `\n\nMetadata:\n${stringify(details.metadata)}`
                       : "";
                   const markdown =
                     document.markdown?.trim() ||
                     "No markdown content returned.";
+                  const cacheNotice = cacheHit
+                    ? "[Reused cached scrape; no Firecrawl request was made.]\n\n"
+                    : "";
 
                   return {
-                    details: document,
-                    output: `${markdown}${metadata}`,
+                    details,
+                    output: `${cacheNotice}${markdown}${metadata}`,
                   };
                 },
                 catch: (cause) =>
                   new OutputError({ message: errorMessage(cause), cause }),
               }),
             ),
-          ),
+          );
+        },
       ),
     renderCall(args, theme) {
       let text = theme.fg("toolTitle", theme.bold("firecrawl_scrape"));

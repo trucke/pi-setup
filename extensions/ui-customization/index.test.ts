@@ -58,7 +58,10 @@ test("renders Firecrawl session credits in the dashboard usage line", () => {
   assert.ok(sessionStart);
   sessionStart({ type: "session_start", reason: "startup" }, ctx);
 
-  eventHandlers.get(FIRECRAWL_USAGE_CHANNEL)?.({ creditsUsed: 4 });
+  eventHandlers.get(FIRECRAWL_USAGE_CHANNEL)?.({
+    creditsUsed: 4,
+    budget: 20,
+  });
   assert.ok(footerFactory);
 
   const theme = {
@@ -68,5 +71,5 @@ test("renders Firecrawl session credits in the dashboard usage line", () => {
     getExtensionStatuses: () => new Map(),
   } as unknown as ReadonlyFooterDataProvider);
 
-  assert.match(footer.render(120)[1] ?? "", /\$0\.00 · FC 4 cr · — tok\/s/);
+  assert.match(footer.render(120)[1] ?? "", /\$0\.00 · FC 4\/20 cr · — tok\/s/);
 });

@@ -4,6 +4,7 @@ import type {
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import {
+  DEFAULT_FIRECRAWL_BUDGET,
   FIRECRAWL_USAGE_CHANNEL,
   REFRESH_CHANNEL,
 } from "../shared/dashboard-state.ts";
@@ -13,6 +14,9 @@ const FIRECRAWL_TOOL_NAMES = new Set([
   "firecrawl_scrape",
   "firecrawl_crawl",
 ]);
+const FIRECRAWL_BUDGET_ENTRY = "firecrawl-budget";
+const DEFAULT_SEARCH_LIMIT = 5;
+const DEFAULT_CRAWL_LIMIT = 5;
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
@@ -26,6 +30,26 @@ function creditValue(value: unknown) {
     : undefined;
 }
 
+function limitValue(input: unknown, fallback: number) {
+  const limit = creditValue(record(input)?.limit);
+  return limit === undefined ? fallback : Math.max(1, Math.floor(limit));
+}
+
+export function estimatedCreditsForCall(toolName: string, input: unknown) {
+  if (toolName === "firecrawl_search") {
+    const limit = limitValue(input, DEFAULT_SEARCH_LIMIT);
+    const searchCredits = Math.ceil(limit / 10) * 2;
+    return record(input)?.scrapeResults === true
+      ? searchCredits + limit
+      : searchCredits;
+  }
+  if (toolName === "firecrawl_scrape") return 1;
+  if (toolName === "firecrawl_crawl") {
+    return limitValue(input, DEFAULT_CRAWL_LIMIT);
+  }
+  return 0;
+}
+
 function searchResultGroups(details: unknown) {
   const result = record(details);
   if (!result) return [];
@@ -36,40 +60,90 @@ function searchResultGroups(details: unknown) {
   });
 }
 
-function searchCredits(details: unknown) {
+function searchCredits(details: unknown, input: unknown) {
   const result = record(details);
   const reported = creditValue(result?.creditsUsed);
   if (reported !== undefined) return reported;
 
   const groups = searchResultGroups(details);
-  const baseCredits = groups.reduce(
-    (total, items) =>
-      total + (items.length === 0 ? 0 : Math.ceil(items.length / 10) * 2),
-    0,
+  const baseCredits = Math.max(
+    Math.ceil(limitValue(input, DEFAULT_SEARCH_LIMIT) / 10) * 2,
+    groups.reduce(
+      (total, items) =>
+        total + (items.length === 0 ? 0 : Math.ceil(items.length / 10) * 2),
+      0,
+    ),
   );
   const scrapeCredits = groups.flat().reduce((total, item) => {
-    const metadata = record(record(item)?.metadata);
-    return total + (creditValue(metadata?.creditsUsed) ?? 0);
+    const resultItem = record(item);
+    const metadata = record(resultItem?.metadata);
+    const reportedCredits = creditValue(metadata?.creditsUsed);
+    const inferredCredits =
+      typeof resultItem?.markdown === "string" && reportedCredits === undefined
+        ? 1
+        : 0;
+    return total + (reportedCredits ?? inferredCredits);
   }, 0);
   return baseCredits + scrapeCredits;
 }
 
-export function creditsForFirecrawlResult(toolName: string, details: unknown) {
+export function creditsForFirecrawlResult(
+  toolName: string,
+  details: unknown,
+  input: unknown = {},
+  isError = false,
+) {
   if (!FIRECRAWL_TOOL_NAMES.has(toolName)) return 0;
 
   const result = record(details);
+  if (result?.localCacheHit === true || result?.localBudgetBlocked === true) {
+    return 0;
+  }
+  if (isError) return estimatedCreditsForCall(toolName, input);
+
   if (toolName === "firecrawl_search") {
-    return searchCredits(details);
+    return searchCredits(details, input);
   }
   if (toolName === "firecrawl_crawl") {
-    return creditValue(result?.creditsUsed) ?? 0;
+    return (
+      creditValue(result?.creditsUsed) ??
+      estimatedCreditsForCall(toolName, input)
+    );
   }
 
   const metadata = record(result?.metadata);
-  return creditValue(metadata?.creditsUsed) ?? 0;
+  return (
+    creditValue(metadata?.creditsUsed) ??
+    estimatedCreditsForCall(toolName, input)
+  );
 }
 
-export function usageForBranch(entries: readonly SessionEntry[]) {
+function toolCallInputs(entries: readonly SessionEntry[]) {
+  const inputs = new Map<string, unknown>();
+
+  for (const entry of entries) {
+    if (entry.type !== "message" || entry.message.role !== "assistant") {
+      continue;
+    }
+
+    for (const part of entry.message.content) {
+      const call = record(part);
+      if (
+        call?.type === "toolCall" &&
+        typeof call.id === "string" &&
+        typeof call.name === "string" &&
+        FIRECRAWL_TOOL_NAMES.has(call.name)
+      ) {
+        inputs.set(call.id, call.arguments);
+      }
+    }
+  }
+
+  return inputs;
+}
+
+export function usageForEntries(entries: readonly SessionEntry[]) {
+  const inputs = toolCallInputs(entries);
   const toolCallIds = new Set<string>();
   let creditsUsed = 0;
 
@@ -79,7 +153,6 @@ export function usageForBranch(entries: readonly SessionEntry[]) {
 
     if (
       message.role !== "toolResult" ||
-      message.isError ||
       !FIRECRAWL_TOOL_NAMES.has(message.toolName) ||
       toolCallIds.has(message.toolCallId)
     ) {
@@ -87,23 +160,52 @@ export function usageForBranch(entries: readonly SessionEntry[]) {
     }
 
     toolCallIds.add(message.toolCallId);
-    creditsUsed += creditsForFirecrawlResult(message.toolName, message.details);
+    creditsUsed += creditsForFirecrawlResult(
+      message.toolName,
+      message.details,
+      inputs.get(message.toolCallId),
+      message.isError,
+    );
   }
 
   return { creditsUsed, toolCallIds };
 }
 
+function budgetForEntries(entries: readonly SessionEntry[]) {
+  let budget = DEFAULT_FIRECRAWL_BUDGET;
+
+  for (const entry of entries) {
+    if (
+      entry.type !== "custom" ||
+      entry.customType !== FIRECRAWL_BUDGET_ENTRY
+    ) {
+      continue;
+    }
+    const saved = creditValue(record(entry.data)?.budget);
+    if (saved !== undefined) budget = Math.max(budget, saved);
+  }
+
+  return budget;
+}
+
 export default function firecrawlUsage(pi: ExtensionAPI) {
   let creditsUsed = 0;
+  let budget = DEFAULT_FIRECRAWL_BUDGET;
   let toolCallIds = new Set<string>();
+  const reservations = new Map<string, number>();
+  const blockedToolCallIds = new Set<string>();
 
   const publish = () =>
-    pi.events.emit(FIRECRAWL_USAGE_CHANNEL, { creditsUsed });
+    pi.events.emit(FIRECRAWL_USAGE_CHANNEL, { creditsUsed, budget });
 
   const restore = (ctx: ExtensionContext) => {
-    const restored = usageForBranch(ctx.sessionManager.getBranch());
+    const entries = ctx.sessionManager.getEntries();
+    const restored = usageForEntries(entries);
     creditsUsed = restored.creditsUsed;
+    budget = budgetForEntries(entries);
     toolCallIds = restored.toolCallIds;
+    reservations.clear();
+    blockedToolCallIds.clear();
     publish();
   };
 
@@ -113,23 +215,74 @@ export default function firecrawlUsage(pi: ExtensionAPI) {
 
   pi.on("session_tree", (_event, ctx) => restore(ctx));
 
-  pi.on("tool_result", (event) => {
-    if (
-      event.isError ||
-      !FIRECRAWL_TOOL_NAMES.has(event.toolName) ||
-      toolCallIds.has(event.toolCallId)
-    ) {
-      return;
+  pi.on("tool_call", async (event, ctx) => {
+    if (!FIRECRAWL_TOOL_NAMES.has(event.toolName)) return;
+
+    const estimate = estimatedCreditsForCall(event.toolName, event.input);
+    const reserved = [...reservations.values()].reduce(
+      (total, credits) => total + credits,
+      0,
+    );
+    const projected = creditsUsed + reserved + estimate;
+
+    if (projected > budget) {
+      const proposedBudget = Math.ceil(projected / 5) * 5;
+      if (!ctx.hasUI) {
+        blockedToolCallIds.add(event.toolCallId);
+        return {
+          block: true,
+          reason: `Firecrawl request blocked: projected usage is ${projected} credits, above the ${budget}-credit session budget. Reduce the scope or approve a higher budget in an interactive session.`,
+        };
+      }
+
+      const approved = await ctx.ui.confirm(
+        "Raise Firecrawl budget?",
+        `${event.toolName} is estimated to use ${estimate} credits, bringing projected session usage to ${projected}. Raise the budget from ${budget} to ${proposedBudget} credits?`,
+      );
+      if (!approved) {
+        blockedToolCallIds.add(event.toolCallId);
+        return {
+          block: true,
+          reason: `Firecrawl request declined because projected usage exceeds the ${budget}-credit session budget.`,
+        };
+      }
+
+      budget = proposedBudget;
+      pi.appendEntry(FIRECRAWL_BUDGET_ENTRY, { budget });
+      publish();
     }
 
+    reservations.set(event.toolCallId, estimate);
+  });
+
+  pi.on("tool_result", (event) => {
+    reservations.delete(event.toolCallId);
+    if (!FIRECRAWL_TOOL_NAMES.has(event.toolName)) return;
+
+    if (blockedToolCallIds.delete(event.toolCallId)) {
+      toolCallIds.add(event.toolCallId);
+      return {
+        details: { ...record(event.details), localBudgetBlocked: true },
+      };
+    }
+    if (toolCallIds.has(event.toolCallId)) return;
+
     toolCallIds.add(event.toolCallId);
-    creditsUsed += creditsForFirecrawlResult(event.toolName, event.details);
+    creditsUsed += creditsForFirecrawlResult(
+      event.toolName,
+      event.details,
+      event.input,
+      event.isError,
+    );
     publish();
   });
 
   pi.on("session_shutdown", () => {
     stopRefreshListener();
     creditsUsed = 0;
+    budget = DEFAULT_FIRECRAWL_BUDGET;
     toolCallIds.clear();
+    reservations.clear();
+    blockedToolCallIds.clear();
   });
 }

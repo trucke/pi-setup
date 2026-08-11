@@ -6,12 +6,14 @@ import type {
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import {
+  DEFAULT_FIRECRAWL_BUDGET,
   FIRECRAWL_USAGE_CHANNEL,
   REFRESH_CHANNEL,
 } from "../shared/dashboard-state.ts";
 import firecrawlUsage, {
   creditsForFirecrawlResult,
-  usageForBranch,
+  estimatedCreditsForCall,
+  usageForEntries,
 } from "./index.ts";
 
 function messageEntry(message: Record<string, unknown>, id: string) {
@@ -21,6 +23,17 @@ function messageEntry(message: Record<string, unknown>, id: string) {
     parentId: null,
     timestamp: "2026-01-01T00:00:00.000Z",
     message,
+  } as unknown as SessionEntry;
+}
+
+function customEntry(customType: string, data: unknown, id: string) {
+  return {
+    type: "custom",
+    id,
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00.000Z",
+    customType,
+    data,
   } as unknown as SessionEntry;
 }
 
@@ -57,12 +70,44 @@ function toolResultEntry(options: {
   );
 }
 
-test("extracts reported scrape and crawl credits", () => {
+test("estimates Firecrawl calls conservatively", () => {
+  assert.equal(estimatedCreditsForCall("firecrawl_search", { limit: 5 }), 2);
+  assert.equal(estimatedCreditsForCall("firecrawl_search", { limit: 11 }), 4);
+  assert.equal(
+    estimatedCreditsForCall("firecrawl_search", {
+      limit: 3,
+      scrapeResults: true,
+    }),
+    5,
+  );
+  assert.equal(estimatedCreditsForCall("firecrawl_scrape", {}), 1);
+  assert.equal(estimatedCreditsForCall("firecrawl_crawl", {}), 5);
+  assert.equal(estimatedCreditsForCall("firecrawl_crawl", { limit: 12 }), 12);
+  assert.equal(estimatedCreditsForCall("read", {}), 0);
+});
+
+test("uses reported credits and treats local cache hits as free", () => {
   assert.equal(
     creditsForFirecrawlResult("firecrawl_scrape", {
       metadata: { creditsUsed: 1 },
     }),
     1,
+  );
+  assert.equal(
+    creditsForFirecrawlResult("firecrawl_scrape", {
+      localCacheHit: true,
+      metadata: { creditsUsed: 0 },
+    }),
+    0,
+  );
+  assert.equal(
+    creditsForFirecrawlResult(
+      "firecrawl_crawl",
+      { localBudgetBlocked: true },
+      { limit: 100 },
+      true,
+    ),
+    0,
   );
   assert.equal(
     creditsForFirecrawlResult("firecrawl_crawl", {
@@ -74,46 +119,34 @@ test("extracts reported scrape and crawl credits", () => {
   assert.equal(creditsForFirecrawlResult("read", { creditsUsed: 99 }), 0);
 });
 
-test("calculates search and optional result-scrape credits", () => {
+test("calculates search credits even for empty or legacy scraped results", () => {
   assert.equal(
-    creditsForFirecrawlResult("firecrawl_search", {
-      web: Array.from({ length: 5 }, () => ({ url: "https://example.com" })),
-    }),
+    creditsForFirecrawlResult("firecrawl_search", { web: [] }, { limit: 5 }),
     2,
   );
   assert.equal(
-    creditsForFirecrawlResult("firecrawl_search", {
-      web: Array.from({ length: 11 }, () => ({ url: "https://example.com" })),
-    }),
+    creditsForFirecrawlResult(
+      "firecrawl_search",
+      {
+        web: Array.from({ length: 11 }, () => ({ url: "https://example.com" })),
+      },
+      { limit: 11 },
+    ),
     4,
   );
   assert.equal(
-    creditsForFirecrawlResult("firecrawl_search", {
-      web: Array.from({ length: 5 }, () => ({ url: "https://example.com" })),
-      news: Array.from({ length: 5 }, () => ({ url: "https://example.com" })),
-    }),
+    creditsForFirecrawlResult(
+      "firecrawl_search",
+      { web: [{ markdown: "one" }, { markdown: "two" }] },
+      { limit: 2, scrapeResults: true },
+    ),
     4,
-  );
-  assert.equal(
-    creditsForFirecrawlResult("firecrawl_search", {
-      web: [
-        { markdown: "one", metadata: { creditsUsed: 1 } },
-        { markdown: "two", metadata: { creditsUsed: 2 } },
-      ],
-    }),
-    5,
-  );
-  assert.equal(
-    creditsForFirecrawlResult("firecrawl_search", {
-      web: [{ markdown: "one" }, { markdown: "two" }],
-    }),
-    2,
   );
 });
 
-test("reconstructs usage from the active branch", () => {
-  const usage = usageForBranch([
-    toolCallEntry("search-1", "firecrawl_search"),
+test("reconstructs irreversible spend from all entries including failures", () => {
+  const usage = usageForEntries([
+    toolCallEntry("search-1", "firecrawl_search", { limit: 5 }),
     toolResultEntry({
       id: "search-1",
       name: "firecrawl_search",
@@ -125,27 +158,40 @@ test("reconstructs usage from the active branch", () => {
       name: "firecrawl_scrape",
       details: { metadata: { creditsUsed: 1 } },
     }),
+    toolCallEntry("failed-1", "firecrawl_crawl", { limit: 20 }),
     toolResultEntry({
       id: "failed-1",
       name: "firecrawl_crawl",
-      details: { creditsUsed: 20 },
       isError: true,
     }),
   ]);
 
-  assert.equal(usage.creditsUsed, 3);
-  assert.deepEqual(usage.toolCallIds, new Set(["search-1", "scrape-1"]));
+  assert.equal(usage.creditsUsed, 23);
+  assert.deepEqual(
+    usage.toolCallIds,
+    new Set(["search-1", "scrape-1", "failed-1"]),
+  );
 });
 
-type Handler = (event: Record<string, unknown>, ctx: ExtensionContext) => void;
+type Handler = (
+  event: Record<string, unknown>,
+  ctx: ExtensionContext,
+) => unknown | Promise<unknown>;
 
-function createHarness(branch: SessionEntry[]) {
+function createHarness(
+  entries: SessionEntry[],
+  options: { hasUI?: boolean; confirm?: boolean } = {},
+) {
   const handlers = new Map<string, Handler>();
   const eventHandlers = new Map<string, (value: unknown) => void>();
   const emitted: Array<{ name: string; value: unknown }> = [];
+  const appended: Array<{ customType: string; data: unknown }> = [];
   const pi = {
     on(name: string, handler: Handler) {
       handlers.set(name, handler);
+    },
+    appendEntry(customType: string, data: unknown) {
+      appended.push({ customType, data });
     },
     events: {
       on(name: string, handler: (value: unknown) => void) {
@@ -159,22 +205,30 @@ function createHarness(branch: SessionEntry[]) {
     },
   } as unknown as ExtensionAPI;
   const ctx = {
-    sessionManager: { getBranch: () => branch },
+    hasUI: options.hasUI ?? true,
+    sessionManager: { getEntries: () => entries },
+    ui: { confirm: async () => options.confirm ?? true },
   } as unknown as ExtensionContext;
 
   firecrawlUsage(pi);
 
-  const emit = (name: string, event: Record<string, unknown>) => {
+  const emit = async (name: string, event: Record<string, unknown>) => {
     const handler = handlers.get(name);
     assert.ok(handler, `missing ${name} handler`);
-    handler(event, ctx);
+    return handler(event, ctx);
   };
 
-  return { emit, emitted, eventHandlers };
+  return { emit, emitted, eventHandlers, appended };
 }
 
-test("publishes restored and live session usage without double counting", () => {
-  const branch = [
+function usageEvents(emitted: Array<{ name: string; value: unknown }>) {
+  return emitted
+    .filter(({ name }) => name === FIRECRAWL_USAGE_CHANNEL)
+    .map(({ value }) => value);
+}
+
+test("publishes restored and live usage without double counting", async () => {
+  const entries = [
     toolCallEntry("scrape-1", "firecrawl_scrape"),
     toolResultEntry({
       id: "scrape-1",
@@ -182,11 +236,15 @@ test("publishes restored and live session usage without double counting", () => 
       details: { metadata: { creditsUsed: 1 } },
     }),
   ];
-  const { emit, emitted, eventHandlers } = createHarness(branch);
+  const { emit, emitted, eventHandlers } = createHarness(entries);
 
-  emit("session_start", { type: "session_start", reason: "startup" });
-  emit("tool_result", {
-    type: "tool_result",
+  await emit("session_start", { type: "session_start", reason: "startup" });
+  await emit("tool_call", {
+    toolCallId: "search-2",
+    toolName: "firecrawl_search",
+    input: { limit: 5 },
+  });
+  await emit("tool_result", {
     toolCallId: "search-2",
     toolName: "firecrawl_search",
     input: { limit: 5 },
@@ -194,8 +252,7 @@ test("publishes restored and live session usage without double counting", () => 
     content: [],
     isError: false,
   });
-  emit("tool_result", {
-    type: "tool_result",
+  await emit("tool_result", {
     toolCallId: "search-2",
     toolName: "firecrawl_search",
     input: { limit: 5 },
@@ -205,35 +262,159 @@ test("publishes restored and live session usage without double counting", () => 
   });
   eventHandlers.get(REFRESH_CHANNEL)?.(undefined);
 
-  assert.deepEqual(
-    emitted
-      .filter(({ name }) => name === FIRECRAWL_USAGE_CHANNEL)
-      .map(({ value }) => value),
-    [{ creditsUsed: 1 }, { creditsUsed: 3 }, { creditsUsed: 3 }],
-  );
+  assert.deepEqual(usageEvents(emitted), [
+    { creditsUsed: 1, budget: DEFAULT_FIRECRAWL_BUDGET },
+    { creditsUsed: 3, budget: DEFAULT_FIRECRAWL_BUDGET },
+    { creditsUsed: 3, budget: DEFAULT_FIRECRAWL_BUDGET },
+  ]);
 });
 
-test("recomputes usage after tree navigation", () => {
-  const branch: SessionEntry[] = [];
-  const { emit, emitted } = createHarness(branch);
+test("tree navigation preserves spend from all session entries", async () => {
+  const entries: SessionEntry[] = [];
+  const { emit, emitted } = createHarness(entries);
 
-  emit("session_start", { type: "session_start", reason: "startup" });
-  branch.push(
-    toolCallEntry("crawl-1", "firecrawl_crawl"),
+  await emit("session_start", { type: "session_start", reason: "startup" });
+  entries.push(
+    toolCallEntry("crawl-1", "firecrawl_crawl", { limit: 8 }),
     toolResultEntry({
       id: "crawl-1",
       name: "firecrawl_crawl",
       details: { creditsUsed: 8 },
     }),
   );
-  emit("session_tree", {
+  await emit("session_tree", {
     type: "session_tree",
     newLeafId: "result-crawl-1",
     oldLeafId: null,
   });
 
-  assert.deepEqual(
-    emitted.map(({ value }) => value),
-    [{ creditsUsed: 0 }, { creditsUsed: 8 }],
+  assert.deepEqual(usageEvents(emitted), [
+    { creditsUsed: 0, budget: DEFAULT_FIRECRAWL_BUDGET },
+    { creditsUsed: 8, budget: DEFAULT_FIRECRAWL_BUDGET },
+  ]);
+});
+
+test("restores approved budgets from session entries", async () => {
+  const { emit, emitted } = createHarness([
+    customEntry("firecrawl-budget", { budget: 35 }, "budget-1"),
+  ]);
+
+  await emit("session_start", { type: "session_start", reason: "startup" });
+
+  assert.deepEqual(usageEvents(emitted), [{ creditsUsed: 0, budget: 35 }]);
+});
+
+test("reserves parallel calls and persists an approved budget increase", async () => {
+  const { emit, emitted, appended } = createHarness([]);
+  await emit("session_start", { type: "session_start", reason: "startup" });
+
+  assert.equal(
+    await emit("tool_call", {
+      toolCallId: "crawl-1",
+      toolName: "firecrawl_crawl",
+      input: { limit: 20 },
+    }),
+    undefined,
   );
+  assert.equal(
+    await emit("tool_call", {
+      toolCallId: "scrape-1",
+      toolName: "firecrawl_scrape",
+      input: {},
+    }),
+    undefined,
+  );
+
+  assert.deepEqual(appended, [
+    { customType: "firecrawl-budget", data: { budget: 25 } },
+  ]);
+  assert.deepEqual(usageEvents(emitted).at(-1), {
+    creditsUsed: 0,
+    budget: 25,
+  });
+});
+
+test("blocks budget overruns without approval", async () => {
+  const noUi = createHarness([], { hasUI: false });
+  await noUi.emit("session_start", {
+    type: "session_start",
+    reason: "startup",
+  });
+  const unavailable = await noUi.emit("tool_call", {
+    toolCallId: "crawl-1",
+    toolName: "firecrawl_crawl",
+    input: { limit: 21 },
+  });
+  assert.deepEqual(unavailable, {
+    block: true,
+    reason:
+      "Firecrawl request blocked: projected usage is 21 credits, above the 20-credit session budget. Reduce the scope or approve a higher budget in an interactive session.",
+  });
+  assert.deepEqual(
+    await noUi.emit("tool_result", {
+      toolCallId: "crawl-1",
+      toolName: "firecrawl_crawl",
+      input: { limit: 21 },
+      isError: true,
+    }),
+    { details: { localBudgetBlocked: true } },
+  );
+  assert.deepEqual(usageEvents(noUi.emitted).at(-1), {
+    creditsUsed: 0,
+    budget: DEFAULT_FIRECRAWL_BUDGET,
+  });
+
+  const declined = createHarness([], { confirm: false });
+  await declined.emit("session_start", {
+    type: "session_start",
+    reason: "startup",
+  });
+  const result = await declined.emit("tool_call", {
+    toolCallId: "crawl-2",
+    toolName: "firecrawl_crawl",
+    input: { limit: 21 },
+  });
+  assert.deepEqual(result, {
+    block: true,
+    reason:
+      "Firecrawl request declined because projected usage exceeds the 20-credit session budget.",
+  });
+  assert.deepEqual(declined.appended, []);
+});
+
+test("counts failed calls conservatively and cached calls as free", async () => {
+  const { emit, emitted } = createHarness([]);
+  await emit("session_start", { type: "session_start", reason: "startup" });
+
+  await emit("tool_call", {
+    toolCallId: "crawl-1",
+    toolName: "firecrawl_crawl",
+    input: { limit: 7 },
+  });
+  await emit("tool_result", {
+    toolCallId: "crawl-1",
+    toolName: "firecrawl_crawl",
+    input: { limit: 7 },
+    isError: true,
+  });
+  await emit("tool_call", {
+    toolCallId: "scrape-1",
+    toolName: "firecrawl_scrape",
+    input: {},
+  });
+  await emit("tool_result", {
+    toolCallId: "scrape-1",
+    toolName: "firecrawl_scrape",
+    input: {},
+    details: {
+      localCacheHit: true,
+      metadata: { creditsUsed: 0 },
+    },
+    isError: false,
+  });
+
+  assert.deepEqual(usageEvents(emitted).at(-1), {
+    creditsUsed: 7,
+    budget: DEFAULT_FIRECRAWL_BUDGET,
+  });
 });

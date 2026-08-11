@@ -286,7 +286,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
             modelInfo.tokensPerSecond === null
               ? "— tok/s"
               : `${Math.round(modelInfo.tokensPerSecond)} tok/s`;
-          const usage = `${contextPercent}%/${contextWindow} · $${modelInfo.cost.toFixed(2)} · FC ${firecrawlUsage.creditsUsed} cr · ${tps}`;
+          const usage = `${contextPercent}%/${contextWindow} · $${modelInfo.cost.toFixed(2)} · FC ${firecrawlUsage.creditsUsed}/${firecrawlUsage.budget} cr · ${tps}`;
           const model = modelInfo.provider
             ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
             : modelInfo.modelId;
