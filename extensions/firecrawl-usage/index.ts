@@ -8,6 +8,7 @@ import {
   FIRECRAWL_USAGE_CHANNEL,
   REFRESH_CHANNEL,
 } from "../shared/dashboard-state.ts";
+import { withHerdrBlocked } from "../shared/herdr.ts";
 
 const FIRECRAWL_TOOL_NAMES = new Set([
   "firecrawl_search",
@@ -235,9 +236,14 @@ export default function firecrawlUsage(pi: ExtensionAPI) {
         };
       }
 
-      const approved = await ctx.ui.confirm(
-        "Raise Firecrawl budget?",
-        `${event.toolName} is estimated to use ${estimate} credits, bringing projected session usage to ${projected}. Raise the budget from ${budget} to ${proposedBudget} credits?`,
+      const approved = await withHerdrBlocked(
+        pi,
+        "Waiting for Firecrawl budget approval",
+        () =>
+          ctx.ui.confirm(
+            "Raise Firecrawl budget?",
+            `${event.toolName} is estimated to use ${estimate} credits, bringing projected session usage to ${projected}. Raise the budget from ${budget} to ${proposedBudget} credits?`,
+          ),
       );
       if (!approved) {
         blockedToolCallIds.add(event.toolCallId);
