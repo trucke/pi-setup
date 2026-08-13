@@ -10,6 +10,7 @@ import {
   FIRECRAWL_USAGE_CHANNEL,
   REFRESH_CHANNEL,
 } from "../shared/dashboard-state.ts";
+import { HERDR_BLOCKED_CHANNEL } from "../shared/herdr.ts";
 import firecrawlUsage, {
   creditsForFirecrawlResult,
   estimatedCreditsForCall,
@@ -180,7 +181,10 @@ type Handler = (
 
 function createHarness(
   entries: SessionEntry[],
-  options: { hasUI?: boolean; confirm?: boolean } = {},
+  options: {
+    hasUI?: boolean;
+    confirm?: boolean | (() => Promise<boolean>);
+  } = {},
 ) {
   const handlers = new Map<string, Handler>();
   const eventHandlers = new Map<string, (value: unknown) => void>();
@@ -207,7 +211,12 @@ function createHarness(
   const ctx = {
     hasUI: options.hasUI ?? true,
     sessionManager: { getEntries: () => entries },
-    ui: { confirm: async () => options.confirm ?? true },
+    ui: {
+      confirm: async () =>
+        typeof options.confirm === "function"
+          ? options.confirm()
+          : (options.confirm ?? true),
+    },
   } as unknown as ExtensionContext;
 
   firecrawlUsage(pi);
@@ -224,6 +233,12 @@ function createHarness(
 function usageEvents(emitted: Array<{ name: string; value: unknown }>) {
   return emitted
     .filter(({ name }) => name === FIRECRAWL_USAGE_CHANNEL)
+    .map(({ value }) => value);
+}
+
+function herdrEvents(emitted: Array<{ name: string; value: unknown }>) {
+  return emitted
+    .filter(({ name }) => name === HERDR_BLOCKED_CHANNEL)
     .map(({ value }) => value);
 }
 
@@ -332,6 +347,13 @@ test("reserves parallel calls and persists an approved budget increase", async (
     creditsUsed: 0,
     budget: 25,
   });
+  assert.deepEqual(herdrEvents(emitted), [
+    {
+      active: true,
+      label: "Waiting for Firecrawl budget approval",
+    },
+    { active: false },
+  ]);
 });
 
 test("blocks budget overruns without approval", async () => {
@@ -380,6 +402,38 @@ test("blocks budget overruns without approval", async () => {
       "Firecrawl request declined because projected usage exceeds the 20-credit session budget.",
   });
   assert.deepEqual(declined.appended, []);
+  assert.deepEqual(herdrEvents(declined.emitted), [
+    {
+      active: true,
+      label: "Waiting for Firecrawl budget approval",
+    },
+    { active: false },
+  ]);
+});
+
+test("clears the blocked state when budget confirmation fails", async () => {
+  const confirmationError = new Error("confirmation failed");
+  const harness = createHarness([], {
+    confirm: async () => {
+      throw confirmationError;
+    },
+  });
+
+  await assert.rejects(
+    harness.emit("tool_call", {
+      toolCallId: "crawl-1",
+      toolName: "firecrawl_crawl",
+      input: { limit: 21 },
+    }),
+    confirmationError,
+  );
+  assert.deepEqual(herdrEvents(harness.emitted), [
+    {
+      active: true,
+      label: "Waiting for Firecrawl budget approval",
+    },
+    { active: false },
+  ]);
 });
 
 test("counts failed calls conservatively and cached calls as free", async () => {

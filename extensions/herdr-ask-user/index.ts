@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { HERDR_BLOCKED_CHANNEL } from "../shared/herdr.ts";
 
 const ASK_USER_TOOL_NAME = "ask_user";
 const BLOCKED_LABEL = "Waiting for your answer";
@@ -7,7 +8,7 @@ export default function herdrAskUser(pi: ExtensionAPI) {
   const activeToolCalls = new Set<string>();
 
   function reportBlocked(active: boolean) {
-    pi.events.emit("herdr:blocked", {
+    pi.events.emit(HERDR_BLOCKED_CHANNEL, {
       active,
       ...(active ? { label: BLOCKED_LABEL } : {}),
     });
