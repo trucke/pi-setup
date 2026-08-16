@@ -53,6 +53,7 @@
     ],
     "skills": [
       "./skills/background-terminals",
+      "./skills/html-communication",
       "./skills/subagents"
     ],
     "themes": [
