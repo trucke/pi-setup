@@ -9,6 +9,20 @@ pi install git:github.com/trucke/pi-setup@v0.1.0
 Pi clones the package into its managed git package directory and installs the
 root runtime dependencies. Do not clone this repository over `~/.pi/agent`.
 
+## Codex research
+
+The package registers `codex_research`, the preferred tool for current
+information and general web research. It runs a one-shot `codex exec` session
+(ephemeral, read-only sandbox, empty temporary working directory) with live web
+search enabled and returns a concise, cited Markdown answer with at most 10
+sources.
+
+It requires the [Codex CLI](https://github.com/openai/codex) on `PATH`,
+authenticated via `codex login` with the ChatGPT subscription. No OpenAI API
+key is needed, and calls consume no Firecrawl credits. Firecrawl search remains
+available as a fallback when Codex is unavailable or structured search-result
+listings are needed.
+
 ## Firecrawl
 
 The package registers `firecrawl_search`, `firecrawl_scrape`, and

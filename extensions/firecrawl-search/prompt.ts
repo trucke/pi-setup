@@ -8,7 +8,7 @@ export const SEARCH_PROMPT_SNIPPET =
 
 /** Guides the model on when to search and when to follow with scrape or crawl. */
 export const SEARCH_PROMPT_GUIDELINES = [
-  "Use firecrawl_search to discover URLs for current web information or sources beyond the local workspace; it does not scrape result pages.",
+  "Use firecrawl_search only when structured search-result listings are specifically needed or when codex_research fails; it does not scrape result pages.",
   "Use firecrawl_scrape directly instead of firecrawl_search when the relevant URL is already known.",
   "Use 3–5 firecrawl_search results for targeted research and 10 only when broader discovery is needed.",
   "Consolidate related discovery questions into one firecrawl_search query before issuing narrower follow-up searches.",
