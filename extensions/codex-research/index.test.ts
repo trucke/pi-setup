@@ -255,7 +255,7 @@ test("reports timeout when codex is killed by the exec timeout", async () => {
 
   await assert.rejects(
     runCodexResearch(executor, { query: "q" }),
-    /timed out after 120 seconds/,
+    /timed out after 300 seconds/,
   );
 });
 

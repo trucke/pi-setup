@@ -25,7 +25,7 @@ import {
 
 export const DEFAULT_MAX_SOURCES = 5;
 export const MAX_SOURCES_LIMIT = 10;
-export const CODEX_TIMEOUT_MS = 120 * 1_000;
+export const CODEX_TIMEOUT_MS = 300 * 1_000;
 
 type CommandExecutor = Pick<ExtensionAPI, "exec">;
 
