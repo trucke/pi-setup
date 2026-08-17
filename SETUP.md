@@ -9,23 +9,11 @@ pi install git:github.com/trucke/pi-setup@v0.1.0
 Pi clones the package into its managed git package directory and installs the
 root runtime dependencies. Do not clone this repository over `~/.pi/agent`.
 
-## Global instructions
+## Agent instructions
 
-The root `AGENTS.md` is the canonical global instruction file. Package installs
-do not deploy context files, so link each coding agent's global instruction path
-to the managed checkout:
-
-```sh
-source="$HOME/.pi/agent/git/github.com/trucke/pi-setup/AGENTS.md"
-mkdir -p "$HOME/.pi/agent" "$HOME/.codex" "$HOME/.config/opencode" "$HOME/.claude"
-ln -s "$source" "$HOME/.pi/agent/AGENTS.md"
-ln -s "$source" "$HOME/.codex/AGENTS.md"
-ln -s "$source" "$HOME/.config/opencode/AGENTS.md"
-ln -s "$source" "$HOME/.claude/CLAUDE.md"
-```
-
-The dotfiles setup performs this step automatically and refuses to overwrite
-unmanaged instruction files.
+The root `AGENTS.md` contains repository-specific guidance only. Package installs
+do not deploy global agent instructions. Keep personal or machine-wide context in
+a separately managed private file.
 
 ## Codex research
 
