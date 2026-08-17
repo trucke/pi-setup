@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   Key,
@@ -232,7 +232,7 @@ const loadChangedPaths = Effect.fn("vcs-info.loadChangedPaths")(function* (
   return result.code === 0 ? parseGitChangedPaths(result.stdout) : null;
 });
 
-export const loadChangedFiles = Effect.fn("vcs-info.loadChangedFiles")(
+const loadRepositoryChanges = Effect.fn("vcs-info.loadRepositoryChanges")(
   function* (cwd: string) {
     const repository = yield* findVcs(cwd);
     if (!repository) return null;
@@ -241,8 +241,27 @@ export const loadChangedFiles = Effect.fn("vcs-info.loadChangedFiles")(
       repository.kind,
       repository.root,
     );
-    if (!changedPaths) return null;
+    return changedPaths ? { changedPaths, repository } : null;
+  },
+);
 
+export const loadChangedFilePaths = Effect.fn("vcs-info.loadChangedFilePaths")(
+  function* (cwd: string) {
+    const changes = yield* loadRepositoryChanges(cwd);
+    return changes
+      ? changes.changedPaths.map(({ path }) =>
+          resolve(changes.repository.root, path),
+        )
+      : null;
+  },
+);
+
+export const loadChangedFiles = Effect.fn("vcs-info.loadChangedFiles")(
+  function* (cwd: string) {
+    const changes = yield* loadRepositoryChanges(cwd);
+    if (!changes) return null;
+
+    const { changedPaths, repository } = changes;
     let hasHead = true;
     if (repository.kind === "git") {
       const headResult = yield* runGit(repository.root, [

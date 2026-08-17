@@ -10,9 +10,11 @@ import {
   VCS_INFO_CHANNEL,
 } from "../shared/dashboard-state.ts";
 import {
+  loadChangedFilePaths,
   loadChangedFiles,
   showChangedFiles,
 } from "./src/changed-files-view.ts";
+import { registerLastAgentChanges } from "./src/last-agent-changes.ts";
 import { runCommand, type CommandRunner } from "./src/process.ts";
 import { makeRefreshCoordinator } from "./src/refresh-coordinator.ts";
 import {
@@ -160,6 +162,10 @@ export default function vcsInfo(pi: ExtensionAPI) {
   const stopRefreshListener = pi.events.on(REFRESH_CHANNEL, () => {
     if (currentContext) refreshInBackground(currentContext);
   });
+
+  registerLastAgentChanges(pi, (cwd) =>
+    runEffect(getRuntime(), loadChangedFilePaths(cwd)),
+  );
 
   pi.on("session_start", async (_event, ctx) => {
     generation += 1;

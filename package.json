@@ -46,6 +46,7 @@
       "./extensions/firecrawl-search/index.ts",
       "./extensions/firecrawl-usage/index.ts",
       "./extensions/vcs-info/index.ts",
+      "./extensions/read-pdf/index.ts",
       "./extensions/model-info/index.ts",
       "./extensions/subagents/index.ts",
       "./extensions/summaries/index.ts",
@@ -54,7 +55,9 @@
     ],
     "skills": [
       "./skills/background-terminals",
+      "./skills/handoff",
       "./skills/html-communication",
+      "./skills/second-brain",
       "./skills/subagents"
     ],
     "themes": [
