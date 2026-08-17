@@ -56,7 +56,6 @@
     "skills": [
       "./skills/background-terminals",
       "./skills/handoff",
-      "./skills/html-communication",
       "./skills/second-brain",
       "./skills/subagents"
     ],
