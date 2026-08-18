@@ -101,11 +101,21 @@ test("reuses one Firecrawl client and credential lookup", async () => {
   assert.equal(executions, 1);
 });
 
-test("registers namespaced tools with conservative defaults", () => {
+test("registers namespaced tools with conservative defaults", async () => {
   const tools: Array<{
     name: string;
     description: string;
     parameters?: { properties?: Record<string, unknown> };
+    execute?: (
+      toolCallId: string,
+      params: {
+        query: string;
+        includeDomains?: string[];
+        excludeDomains?: string[];
+      },
+      signal: AbortSignal | undefined,
+      onUpdate: undefined,
+    ) => Promise<unknown>;
   }> = [];
   const pi = {
     on() {},
@@ -126,11 +136,37 @@ test("registers namespaced tools with conservative defaults", () => {
     "query",
     "limit",
     "source",
+    "includeDomains",
+    "excludeDomains",
+    "recency",
   ]);
   assert.equal(
     (search.parameters?.properties?.limit as { maximum?: number } | undefined)
       ?.maximum,
     10,
+  );
+  assert.match(search.description, /query-relevant excerpt/);
+  assert.match(search.description, /image results remain unchanged/i);
+  assert.match(
+    (
+      search.parameters?.properties?.includeDomains as
+        { description?: string } | undefined
+    )?.description ?? "",
+    /[Mm]utually exclusive/,
+  );
+  assert.ok(search.execute);
+  await assert.rejects(
+    search.execute(
+      "search-conflicting-domains",
+      {
+        query: "Firecrawl",
+        includeDomains: ["firecrawl.dev"],
+        excludeDomains: ["example.com"],
+      },
+      undefined,
+      undefined,
+    ),
+    /cannot combine includeDomains and excludeDomains/,
   );
 
   const crawl = tools.find((tool) => tool.name === "firecrawl_crawl");

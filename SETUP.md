@@ -43,7 +43,8 @@ placeholder. Never commit the resulting file.
 
 Firecrawl retrieval is credit-aware:
 
-- `firecrawl_search` discovers at most 10 URLs and never scrapes result pages.
+- `firecrawl_search` discovers at most 10 results and returns query-relevant
+  excerpts when available, without returning complete page content.
 - `firecrawl_crawl` defaults to 5 pages.
 - Equivalent page scrapes are reused across reloads and resumes, including pages
   already returned by crawls. Set `fresh: true` only when revalidation is needed.
