@@ -16,7 +16,7 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Cause, Data, Effect, Exit } from "effect";
-import { Firecrawl, type CrawlJob, type CrawlOptions } from "firecrawl";
+import type { CrawlJob, CrawlOptions, Firecrawl } from "firecrawl";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
@@ -156,9 +156,12 @@ export function createClientProvider(
 
   return async (signal) => {
     if (client) return client;
-    pending ??= resolveApiKey(pi, signal, options).then(
-      (apiKey) => new Firecrawl({ apiKey }),
-    );
+    pending ??= resolveApiKey(pi, signal, options).then(async (apiKey) => {
+      // Firecrawl pulls in Axios/follow-redirects, which can intermittently fail
+      // during extension loading under Bun. Keep it off Pi's startup path.
+      const { Firecrawl } = await import("firecrawl");
+      return new Firecrawl({ apiKey });
+    });
 
     try {
       client = await pending;
