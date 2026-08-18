@@ -48,10 +48,23 @@ import {
   documentView,
   searchItems,
   searchResultText,
+  summaryLine,
   type DocumentView,
 } from "./render.ts";
 
 const DEFAULT_CRAWL_LIMIT = 5;
+
+/** Maps the friendly recency filter to Firecrawl's Google-style `tbs` values. */
+const RECENCY_TBS = {
+  hour: "qdr:h",
+  day: "qdr:d",
+  week: "qdr:w",
+  month: "qdr:m",
+  year: "qdr:y",
+} as const;
+
+/** Firecrawl's documented default search timeout. */
+const SEARCH_TIMEOUT_MS = 60_000;
 
 function readEnvFileValue(
   name: string,
@@ -418,13 +431,34 @@ export default function firecrawlTools(pi: ExtensionAPI) {
         }),
       ),
       source: Type.Optional(StringEnum(["web", "news", "images"] as const)),
+      includeDomains: Type.Optional(
+        Type.Array(Type.String(), {
+          description: SEARCH_PARAMETER_DESCRIPTIONS.includeDomains,
+        }),
+      ),
+      excludeDomains: Type.Optional(
+        Type.Array(Type.String(), {
+          description: SEARCH_PARAMETER_DESCRIPTIONS.excludeDomains,
+        }),
+      ),
+      recency: Type.Optional(
+        StringEnum(["hour", "day", "week", "month", "year"] as const, {
+          description: SEARCH_PARAMETER_DESCRIPTIONS.recency,
+        }),
+      ),
     }),
-    execute: (_toolCallId, params, signal, onUpdate) =>
-      runFirecrawl(
+    execute: async (_toolCallId, params, signal, onUpdate) => {
+      if (params.includeDomains?.length && params.excludeDomains?.length) {
+        throw new Error(
+          "firecrawl_search cannot combine includeDomains and excludeDomains",
+        );
+      }
+
+      return runFirecrawl(
         getClient,
         "search",
         `Searching Firecrawl for: ${params.query}`,
-        35_000,
+        SEARCH_TIMEOUT_MS + 5_000,
         signal,
         onUpdate,
         (client) =>
@@ -432,8 +466,13 @@ export default function firecrawlTools(pi: ExtensionAPI) {
             client.search(params.query, {
               limit: params.limit ?? 5,
               sources: [params.source ?? "web"],
-              highlights: false,
-              timeout: 30_000,
+              includeDomains: params.includeDomains,
+              excludeDomains: params.excludeDomains,
+              tbs: params.recency ? RECENCY_TBS[params.recency] : undefined,
+              // Explicit so query-relevant excerpts survive an upstream
+              // default change.
+              highlights: true,
+              timeout: SEARCH_TIMEOUT_MS,
             }),
           ).pipe(
             Effect.map((result) => ({
@@ -441,7 +480,8 @@ export default function firecrawlTools(pi: ExtensionAPI) {
               output: searchResultText(result),
             })),
           ),
-      ),
+      );
+    },
     renderCall(args, theme) {
       let text = theme.fg("toolTitle", theme.bold("firecrawl_search"));
       text += ` ${theme.fg("accent", `“${args.query}”`)}`;
@@ -449,6 +489,15 @@ export default function firecrawlTools(pi: ExtensionAPI) {
         "muted",
         ` · ${args.source ?? "web"} · limit ${args.limit ?? 5}`,
       );
+      if (args.recency) {
+        text += theme.fg("muted", ` · past ${args.recency}`);
+      }
+      if (args.includeDomains?.length) {
+        text += theme.fg("muted", ` · on ${args.includeDomains.join(", ")}`);
+      }
+      if (args.excludeDomains?.length) {
+        text += theme.fg("muted", ` · not ${args.excludeDomains.join(", ")}`);
+      }
       return new Text(text, 0, 0);
     },
     renderResult(result, { expanded, isPartial }, theme, context) {
@@ -478,7 +527,7 @@ export default function firecrawlTools(pi: ExtensionAPI) {
           text += theme.fg("dim", ` — ${displayUrl(item.url)}`);
         }
         if (expanded && item.description) {
-          text += `\n   ${theme.fg("muted", item.description)}`;
+          text += `\n   ${theme.fg("muted", summaryLine(item.description))}`;
         }
         if (expanded && item.url) {
           text += `\n   ${theme.fg("dim", item.url)}`;

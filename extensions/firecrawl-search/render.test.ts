@@ -8,15 +8,16 @@ import {
   documentView,
   searchItems,
   searchResultText,
+  summaryLine,
 } from "./render.ts";
 
-test("normalizes search result groups", () => {
+test("normalizes search result groups and keeps excerpt structure", () => {
   const items = searchItems({
     web: [
       {
         title: "Firecrawl",
         url: "https://www.firecrawl.dev/",
-        description: "Search, scrape,\n and crawl",
+        description: "**Search**, scrape,\nand crawl",
       },
     ],
     news: [
@@ -33,7 +34,7 @@ test("normalizes search result groups", () => {
       kind: "web",
       title: "Firecrawl",
       url: "https://www.firecrawl.dev/",
-      description: "Search, scrape, and crawl",
+      description: "**Search**, scrape,\nand crawl",
     },
     {
       kind: "news",
@@ -44,22 +45,66 @@ test("normalizes search result groups", () => {
   ]);
 });
 
-test("formats concise model-facing search results", () => {
+test("keeps defensive image descriptions compact", () => {
+  const text = searchResultText({
+    images: [
+      {
+        title: "Diagram",
+        url: "https://example.com/diagram",
+        description: `Line one\n${"x".repeat(600)}`,
+      },
+    ],
+  });
+
+  const lines = text.split("\n");
+  assert.equal(lines.length, 3);
+  assert.equal(lines[2].length, 503);
+  assert.match(lines[2], /Line one x+…$/);
+});
+
+test("formats model-facing search results with bounded multi-line excerpts", () => {
   const text = searchResultText({
     web: [
       {
         title: "Official documentation",
         url: "https://example.com/docs",
-        description: "x".repeat(600),
+        description: `**Highlight** line one\n${"x".repeat(2_500)}`,
         markdown: "This must not be included",
+      },
+      {
+        title: "Line-heavy result",
+        url: "https://example.com/lines",
+        description: Array.from(
+          { length: 150 },
+          (_, index) => `line-${index.toString().padStart(4, "0")}`,
+        ).join("\n"),
+      },
+      {
+        title: "Final result",
+        url: "https://example.com/final",
+        description: "Still present",
       },
     ],
   });
 
   assert.match(text, /1\. \[web\] Official documentation/);
   assert.match(text, /URL: https:\/\/example\.com\/docs/);
-  assert.ok(text.length < 600);
+  assert.match(text, /   \*\*Highlight\*\* line one\n/);
+  const firstResult = text.split("\n\n2. ")[0];
+  assert.ok(firstResult.length < 2_200);
   assert.doesNotMatch(text, /This must not be included/);
+  assert.match(text, /2\. \[web\] Line-heavy result/);
+  assert.match(text, /line-0099/);
+  assert.doesNotMatch(text, /line-0100/);
+  assert.match(text, /3\. \[web\] Final result/);
+  assert.match(text, /   Still present/);
+});
+
+test("collapses excerpts to one bounded line for compact TUI rows", () => {
+  assert.equal(summaryLine("A  multi-line\nexcerpt"), "A multi-line excerpt");
+  const clipped = summaryLine("y".repeat(300));
+  assert.equal(clipped.length, 200);
+  assert.ok(clipped.endsWith("…"));
 });
 
 test("extracts only useful document metadata", () => {

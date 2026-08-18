@@ -1,18 +1,18 @@
 /** Describes Firecrawl search and its model-context output limits. */
 export const SEARCH_TOOL_DESCRIPTION =
-  "Discover web, news, or image URLs with Firecrawl. Search results include titles, descriptions, and snippets but never scraped page content. Output is limited to 50KB or 2000 lines; complete truncated output is saved to a temporary file.";
+  "Discover web, news, or image URLs with Firecrawl. Web and news results include query-relevant excerpts when available; image results remain unchanged. Complete page content is never returned. Output is limited to 50KB or 2000 lines; complete truncated output is saved to a temporary file.";
 
 /** Adds Firecrawl's current-information search capability to the model's tool prompt. */
 export const SEARCH_PROMPT_SNIPPET =
-  "Discover web URLs with Firecrawl without scraping result pages.";
+  "Discover web URLs with query-relevant excerpts via Firecrawl without returning complete pages.";
 
 /** Guides the model on when to search and when to follow with scrape or crawl. */
 export const SEARCH_PROMPT_GUIDELINES = [
-  "Use firecrawl_search only when structured search-result listings are specifically needed or when codex_research fails; it does not scrape result pages.",
+  "Use firecrawl_search only when structured search-result listings are specifically needed or when codex_research fails; web and news results include query-relevant excerpts when available, not complete page content.",
   "Use firecrawl_scrape directly instead of firecrawl_search when the relevant URL is already known.",
   "Use 3–5 firecrawl_search results for targeted research and 10 only when broader discovery is needed.",
   "Consolidate related discovery questions into one firecrawl_search query before issuing narrower follow-up searches.",
-  "After firecrawl_search, use firecrawl_scrape only for the selected pages whose full content is needed.",
+  "After firecrawl_search, answer from the returned excerpts when they suffice; use firecrawl_scrape only for the selected pages whose full content is needed.",
   "Use firecrawl_crawl when the user needs content from multiple pages of the same website.",
 ];
 
@@ -20,6 +20,12 @@ export const SEARCH_PROMPT_GUIDELINES = [
 export const SEARCH_PARAMETER_DESCRIPTIONS = {
   query: "The web search query.",
   limit: "Maximum number of results. Defaults to 5; maximum 10.",
+  includeDomains:
+    "Restrict results to these hostnames (no protocol or path). Mutually exclusive with excludeDomains.",
+  excludeDomains:
+    "Exclude results from these hostnames (no protocol or path). Mutually exclusive with includeDomains.",
+  recency:
+    "Restrict results to this time window (e.g. 'week' for the past week).",
 };
 
 /** Describes multi-page Firecrawl crawling and its page and output limits. */

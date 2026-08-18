@@ -57,6 +57,12 @@ function oneLine(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+/** Collapses an excerpt to one bounded line for compact TUI rows. */
+export function summaryLine(value: string, maxChars = 200) {
+  const text = oneLine(value);
+  return text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text;
+}
+
 export function displayUrl(value: string) {
   try {
     const url = new URL(value);
@@ -86,18 +92,20 @@ export function searchItems(value: unknown): SearchItemView[] {
         metadata?.url,
         item.imageUrl,
       );
+      const description = firstString(
+        item.description,
+        item.snippet,
+        metadata?.description,
+        metadata?.ogDescription,
+      );
       items.push({
         kind,
         title: firstString(item.title, metadata?.title, url, "Untitled result"),
         url,
-        description: oneLine(
-          firstString(
-            item.description,
-            item.snippet,
-            metadata?.description,
-            metadata?.ogDescription,
-          ),
-        ),
+        // Web and news highlights can contain Markdown. Images do not receive
+        // highlights, so keep their defensive description fallback compact.
+        description:
+          kind === "images" ? summaryLine(description, 500) : description,
       });
     }
   }
@@ -143,19 +151,32 @@ export function boundedMarkdown(markdown: string) {
   });
 }
 
+/** Bounds each excerpt so one result cannot starve the rest before the global limit. */
+const MAX_EXCERPT_CHARS = 2_000;
+const MAX_EXCERPT_LINES = 100;
+
+function boundedExcerpt(value: string) {
+  const lines = value.split("\n");
+  const lineBound = lines.slice(0, MAX_EXCERPT_LINES).join("\n");
+  const truncated =
+    lines.length > MAX_EXCERPT_LINES || lineBound.length > MAX_EXCERPT_CHARS;
+  if (!truncated) return lineBound;
+
+  return `${lineBound.slice(0, MAX_EXCERPT_CHARS - 1).trimEnd()}…`;
+}
+
 export function searchResultText(value: unknown) {
   const items = searchItems(value);
   if (items.length === 0) return "No search results returned.";
 
   return items
     .map((item, index) => {
-      const description =
-        item.description.length > 500
-          ? `${item.description.slice(0, 499)}…`
-          : item.description;
+      const excerpt = boundedExcerpt(item.description);
       const lines = [`${index + 1}. [${item.kind}] ${item.title}`];
       if (item.url) lines.push(`   URL: ${item.url}`);
-      if (description) lines.push(`   ${description}`);
+      if (excerpt) {
+        lines.push(...excerpt.split("\n").map((line) => `   ${line}`));
+      }
       return lines.join("\n");
     })
     .join("\n\n");
