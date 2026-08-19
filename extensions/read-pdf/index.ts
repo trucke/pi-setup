@@ -1,9 +1,15 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+  formatSize,
+  truncateHead,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -92,27 +98,56 @@ async function downloadPdf(url: string, signal?: AbortSignal) {
       `PDF is too large (${contentLength} bytes). Limit is ${MAX_DOWNLOAD_BYTES} bytes.`,
     );
   }
-
-  const arrayBuffer = await response.arrayBuffer();
-  if (arrayBuffer.byteLength > MAX_DOWNLOAD_BYTES) {
-    throw new Error(
-      `PDF is too large (${arrayBuffer.byteLength} bytes). Limit is ${MAX_DOWNLOAD_BYTES} bytes.`,
-    );
-  }
+  if (!response.body) throw new Error(`Download returned no body for ${url}`);
 
   const dir = await mkdtemp(join(tmpdir(), "pi-read-pdf-"));
   const parsed = new URL(url);
   const name = basename(parsed.pathname) || "download.pdf";
   const file = join(dir, name.endsWith(".pdf") ? name : `${name}.pdf`);
-  await writeFile(file, Buffer.from(arrayBuffer));
-  return { file, cleanupDir: dir };
+
+  try {
+    const output = await open(file, "wx");
+    try {
+      let bytes = 0;
+      for await (const chunk of response.body) {
+        bytes += chunk.byteLength;
+        if (bytes > MAX_DOWNLOAD_BYTES) {
+          throw new Error(
+            `PDF is too large (${bytes} bytes). Limit is ${MAX_DOWNLOAD_BYTES} bytes.`,
+          );
+        }
+        await output.writeFile(chunk);
+      }
+    } finally {
+      await output.close();
+    }
+    return { file, cleanupDir: dir };
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 async function assertPdf(file: string) {
-  const header = await readFile(file);
-  if (!header.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
+  const header = Buffer.alloc(5);
+  const input = await open(file, "r");
+  let bytesRead: number;
+  try {
+    ({ bytesRead } = await input.read(header, 0, header.length, 0));
+  } finally {
+    await input.close();
+  }
+  if (bytesRead !== header.length || !header.equals(Buffer.from("%PDF-"))) {
     throw new Error(`File does not look like a PDF: ${file}`);
   }
+}
+
+async function shortSha256(file: string, signal?: AbortSignal) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(file, { signal })) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex").slice(0, 16);
 }
 
 function parsePageCount(pdfinfoOutput: string) {
@@ -120,10 +155,18 @@ function parsePageCount(pdfinfoOutput: string) {
   return match ? Number(match[1]) : undefined;
 }
 
-function truncate(text: string, maxChars: number) {
-  if (text.length <= maxChars) return { text, truncated: false };
+async function boundedOutput(text: string, maxPreviewBytes: number) {
+  const truncation = truncateHead(text, {
+    maxBytes: Math.min(maxPreviewBytes, DEFAULT_MAX_BYTES),
+    maxLines: DEFAULT_MAX_LINES,
+  });
+  if (!truncation.truncated) return { text, truncated: false };
+
+  const outputDirectory = await mkdtemp(join(tmpdir(), "pi-read-pdf-output-"));
+  const outputPath = join(outputDirectory, "extraction.md");
+  await writeFile(outputPath, text, "utf8");
   return {
-    text: `${text.slice(0, maxChars)}\n\n[Truncated after ${maxChars} characters.]`,
+    text: `${truncation.content}\n\n[Output truncated: ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}). Full output saved to: ${outputPath}]`,
     truncated: true,
   };
 }
@@ -174,7 +217,8 @@ export default function readPdfExtension(pi: ExtensionAPI) {
       ),
       maxChars: Type.Optional(
         Type.Number({
-          description: "Maximum output characters. Default: 50000.",
+          description:
+            "Maximum preview size. Also bounded by Pi's standard byte and line limits. Default: 50000.",
         }),
       ),
       layout: Type.Optional(
@@ -240,10 +284,7 @@ export default function readPdfExtension(pi: ExtensionAPI) {
           );
         }
 
-        const sha256 = createHash("sha256")
-          .update(await readFile(file))
-          .digest("hex")
-          .slice(0, 16);
+        const sha256 = await shortSha256(file, signal);
         const combined = [
           `# PDF: ${params.path}`,
           `- Source: ${isUrl(params.path) ? "URL" : resolveLocalPath(ctx.cwd, params.path)}`,
@@ -261,16 +302,16 @@ export default function readPdfExtension(pi: ExtensionAPI) {
           .filter((part): part is string => part !== undefined)
           .join("\n");
 
-        const result = truncate(combined, maxChars);
         const noText = sections.every((section) =>
           section.includes("[No extractable text found.]"),
         );
         const warning = noText
           ? "\n\nWarning: no extractable text was found. This may be a scanned/image-only PDF; render/OCR selected pages if visual content is needed."
           : "";
+        const result = await boundedOutput(combined + warning, maxChars);
 
         return {
-          content: [{ type: "text", text: result.text + warning }],
+          content: [{ type: "text", text: result.text }],
           details: {
             pageCount,
             pages: params.pages,
