@@ -5,8 +5,7 @@
 >   `unstable/process` module exists there but we deliberately do NOT use it — see §6)
 > - `@earendil-works/pi-coding-agent@^0.82.0` docs at
 >   `/Users/davis/.vite-plus/js_runtime/node/24.18.0/lib/node_modules/@earendil-works/pi-coding-agent/docs/`
-> - Reference implementations: `extensions/subagents` (Effect v4 service/manager/read-model/tools)
->   and `extensions/workflows` (dashboard UI, status line, background completion follow-ups).
+> - Reference implementation: `extensions/subagents` (Effect v4 service/manager/read-model/tools).
 >
 > Read alongside `extensions/subagents/docs/effect-v4-notes.md` (API cheat sheet) and
 > `extensions/subagents/docs/effect-v4-extension-guide.md` (toolchain + ManagedRuntime boundary).
@@ -30,8 +29,7 @@ the key simplification vs. subagents' `send()`).
 - While ≥1 process is running, a one-line widget renders **directly above the editor**:
   `N background terminal(s) running • /ps to view` (§10).
 - `/ps` opens a two-stage full-screen overlay (list → detail with scrollable stdout/stderr),
-  modeled on `extensions/subagents/src/ui/takeover.ts` and
-  `extensions/workflows/dashboard.ts` (§11).
+  modeled on `extensions/subagents/src/ui/takeover.ts` (§11).
 
 ## 2. Directory / file architecture
 
@@ -686,9 +684,8 @@ const updateWidget = (manager: TerminalManagerShape) => {
 
 Drive it from `manager.view.subscribe(...)` exactly like subagents drives `setStatus`
 (index.ts lines 139–166) — the subscription fires on every state change, including settles, so
-the widget disappears the moment the last process exits. Guard `ctx.hasUI`; wrap in try/catch
-like workflows' `updateIndicator` ("UI may be unavailable"). Clear the widget in
-`session_shutdown` before disposing the runtime.
+the widget disappears the moment the last process exits. Guard `ctx.hasUI`, tolerate an
+unavailable UI, and clear the widget in `session_shutdown` before disposing the runtime.
 
 (Singular/plural: render `1 background terminal running`, `2 background terminals running` —
 implement the requested "terminal(s)" sense as proper pluralization.)
@@ -698,8 +695,8 @@ implement the requested "terminal(s)" sense as proper pluralization.)
 Register `pi.registerCommand("ps", { description: "List and inspect background terminals", handler })`.
 Handler: TUI-mode guard + empty-state notify + open picker — copy the `/subagents` command
 skeleton (index.ts lines 565–587). Non-TUI (`ctx.mode !== "tui"`): print a plain-text listing
-via `ctx.ui.notify` like workflows' non-TUI fallback, or just the notify error like subagents —
-prefer the listing (cheap and useful in RPC mode).
+via `ctx.ui.notify`, or just the notify error like subagents — prefer the listing (cheap and
+useful in RPC mode).
 
 ### 11.1 Stage 1 — list (dashboard)
 
@@ -710,8 +707,8 @@ Copy `SubagentDashboard` (`src/ui/takeover.ts` lines 109–344) with terminal ro
   (`{ overlay: true, overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" } }`).
 - Row left: selection marker, status glyph (`■` warning/success/error — reuse `statusGlyph`
   pattern; map `killed` to muted/error), title, dim id.
-- Row right: `pid 12345 · 3m12s · exit 0` (or `running` / `SIGTERM`), dim separators — the
-  `split(left, right, width)` helper from workflows' dashboard is the cleanest to copy.
+- Row right: `pid 12345 · 3m12s · exit 0` (or `running` / `SIGTERM`), with dim separators
+  and width-aware left/right fitting.
 - Keys: up/down/j/k select, enter open, `x` kill selected (only when running →
   `view.requestKill(id)` fire-and-forget, precedent: dashboard `x` → `requestAbort`), esc
   close. Hint line built from `keybindings.getKeys(...)` via the `configuredKeys` helper.
@@ -743,8 +740,8 @@ esc back · t stdout/stderr · x kill · ↑/↓ scroll · pgup/pgdn page · g/G
   exit code/signal when settled, total sizes (`formatSize`), truncation note when
   `truncatedBytes > 0` (with spill path).
 - **stdout/stderr shown separately** (requirement): a `t` key toggles the active stream;
-  header tab shows both sizes. (Alternative side-by-side split like workflows' phases/agents
-  panels is more code for less readability of wide log lines — use the toggle.)
+  header tab shows both sizes. A side-by-side split is more code for less readability of wide
+  log lines, so use the toggle.
 - Output rendering (`src/ui/output-view.ts`): split buffer text on `\n`, `sanitizeText` each
   line (copy from transcript.ts — ANSI strip is mandatory or the overlay smears), wrap with
   `wrapTextWithAnsi`, `truncateToWidth`. Scroll state = offset-from-bottom, 0 = pinned to
@@ -756,7 +753,7 @@ esc back · t stdout/stderr · x kill · ↑/↓ scroll · pgup/pgdn page · g/G
   write; do not repaint per chunk).
 - Keys: esc/left back to list (loop re-opens dashboard), `x` kill (running only), scroll keys
   via `keybindings.matches(data, "tui.editor.cursorUp"/"cursorDown"/"pageUp"/"pageDown")` plus
-  j/k and g/G (workflows transcript view precedent).
+  j/k and g/G.
 - Big-buffer perf: with the 2 MiB cap, worst case ~30k lines; recompute wrapped lines only when
   the buffer version or width changed (cache `(version, width) → lines`), not per render tick.
 
@@ -793,9 +790,8 @@ Consequences:
 - **Spill files do not survive the session either.** `disposeAll` first closes every entry
   scope and awaits bounded spill flushes, then recursively removes its owner-only session
   directory. Paths shown in the old transcript are intentionally session-lifetime pointers.
-- **No persistence / no resurrection.** Unlike workflows (which persists `workflow.json` and
-  marks stale "running" runs as aborted on reload — dashboard.ts lines 286–297), v1 keeps no
-  cross-session record: killed-on-shutdown processes simply disappear. Optionally append a
+- **No persistence / no resurrection.** v1 keeps no cross-session record:
+  killed-on-shutdown processes simply disappear. Optionally append a
   `pi.appendEntry("background-terminals-note", {...})` breadcrumb ("bt-2 'dev server' was
   killed by session shutdown") so a resumed session's transcript explains the vanished
   terminal — cheap and worth doing; entries don't enter LLM context (docs: appendEntry).
@@ -893,9 +889,8 @@ tricks; they exist on any machine running pi)
    `if (status !== "running") return` in settle. Set `killSignaled` atomically with SIGTERM
    only while the shell is live; an already-observed natural exit keeps `done`/`failed` even
    if its surviving process group still needs cleanup.
-8. **Never queue messages into a dying session** — `disposed` guard around `onSettled`, and
-   try/catch around `pi.sendMessage` (workflows wraps its follow-up send in try/catch:
-   "Session may be shutting down").
+8. **Never queue messages into a dying session** — use a `disposed` guard around `onSettled`
+   and try/catch around `pi.sendMessage`.
 9. **Defer a copy, not the live snapshot** — the buffer keeps mutating after settle (late
    flushes); subagents defers `{ ...snap, meta: { ...snap.meta } }` for the same reason.
 10. **Synchronous reservation for the cap** — an `await` between check and increment lets
@@ -928,8 +923,8 @@ tricks; they exist on any machine running pi)
 - [ ] Widget above editor only while ≥1 running, text `N background terminals running • /ps to
       view`, cleared on last settle and on shutdown.
 - [ ] `/ps` two-stage overlay: list (select/kill/open) → detail (metadata, stdout/stderr
-      toggle, scroll, back), matching subagents/workflows interaction conventions and hint
-      lines from `keybindings.getKeys`.
+      toggle, scroll, back), matching subagents interaction conventions and hint lines from
+      `keybindings.getKeys`.
 - [ ] Kill terminates the whole process tree (SIGTERM → 2s → SIGKILL), records exit
       code/signal, resolves only after settle.
 - [ ] `session_shutdown` (quit/reload/new/resume/fork) kills all processes within bounded

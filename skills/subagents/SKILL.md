@@ -5,7 +5,7 @@ description: invoke this skill when the user asks you to use subagents
 
 # Subagents
 
-Each subagent is headless, has its own context window, cannot see the parent conversation, cannot ask the user, and cannot spawn subagents or workflows. Give every child a self-contained prompt with paths, constraints, and the expected report.
+Each subagent is headless, has its own context window, cannot see the parent conversation, cannot ask the user or spawn more subagents. Give every child a self-contained prompt with paths, constraints, and the expected report.
 
 ## Pi Harness
 
