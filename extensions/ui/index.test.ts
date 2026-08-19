@@ -162,12 +162,12 @@ test("compacts low-priority fields instead of splitting the line", () => {
 test("consolidates extension activity into one transient row", () => {
   const footer = createFooter(
     new Map([
-      ["summaries", "✦ summarizing"],
+      ["background-terminals", "■ terminal running"],
       ["subagents", "■ 2 agents running"],
     ]),
   );
 
   const lines = footer.render(120);
   assert.equal(lines.length, 2);
-  assert.equal(lines[1], "■ 2 agents running · ✦ summarizing");
+  assert.equal(lines[1], "■ terminal running · ■ 2 agents running");
 });
