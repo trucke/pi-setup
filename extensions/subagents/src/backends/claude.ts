@@ -140,8 +140,8 @@ class ClaudeInput implements AsyncIterable<SDKUserMessage> {
 /**
  * Claude's deprecated-but-supported maxThinkingTokens is the closest match to
  * the shared numeric scale requested by this extension. Zero explicitly
- * disables extended thinking in SDK 0.3.207; an omitted effort leaves the CLI
- * default untouched.
+ * disables extended thinking in the current SDK; an omitted effort leaves the
+ * CLI default untouched.
  */
 const THINKING_BUDGETS = {
   off: 0,
@@ -661,7 +661,7 @@ const makeClaudeSession = (
               state.submittedUuids.has(uuid),
             );
             if (hasOwnQueuedMessage) {
-              // 0.3.207 exposes cancellation receipts but no public per-message
+              // The SDK exposes cancellation receipts but no public per-message
               // cancel method. Closing is the only way to prevent a cancelled
               // queued prompt from immediately starting another turn.
               input.end();

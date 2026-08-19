@@ -469,9 +469,7 @@ views are exercised end to end:
 ## 4. File/module layout
 
 ```
-/Users/davis/.pi/agent/extensions/subagents/
-├── package.json               # name, "effect": "^4.0.0-beta.x"; pi extension entry via pi.extensions
-├── package-lock.json / node_modules/   (after npm install)
+extensions/subagents/
 ├── docs/
 │   └── design-plan.md         # this document
 ├── index.ts                   # extension factory: runtime lifecycle, 5 tools, /subagents
@@ -500,8 +498,8 @@ views are exercised end to end:
 ```
 
 Notes:
-- `package.json` is needed because `effect` is an npm dependency (extension-with-deps
-  style from the extension docs). Everything else avoids new dependencies.
+- The repository root owns package dependencies and tooling so extension checks use the
+  same versions that are shipped at runtime.
 - The original child-session trust/tool-policy helpers are **not** copied in v1 of v2
   (the stubs don't need them); the real pi backend will bring the needed subset into
   `backends/pi.ts` when implemented. The `resolveStandaloneChildProjectTrust` logic *is*
