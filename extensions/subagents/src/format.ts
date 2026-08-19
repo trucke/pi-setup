@@ -1,7 +1,4 @@
-/**
- * Formatting helpers (self-contained copies of the v1 shared helpers:
- * context-utilization + activity-status).
- */
+/** Context-utilization and activity-status formatting helpers. */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
@@ -51,7 +48,6 @@ export function formatContextUtilization(usage: ContextUtilization) {
 
 interface ActivityCounts {
   running: number;
-  done: number;
   failed: number;
 }
 
@@ -61,9 +57,6 @@ export function formatActivityStatus(theme: Theme, counts: ActivityCounts) {
   const parts: string[] = [];
   if (counts.running > 0) {
     parts.push(theme.fg("warning", `${SQUARE} ${counts.running} running`));
-  }
-  if (counts.done > 0) {
-    parts.push(theme.fg("success", `${SQUARE} ${counts.done} done`));
   }
   if (counts.failed > 0) {
     parts.push(theme.fg("error", `${SQUARE} ${counts.failed} failed`));
