@@ -58,7 +58,6 @@
       "./skills/background-terminals",
       "./skills/file-pr",
       "./skills/handoff",
-      "./skills/second-brain",
       "./skills/subagents"
     ],
     "themes": [
