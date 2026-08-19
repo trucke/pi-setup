@@ -22,15 +22,6 @@ import { registerVcsInfo } from "./vcs/index.ts";
 import { emptyVcsInfoState, type VcsInfoState } from "./vcs/state.ts";
 
 type Rgb = [number, number, number];
-interface RenderableNode {
-  children?: RenderableNode[];
-  invalidate(): void;
-  render(width: number): string[];
-}
-
-interface DashboardTui extends RenderableNode {
-  requestRender(force?: boolean): void;
-}
 
 interface ModelInfo {
   provider: string;
@@ -58,8 +49,6 @@ const TITLE_LINES = [
   "  ██║      ██║ ",
   "  ╚═╝      ╚═╝ ",
 ];
-const ANSI_PATTERN =
-  /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
 // eslint-disable-next-line no-control-regex
 const OSC_PATTERN =
   /(?:\u001b\]|\u009d)(?:[^\u0007\u001b\u009c]|\u001b(?!\\))*(?:\u0007|\u001b\\|\u009c)/g;
@@ -111,47 +100,6 @@ function gradientText(text: string, phase: number) {
         : foreground(sampleGradient(index / span + phase), character),
     )
     .join("");
-}
-
-function hasChildren(
-  component: RenderableNode,
-): component is RenderableNode & { children: RenderableNode[] } {
-  return Array.isArray(component.children);
-}
-
-function renderedText(component: RenderableNode) {
-  try {
-    return component.render(200).join("\n").replace(ANSI_PATTERN, "");
-  } catch {
-    return "";
-  }
-}
-
-function hideThemesSection(component: RenderableNode) {
-  if (!hasChildren(component)) return false;
-
-  for (let index = 0; index < component.children.length; index += 1) {
-    const child = component.children[index]!;
-    const firstLine = renderedText(child)
-      .split("\n")
-      .find((line) => line.trim())
-      ?.trim();
-
-    if (firstLine === "[Themes]") {
-      const removeCount =
-        component.children[index + 1] &&
-        renderedText(component.children[index + 1]!).trim() === ""
-          ? 2
-          : 1;
-      component.children.splice(index, removeCount);
-      component.invalidate();
-      return true;
-    }
-
-    if (hideThemesSection(child)) return true;
-  }
-
-  return false;
 }
 
 function formatDirectory(cwd: string) {
@@ -211,8 +159,6 @@ export default function ui(
   let vcsInfo = emptyVcsInfoState();
   let firecrawlUsage = emptyFirecrawlUsageState();
   let requestRender: (() => void) | undefined;
-  let activeTui: DashboardTui | undefined;
-  let themeRemovalTimers: Array<ReturnType<typeof setTimeout>> = [];
 
   function refreshModelInfo(ctx: ExtensionContext) {
     const model = ctx.model;
@@ -260,26 +206,11 @@ export default function ui(
     },
   );
 
-  function scheduleThemeRemoval(tui: DashboardTui) {
-    for (const timer of themeRemovalTimers) clearTimeout(timer);
-    themeRemovalTimers = [];
-
-    for (const delay of [0, 50, 250, 1_000]) {
-      themeRemovalTimers.push(
-        setTimeout(() => {
-          if (hideThemesSection(tui)) tui.requestRender(true);
-        }, delay),
-      );
-    }
-  }
-
   function install(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
 
     ctx.ui.setHeader((tui) => {
-      activeTui = tui;
       requestRender = () => tui.requestRender();
-      scheduleThemeRemoval(tui);
 
       return {
         render(width: number) {
@@ -442,15 +373,8 @@ export default function ui(
   pi.on("turn_end", (_event, ctx) => refreshModelInfo(ctx));
   pi.on("agent_settled", (_event, ctx) => refreshModelInfo(ctx));
 
-  pi.on("resources_discover", () => {
-    if (activeTui) scheduleThemeRemoval(activeTui);
-  });
-
   pi.on("session_shutdown", (_event, ctx) => {
     stopFirecrawlUsageListener();
-    for (const timer of themeRemovalTimers) clearTimeout(timer);
-    themeRemovalTimers = [];
-    activeTui = undefined;
     requestRender = undefined;
     if (ctx.mode === "tui") {
       ctx.ui.setHeader(undefined);
