@@ -20,7 +20,7 @@ import {
 } from "./state.ts";
 import { loadVcsSnapshot } from "./vcs.ts";
 
-const POLL_INTERVAL_MS = 3_000;
+const POLL_INTERVAL_MS = 30_000;
 const GH_TIMEOUT_MS = 10_000;
 
 function parsePullRequest(value: unknown) {
@@ -176,8 +176,8 @@ export function registerVcsInfo(
       await getRuntime().runPromise(Fiber.interrupt(previousPollingFiber));
     }
 
-    // Do not block Pi startup on GitHub/network I/O. The initial refresh publishes
-    // state when it completes; polling continues to keep it current afterwards.
+    // Do not block Pi startup on GitHub/network I/O. Input and tool events keep
+    // normal activity current; slow polling catches changes made outside Pi.
     refreshInBackground(ctx);
     pollingFiber = forkBackground(poll());
   });
