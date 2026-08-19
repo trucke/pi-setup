@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Deferred, Effect, Fiber } from "effect";
-import { makeRefreshCoordinator } from "./src/refresh-coordinator.ts";
+import { makeRefreshCoordinator } from "./vcs/refresh-coordinator.ts";
 
 test("an explicit refresh waits for an active background refresh", async () => {
   const coordinator = makeRefreshCoordinator();

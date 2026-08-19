@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   collectChangedFiles,
   getStringPath,
-} from "./src/last-agent-changes.ts";
+} from "./vcs/last-agent-changes.ts";
 
 test("collects newly changed and explicitly touched files", () => {
   assert.deepEqual(

@@ -45,12 +45,10 @@
       "./extensions/codex-research/index.ts",
       "./extensions/firecrawl-search/index.ts",
       "./extensions/firecrawl-usage/index.ts",
-      "./extensions/vcs-info/index.ts",
       "./extensions/read-pdf/index.ts",
-      "./extensions/model-info/index.ts",
       "./extensions/subagents/index.ts",
       "./extensions/summaries/index.ts",
-      "./extensions/ui-customization/index.ts",
+      "./extensions/ui/index.ts",
       "./extensions/copy-all/index.ts"
     ],
     "skills": [

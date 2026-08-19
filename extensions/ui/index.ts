@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { relative } from "node:path";
+import { basename, relative } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -13,16 +13,13 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   emptyFirecrawlUsageState,
-  emptyModelInfoState,
-  emptyVcsInfoState,
   FIRECRAWL_USAGE_CHANNEL,
-  MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
-  VCS_INFO_CHANNEL,
   isFirecrawlUsageState,
-  isModelInfoState,
-  isVcsInfoState,
 } from "../shared/dashboard-state.ts";
+import { fitFooterLine, type FooterSegment } from "./footer-layout.ts";
+import { registerVcsInfo } from "./vcs/index.ts";
+import { emptyVcsInfoState, type VcsInfoState } from "./vcs/state.ts";
 
 type Rgb = [number, number, number];
 interface RenderableNode {
@@ -33,6 +30,14 @@ interface RenderableNode {
 
 interface DashboardTui extends RenderableNode {
   requestRender(force?: boolean): void;
+}
+
+interface ModelInfo {
+  provider: string;
+  modelId: string;
+  thinking: string;
+  contextPercent: number | null;
+  cost: number;
 }
 
 const RESET = "\x1b[0m";
@@ -149,12 +154,6 @@ function hideThemesSection(component: RenderableNode) {
   return false;
 }
 
-function formatTokens(tokens: number) {
-  if (tokens < 1_000) return `${tokens}`;
-  if (tokens < 1_000_000) return `${Math.round(tokens / 1_000)}k`;
-  return `${(tokens / 1_000_000).toFixed(1)}m`;
-}
-
 function formatDirectory(cwd: string) {
   const home = homedir();
   if (cwd === home) return "~";
@@ -162,48 +161,85 @@ function formatDirectory(cwd: string) {
   return sanitizeTerminalLabel(display);
 }
 
+function formatDirectoryCompact(cwd: string) {
+  if (cwd === homedir()) return "~";
+  return sanitizeTerminalLabel(basename(cwd) || cwd);
+}
+
 function center(text: string, width: number) {
   const padding = Math.max(0, Math.floor((width - visibleWidth(text)) / 2));
   return truncateToWidth(`${" ".repeat(padding)}${text}`, width);
 }
 
-function columns(left: string, right: string, width: number) {
-  if (!right) return truncateToWidth(left, width);
+function getSessionCost(ctx: ExtensionContext) {
+  let cost = 0;
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (entry.type === "message" && entry.message.role === "assistant") {
+      cost += entry.message.usage.cost.total;
+    }
+  }
+  return cost;
+}
 
-  const naturalGap = width - visibleWidth(left) - visibleWidth(right);
-  if (naturalGap >= 1) return `${left}${" ".repeat(naturalGap)}${right}`;
-
-  const leftWidth = Math.max(1, Math.floor(width * 0.45));
-  const rightWidth = Math.max(1, width - leftWidth - 1);
-  const fittedLeft = truncateToWidth(left, leftWidth);
-  const fittedRight = truncateToWidth(right, rightWidth);
-  const gap = Math.max(
-    1,
-    width - visibleWidth(fittedLeft) - visibleWidth(fittedRight),
-  );
-  return truncateToWidth(
-    `${fittedLeft}${" ".repeat(gap)}${fittedRight}`,
-    width,
+function modelInfoEqual(left: ModelInfo, right: ModelInfo) {
+  return (
+    left.provider === right.provider &&
+    left.modelId === right.modelId &&
+    left.thinking === right.thinking &&
+    left.contextPercent === right.contextPercent &&
+    left.cost === right.cost
   );
 }
 
-export default function uiCustomization(pi: ExtensionAPI) {
+type VcsRegistrar = (
+  pi: ExtensionAPI,
+  onStateChange: (state: VcsInfoState) => void,
+) => void;
+
+export default function ui(
+  pi: ExtensionAPI,
+  registerVcs: VcsRegistrar = registerVcsInfo,
+) {
   let title = "pi";
-  let modelInfo = emptyModelInfoState();
+  let modelInfo: ModelInfo = {
+    provider: "",
+    modelId: "",
+    thinking: "off",
+    contextPercent: null,
+    cost: 0,
+  };
   let vcsInfo = emptyVcsInfoState();
   let firecrawlUsage = emptyFirecrawlUsageState();
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
   let themeRemovalTimers: Array<ReturnType<typeof setTimeout>> = [];
 
-  const stopModelListener = pi.events.on(MODEL_INFO_CHANNEL, (value) => {
-    if (!isModelInfoState(value)) return;
-    modelInfo = value;
+  function refreshModelInfo(ctx: ExtensionContext) {
+    const model = ctx.model;
+    const next: ModelInfo = {
+      provider: model?.provider ?? "",
+      modelId: model?.id ?? "",
+      thinking: model?.reasoning ? pi.getThinkingLevel() : "off",
+      contextPercent: ctx.getContextUsage()?.percent ?? null,
+      cost: getSessionCost(ctx),
+    };
+    if (modelInfoEqual(modelInfo, next)) return;
+    modelInfo = next;
     requestRender?.();
-  });
+  }
 
-  const stopVcsListener = pi.events.on(VCS_INFO_CHANNEL, (value) => {
-    if (!isVcsInfoState(value)) return;
+  registerVcs(pi, (value: VcsInfoState) => {
+    if (
+      vcsInfo.isRepository === value.isRepository &&
+      vcsInfo.kind === value.kind &&
+      vcsInfo.label === value.label &&
+      vcsInfo.changedFiles === value.changedFiles &&
+      vcsInfo.pullRequest?.number === value.pullRequest?.number &&
+      vcsInfo.pullRequest?.url === value.pullRequest?.url &&
+      vcsInfo.pullRequest?.isDraft === value.pullRequest?.isDraft
+    ) {
+      return;
+    }
     vcsInfo = value;
     requestRender?.();
   });
@@ -212,6 +248,13 @@ export default function uiCustomization(pi: ExtensionAPI) {
     FIRECRAWL_USAGE_CHANNEL,
     (value) => {
       if (!isFirecrawlUsageState(value)) return;
+      if (
+        firecrawlUsage.creditsUsed === value.creditsUsed &&
+        firecrawlUsage.budget === value.budget &&
+        firecrawlUsage.unlimited === value.unlimited
+      ) {
+        return;
+      }
       firecrawlUsage = value;
       requestRender?.();
     },
@@ -259,54 +302,122 @@ export default function uiCustomization(pi: ExtensionAPI) {
       return {
         invalidate() {},
         render(width: number) {
-          const directory = theme.fg("text", formatDirectory(ctx.cwd));
-          const fileLabel = vcsInfo.changedFiles === 1 ? "file" : "files";
-          let vcs =
-            vcsInfo.kind && vcsInfo.label
-              ? `${vcsInfo.kind} ${vcsInfo.label} · ${vcsInfo.changedFiles} ${fileLabel} changed`
-              : "";
-
-          if (vcsInfo.pullRequest) {
-            const prLabel = `PR #${vcsInfo.pullRequest.number}`;
-            const linkedPr = getCapabilities().hyperlinks
-              ? hyperlink(prLabel, vcsInfo.pullRequest.url)
-              : prLabel;
-            vcs += ` · ${linkedPr}`;
-          }
-
-          const contextPercent =
-            modelInfo.contextPercent === null
-              ? "?"
-              : `${Math.round(modelInfo.contextPercent)}`;
-          const contextWindow =
-            modelInfo.contextWindow > 0
-              ? formatTokens(modelInfo.contextWindow)
-              : "?";
-          const tps =
-            modelInfo.tokensPerSecond === null
-              ? "— tok/s"
-              : `${Math.round(modelInfo.tokensPerSecond)} tok/s`;
-          const firecrawlBudget = firecrawlUsage.unlimited
-            ? "∞"
-            : firecrawlUsage.budget;
-          const usage = `${contextPercent}%/${contextWindow} · $${modelInfo.cost.toFixed(2)} · FC ${firecrawlUsage.creditsUsed}/${firecrawlBudget} cr · ${tps}`;
-          const model = modelInfo.provider
-            ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
-            : modelInfo.modelId;
-
-          const lines = [
-            columns(directory, theme.fg("muted", model), width),
-            columns(theme.fg("muted", usage), theme.fg("muted", vcs), width),
+          const separator = theme.fg("dim", " · ");
+          const left: FooterSegment[] = [
+            {
+              text: theme.fg("text", formatDirectory(ctx.cwd)),
+              compactText: theme.fg("text", formatDirectoryCompact(ctx.cwd)),
+              compactAt: 25,
+              dropAt: 55,
+            },
           ];
 
-          // Extension statuses render after the two dashboard lines, one per row.
-          const statuses = footerData.getExtensionStatuses();
-          const statusLines = Array.from(statuses.entries())
+          if (vcsInfo.kind && vcsInfo.label) {
+            left.push({
+              text: theme.fg("muted", `${vcsInfo.kind} ${vcsInfo.label}`),
+              compactText: theme.fg("muted", vcsInfo.label),
+              compactAt: 30,
+              dropAt: 50,
+            });
+          }
+          if (vcsInfo.changedFiles > 0) {
+            const fileLabel = vcsInfo.changedFiles === 1 ? "file" : "files";
+            left.push({
+              text: theme.fg(
+                "muted",
+                `${vcsInfo.changedFiles} ${fileLabel} changed`,
+              ),
+              compactText: theme.fg("muted", `+${vcsInfo.changedFiles}`),
+              compactAt: 35,
+              dropAt: 90,
+            });
+          }
+          if (vcsInfo.pullRequest) {
+            const fullLabel = `PR #${vcsInfo.pullRequest.number}`;
+            const compactLabel = `#${vcsInfo.pullRequest.number}`;
+            left.push({
+              text: getCapabilities().hyperlinks
+                ? hyperlink(fullLabel, vcsInfo.pullRequest.url)
+                : fullLabel,
+              compactText: getCapabilities().hyperlinks
+                ? hyperlink(compactLabel, vcsInfo.pullRequest.url)
+                : compactLabel,
+              compactAt: 15,
+              dropAt: 20,
+            });
+          }
+
+          const right: FooterSegment[] = [];
+          if (modelInfo.modelId) {
+            right.push({
+              text: theme.fg(
+                "muted",
+                modelInfo.provider
+                  ? `${modelInfo.provider}/${modelInfo.modelId}`
+                  : modelInfo.modelId,
+              ),
+              compactText: theme.fg("muted", modelInfo.modelId),
+              compactAt: 40,
+            });
+          }
+          if (modelInfo.thinking !== "off") {
+            right.push({
+              text: theme.fg("muted", modelInfo.thinking),
+              compactText: theme.fg(
+                "muted",
+                modelInfo.thinking === "medium" ? "med" : modelInfo.thinking,
+              ),
+              compactAt: 45,
+              dropAt: 75,
+            });
+          }
+          if (modelInfo.contextPercent !== null) {
+            const percent = Math.round(modelInfo.contextPercent);
+            const color =
+              percent >= 90 ? "error" : percent >= 70 ? "warning" : "muted";
+            right.push({
+              text: theme.fg(color, `ctx ${percent}%`),
+              compactText: theme.fg(color, `${percent}%`),
+              compactAt: 45,
+              dropAt: 95,
+            });
+          }
+          if (modelInfo.cost > 0) {
+            right.push({
+              text: theme.fg("muted", `$${modelInfo.cost.toFixed(2)}`),
+              dropAt: 80,
+            });
+          }
+          if (firecrawlUsage.creditsUsed > 0) {
+            const budget = firecrawlUsage.unlimited
+              ? "∞"
+              : firecrawlUsage.budget;
+            right.push({
+              text: theme.fg(
+                "muted",
+                `FC ${firecrawlUsage.creditsUsed}/${budget} cr`,
+              ),
+              compactText: theme.fg(
+                "muted",
+                `FC ${firecrawlUsage.creditsUsed}/${budget}`,
+              ),
+              compactAt: 5,
+              dropAt: 10,
+            });
+          }
+
+          const lines = [fitFooterLine(left, right, width, separator)];
+          const statusText = Array.from(
+            footerData.getExtensionStatuses().entries(),
+          )
             .sort(([a], [b]) => a.localeCompare(b))
-            .flatMap(([, text]) => text.split("\n"));
-          for (const statusLine of statusLines) {
+            .flatMap(([, text]) => text.split("\n"))
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .join(separator);
+          if (statusText) {
             lines.push(
-              truncateToWidth(statusLine, width, theme.fg("dim", "...")),
+              truncateToWidth(statusText, width, theme.fg("dim", "...")),
             );
           }
 
@@ -321,19 +432,21 @@ export default function uiCustomization(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     title = formatDirectory(ctx.cwd);
-    modelInfo = emptyModelInfoState();
-    vcsInfo = emptyVcsInfoState();
-    firecrawlUsage = emptyFirecrawlUsageState();
+    refreshModelInfo(ctx);
     install(ctx);
   });
+
+  pi.on("model_select", (_event, ctx) => refreshModelInfo(ctx));
+  pi.on("thinking_level_select", (_event, ctx) => refreshModelInfo(ctx));
+  pi.on("agent_start", (_event, ctx) => refreshModelInfo(ctx));
+  pi.on("turn_end", (_event, ctx) => refreshModelInfo(ctx));
+  pi.on("agent_settled", (_event, ctx) => refreshModelInfo(ctx));
 
   pi.on("resources_discover", () => {
     if (activeTui) scheduleThemeRemoval(activeTui);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
-    stopModelListener();
-    stopVcsListener();
     stopFirecrawlUsageListener();
     for (const timer of themeRemovalTimers) clearTimeout(timer);
     themeRemovalTimers = [];
