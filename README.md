@@ -3,7 +3,7 @@
 Personal [Pi](https://pi.dev/) package based on
 [`davis7dotsh/my-pi-setup`](https://github.com/davis7dotsh/my-pi-setup).
 
-It packages the selected dashboard, ask-user, Herdr ask-user bridge,
+It packages the selected dashboard, Herdr-aware ask-user,
 background-terminal, copy-all, file-search, PDF reader, Codex web research,
 Firecrawl tools and session credit tracking, and subagent extensions together
 with their companion skills and GitHub Dark theme. The dashboard's VCS status

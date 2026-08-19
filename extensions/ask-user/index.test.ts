@@ -47,9 +47,14 @@ type TestTool = {
   ): Promise<ToolResult>;
 };
 
-function registeredTool() {
+function registeredTool(emitted: Array<{ name: string; value: unknown }> = []) {
   let tool: TestTool | undefined;
   const pi = {
+    events: {
+      emit(name: string, value: unknown) {
+        emitted.push({ name, value });
+      },
+    },
     registerTool(value: unknown) {
       tool = value as TestTool;
     },
@@ -145,6 +150,32 @@ test("returns structured batched question details when no UI is available", asyn
     answers: [],
     cancelled: true,
   });
+});
+
+test("reports the interactive wait to Herdr", async () => {
+  const emitted: Array<{ name: string; value: unknown }> = [];
+
+  await registeredTool(emitted).execute(
+    "ask-1",
+    {
+      question: "Choose one",
+      options: [{ label: "A" }, { label: "B" }],
+    },
+    undefined,
+    undefined,
+    {
+      mode: "tui",
+      ui: { custom: async () => null },
+    },
+  );
+
+  assert.deepEqual(emitted, [
+    {
+      name: "herdr:blocked",
+      value: { active: true, label: "Waiting for your answer" },
+    },
+    { name: "herdr:blocked", value: { active: false } },
+  ]);
 });
 
 test("collects a batch through question tabs and the submit tab", async () => {
