@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countGitChanges, countJjChanges, parseJjRevision } from "./src/vcs.ts";
+import { countGitChanges, countJjChanges, parseJjRevision } from "./vcs/vcs.ts";
 
 test("parses a JJ working-copy change and its bookmarks", () => {
   assert.deepEqual(parseJjRevision("abcdefgh\0feature\0review\0"), {

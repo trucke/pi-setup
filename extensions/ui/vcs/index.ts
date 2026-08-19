@@ -3,26 +3,22 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Effect, Fiber, Schedule } from "effect";
-import {
-  emptyVcsInfoState,
-  REFRESH_CHANNEL,
-  type PullRequestInfo,
-  VCS_INFO_CHANNEL,
-} from "../shared/dashboard-state.ts";
+import { REFRESH_CHANNEL } from "../../shared/dashboard-state.ts";
 import {
   loadChangedFilePaths,
   loadChangedFiles,
   showChangedFiles,
-} from "./src/changed-files-view.ts";
-import { registerLastAgentChanges } from "./src/last-agent-changes.ts";
-import { runCommand, type CommandRunner } from "./src/process.ts";
-import { makeRefreshCoordinator } from "./src/refresh-coordinator.ts";
+} from "./changed-files-view.ts";
+import { registerLastAgentChanges } from "./last-agent-changes.ts";
+import { runCommand, type CommandRunner } from "./process.ts";
+import { makeRefreshCoordinator } from "./refresh-coordinator.ts";
+import { createRuntime, runEffect, type VcsInfoRuntime } from "./runtime.ts";
 import {
-  createRuntime,
-  runEffect,
-  type VcsInfoRuntime,
-} from "./src/runtime.ts";
-import { loadVcsSnapshot } from "./src/vcs.ts";
+  emptyVcsInfoState,
+  type PullRequestInfo,
+  type VcsInfoState,
+} from "./state.ts";
+import { loadVcsSnapshot } from "./vcs.ts";
 
 const POLL_INTERVAL_MS = 3_000;
 const GH_TIMEOUT_MS = 10_000;
@@ -48,7 +44,10 @@ function parsePullRequestJson(value: string) {
   }
 }
 
-export default function vcsInfo(pi: ExtensionAPI) {
+export function registerVcsInfo(
+  pi: ExtensionAPI,
+  onStateChange: (state: VcsInfoState) => void,
+) {
   let state = emptyVcsInfoState();
   let runtime: VcsInfoRuntime | undefined;
   let pollingFiber: Fiber.Fiber<void> | undefined;
@@ -58,7 +57,7 @@ export default function vcsInfo(pi: ExtensionAPI) {
   const refreshCoordinator = makeRefreshCoordinator();
 
   const getRuntime = () => (runtime ??= createRuntime());
-  const publish = () => pi.events.emit(VCS_INFO_CHANNEL, { ...state });
+  const publish = () => onStateChange({ ...state });
 
   const lookupPullRequest = (ctx: ExtensionContext, refs: string[]) =>
     Effect.gen(function* () {

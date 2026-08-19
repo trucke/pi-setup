@@ -5,7 +5,7 @@ import {
   parseGitChangedPaths,
   parseJjChangedPaths,
   sanitizeTerminalText,
-} from "./src/changed-files-view.ts";
+} from "./vcs/changed-files-view.ts";
 
 test("parses Git changed paths including rename records", () => {
   assert.deepEqual(

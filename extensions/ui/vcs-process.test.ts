@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { runCommand } from "./src/process.ts";
-import { createRuntime } from "./src/runtime.ts";
+import { runCommand } from "./vcs/process.ts";
+import { createRuntime } from "./vcs/runtime.ts";
 
 const runtime = createRuntime();
 
