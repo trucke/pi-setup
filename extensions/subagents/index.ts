@@ -170,10 +170,13 @@ export default function (pi: ExtensionAPI) {
     }
     const running = subs.filter((snap) => snap.status === "running").length;
     const failed = subs.filter((snap) => snap.status === "error").length;
-    const done = subs.length - running - failed;
+    if (running === 0 && failed === 0) {
+      ui.setStatus("subagents", undefined);
+      return;
+    }
     ui.setStatus(
       "subagents",
-      formatActivityStatus(ui.theme, { running, done, failed }),
+      formatActivityStatus(ui.theme, { running, failed }),
     );
   };
 
