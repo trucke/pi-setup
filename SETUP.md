@@ -48,10 +48,11 @@ Firecrawl retrieval is credit-aware:
 - `firecrawl_crawl` defaults to 5 pages.
 - Equivalent page scrapes are reused across reloads and resumes, including pages
   already returned by crawls. Set `fresh: true` only when revalidation is needed.
-- The default session budget is 20 credits. Interactive sessions ask before
-  raising it; non-interactive sessions block requests that would exceed it.
-- Approved budget increases persist in the session, and the dashboard displays
-  `used/budget` credits.
+- The default session budget is 20 credits. Interactive sessions can raise the
+  budget, allow all remaining requests for the session, or decline; non-interactive
+  sessions block requests that would exceed the budget.
+- Approved budget settings persist in the session, and the dashboard displays
+  `used/budget` credits (`used/∞` when all requests are allowed).
 
 ## Theme
 

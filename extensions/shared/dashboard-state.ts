@@ -20,6 +20,7 @@ export interface ModelInfoState {
 export interface FirecrawlUsageState {
   creditsUsed: number;
   budget: number;
+  unlimited: boolean;
 }
 
 export interface PullRequestInfo {
@@ -52,7 +53,11 @@ export function emptyModelInfoState(): ModelInfoState {
 }
 
 export function emptyFirecrawlUsageState(): FirecrawlUsageState {
-  return { creditsUsed: 0, budget: DEFAULT_FIRECRAWL_BUDGET };
+  return {
+    creditsUsed: 0,
+    budget: DEFAULT_FIRECRAWL_BUDGET,
+    unlimited: false,
+  };
 }
 
 export function emptyVcsInfoState(): VcsInfoState {
@@ -101,7 +106,8 @@ export function isFirecrawlUsageState(
     value.creditsUsed >= 0 &&
     typeof value.budget === "number" &&
     Number.isFinite(value.budget) &&
-    value.budget > 0
+    value.budget > 0 &&
+    typeof value.unlimited === "boolean"
   );
 }
 

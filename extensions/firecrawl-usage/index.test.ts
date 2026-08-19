@@ -183,13 +183,16 @@ function createHarness(
   entries: SessionEntry[],
   options: {
     hasUI?: boolean;
-    confirm?: boolean | (() => Promise<boolean>);
+    select?: (
+      choices: readonly string[],
+    ) => string | undefined | Promise<string | undefined>;
   } = {},
 ) {
   const handlers = new Map<string, Handler>();
   const eventHandlers = new Map<string, (value: unknown) => void>();
   const emitted: Array<{ name: string; value: unknown }> = [];
   const appended: Array<{ customType: string; data: unknown }> = [];
+  const selections: Array<{ title: string; choices: readonly string[] }> = [];
   const pi = {
     on(name: string, handler: Handler) {
       handlers.set(name, handler);
@@ -212,10 +215,10 @@ function createHarness(
     hasUI: options.hasUI ?? true,
     sessionManager: { getEntries: () => entries },
     ui: {
-      confirm: async () =>
-        typeof options.confirm === "function"
-          ? options.confirm()
-          : (options.confirm ?? true),
+      select: async (title: string, choices: readonly string[]) => {
+        selections.push({ title, choices });
+        return options.select ? options.select(choices) : choices[0];
+      },
     },
   } as unknown as ExtensionContext;
 
@@ -227,7 +230,7 @@ function createHarness(
     return handler(event, ctx);
   };
 
-  return { emit, emitted, eventHandlers, appended };
+  return { emit, emitted, eventHandlers, appended, selections };
 }
 
 function usageEvents(emitted: Array<{ name: string; value: unknown }>) {
@@ -278,9 +281,21 @@ test("publishes restored and live usage without double counting", async () => {
   eventHandlers.get(REFRESH_CHANNEL)?.(undefined);
 
   assert.deepEqual(usageEvents(emitted), [
-    { creditsUsed: 1, budget: DEFAULT_FIRECRAWL_BUDGET },
-    { creditsUsed: 3, budget: DEFAULT_FIRECRAWL_BUDGET },
-    { creditsUsed: 3, budget: DEFAULT_FIRECRAWL_BUDGET },
+    {
+      creditsUsed: 1,
+      budget: DEFAULT_FIRECRAWL_BUDGET,
+      unlimited: false,
+    },
+    {
+      creditsUsed: 3,
+      budget: DEFAULT_FIRECRAWL_BUDGET,
+      unlimited: false,
+    },
+    {
+      creditsUsed: 3,
+      budget: DEFAULT_FIRECRAWL_BUDGET,
+      unlimited: false,
+    },
   ]);
 });
 
@@ -304,19 +319,30 @@ test("tree navigation preserves spend from all session entries", async () => {
   });
 
   assert.deepEqual(usageEvents(emitted), [
-    { creditsUsed: 0, budget: DEFAULT_FIRECRAWL_BUDGET },
-    { creditsUsed: 8, budget: DEFAULT_FIRECRAWL_BUDGET },
+    {
+      creditsUsed: 0,
+      budget: DEFAULT_FIRECRAWL_BUDGET,
+      unlimited: false,
+    },
+    {
+      creditsUsed: 8,
+      budget: DEFAULT_FIRECRAWL_BUDGET,
+      unlimited: false,
+    },
   ]);
 });
 
-test("restores approved budgets from session entries", async () => {
+test("restores approved budget settings from session entries", async () => {
   const { emit, emitted } = createHarness([
     customEntry("firecrawl-budget", { budget: 35 }, "budget-1"),
+    customEntry("firecrawl-budget", { unlimited: true }, "budget-2"),
   ]);
 
   await emit("session_start", { type: "session_start", reason: "startup" });
 
-  assert.deepEqual(usageEvents(emitted), [{ creditsUsed: 0, budget: 35 }]);
+  assert.deepEqual(usageEvents(emitted), [
+    { creditsUsed: 0, budget: 35, unlimited: true },
+  ]);
 });
 
 test("reserves parallel calls and persists an approved budget increase", async () => {
@@ -346,6 +372,7 @@ test("reserves parallel calls and persists an approved budget increase", async (
   assert.deepEqual(usageEvents(emitted).at(-1), {
     creditsUsed: 0,
     budget: 25,
+    unlimited: false,
   });
   assert.deepEqual(herdrEvents(emitted), [
     {
@@ -354,6 +381,47 @@ test("reserves parallel calls and persists an approved budget increase", async (
     },
     { active: false },
   ]);
+});
+
+test("allows all remaining Firecrawl requests for the current session", async () => {
+  const harness = createHarness([], {
+    select: (choices) => choices[1],
+  });
+  await harness.emit("session_start", {
+    type: "session_start",
+    reason: "startup",
+  });
+
+  assert.equal(
+    await harness.emit("tool_call", {
+      toolCallId: "crawl-1",
+      toolName: "firecrawl_crawl",
+      input: { limit: 21 },
+    }),
+    undefined,
+  );
+  assert.equal(
+    await harness.emit("tool_call", {
+      toolCallId: "crawl-2",
+      toolName: "firecrawl_crawl",
+      input: { limit: 100 },
+    }),
+    undefined,
+  );
+
+  assert.deepEqual(harness.appended, [
+    { customType: "firecrawl-budget", data: { unlimited: true } },
+  ]);
+  assert.equal(harness.selections.length, 1);
+  assert.deepEqual(harness.selections[0]?.choices.slice(1), [
+    "Allow all Firecrawl requests for this session",
+    "Decline this request",
+  ]);
+  assert.deepEqual(usageEvents(harness.emitted).at(-1), {
+    creditsUsed: 0,
+    budget: DEFAULT_FIRECRAWL_BUDGET,
+    unlimited: true,
+  });
 });
 
 test("blocks budget overruns without approval", async () => {
@@ -384,9 +452,12 @@ test("blocks budget overruns without approval", async () => {
   assert.deepEqual(usageEvents(noUi.emitted).at(-1), {
     creditsUsed: 0,
     budget: DEFAULT_FIRECRAWL_BUDGET,
+    unlimited: false,
   });
 
-  const declined = createHarness([], { confirm: false });
+  const declined = createHarness([], {
+    select: (choices) => choices[2],
+  });
   await declined.emit("session_start", {
     type: "session_start",
     reason: "startup",
@@ -414,7 +485,7 @@ test("blocks budget overruns without approval", async () => {
 test("clears the blocked state when budget confirmation fails", async () => {
   const confirmationError = new Error("confirmation failed");
   const harness = createHarness([], {
-    confirm: async () => {
+    select: async () => {
       throw confirmationError;
     },
   });
@@ -470,5 +541,6 @@ test("counts failed calls conservatively and cached calls as free", async () => 
   assert.deepEqual(usageEvents(emitted).at(-1), {
     creditsUsed: 7,
     budget: DEFAULT_FIRECRAWL_BUDGET,
+    unlimited: false,
   });
 });

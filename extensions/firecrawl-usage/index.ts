@@ -18,6 +18,8 @@ const FIRECRAWL_TOOL_NAMES = new Set([
 const FIRECRAWL_BUDGET_ENTRY = "firecrawl-budget";
 const DEFAULT_SEARCH_LIMIT = 5;
 const DEFAULT_CRAWL_LIMIT = 5;
+const ALLOW_SESSION_OPTION = "Allow all Firecrawl requests for this session";
+const DECLINE_OPTION = "Decline this request";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
@@ -172,8 +174,9 @@ export function usageForEntries(entries: readonly SessionEntry[]) {
   return { creditsUsed, toolCallIds };
 }
 
-function budgetForEntries(entries: readonly SessionEntry[]) {
+function budgetSettingsForEntries(entries: readonly SessionEntry[]) {
   let budget = DEFAULT_FIRECRAWL_BUDGET;
+  let unlimited = false;
 
   for (const entry of entries) {
     if (
@@ -182,28 +185,38 @@ function budgetForEntries(entries: readonly SessionEntry[]) {
     ) {
       continue;
     }
-    const saved = creditValue(record(entry.data)?.budget);
+
+    const data = record(entry.data);
+    const saved = creditValue(data?.budget);
     if (saved !== undefined) budget = Math.max(budget, saved);
+    if (data?.unlimited === true) unlimited = true;
   }
 
-  return budget;
+  return { budget, unlimited };
 }
 
 export default function firecrawlUsage(pi: ExtensionAPI) {
   let creditsUsed = 0;
   let budget = DEFAULT_FIRECRAWL_BUDGET;
+  let unlimited = false;
   let toolCallIds = new Set<string>();
   const reservations = new Map<string, number>();
   const blockedToolCallIds = new Set<string>();
 
   const publish = () =>
-    pi.events.emit(FIRECRAWL_USAGE_CHANNEL, { creditsUsed, budget });
+    pi.events.emit(FIRECRAWL_USAGE_CHANNEL, {
+      creditsUsed,
+      budget,
+      unlimited,
+    });
 
   const restore = (ctx: ExtensionContext) => {
     const entries = ctx.sessionManager.getEntries();
     const restored = usageForEntries(entries);
+    const budgetSettings = budgetSettingsForEntries(entries);
     creditsUsed = restored.creditsUsed;
-    budget = budgetForEntries(entries);
+    budget = budgetSettings.budget;
+    unlimited = budgetSettings.unlimited;
     toolCallIds = restored.toolCallIds;
     reservations.clear();
     blockedToolCallIds.clear();
@@ -226,7 +239,7 @@ export default function firecrawlUsage(pi: ExtensionAPI) {
     );
     const projected = creditsUsed + reserved + estimate;
 
-    if (projected > budget) {
+    if (!unlimited && projected > budget) {
       const proposedBudget = Math.ceil(projected / 5) * 5;
       if (!ctx.hasUI) {
         blockedToolCallIds.add(event.toolCallId);
@@ -236,26 +249,31 @@ export default function firecrawlUsage(pi: ExtensionAPI) {
         };
       }
 
-      const approved = await withHerdrBlocked(
+      const raiseBudgetOption = `Approve and raise the session budget to ${proposedBudget} credits`;
+      const approval = await withHerdrBlocked(
         pi,
         "Waiting for Firecrawl budget approval",
         () =>
-          ctx.ui.confirm(
-            "Raise Firecrawl budget?",
-            `${event.toolName} is estimated to use ${estimate} credits, bringing projected session usage to ${projected}. Raise the budget from ${budget} to ${proposedBudget} credits?`,
+          ctx.ui.select(
+            `${event.toolName} would bring projected usage to ${projected} credits (current budget: ${budget})`,
+            [raiseBudgetOption, ALLOW_SESSION_OPTION, DECLINE_OPTION],
           ),
       );
-      if (!approved) {
+      if (approval === ALLOW_SESSION_OPTION) {
+        unlimited = true;
+        pi.appendEntry(FIRECRAWL_BUDGET_ENTRY, { unlimited: true });
+        publish();
+      } else if (approval === raiseBudgetOption) {
+        budget = proposedBudget;
+        pi.appendEntry(FIRECRAWL_BUDGET_ENTRY, { budget });
+        publish();
+      } else {
         blockedToolCallIds.add(event.toolCallId);
         return {
           block: true,
           reason: `Firecrawl request declined because projected usage exceeds the ${budget}-credit session budget.`,
         };
       }
-
-      budget = proposedBudget;
-      pi.appendEntry(FIRECRAWL_BUDGET_ENTRY, { budget });
-      publish();
     }
 
     reservations.set(event.toolCallId, estimate);
@@ -287,6 +305,7 @@ export default function firecrawlUsage(pi: ExtensionAPI) {
     stopRefreshListener();
     creditsUsed = 0;
     budget = DEFAULT_FIRECRAWL_BUDGET;
+    unlimited = false;
     toolCallIds.clear();
     reservations.clear();
     blockedToolCallIds.clear();

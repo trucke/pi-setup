@@ -61,6 +61,7 @@ test("renders Firecrawl session credits in the dashboard usage line", () => {
   eventHandlers.get(FIRECRAWL_USAGE_CHANNEL)?.({
     creditsUsed: 4,
     budget: 20,
+    unlimited: false,
   });
   assert.ok(footerFactory);
 
@@ -72,4 +73,11 @@ test("renders Firecrawl session credits in the dashboard usage line", () => {
   } as unknown as ReadonlyFooterDataProvider);
 
   assert.match(footer.render(120)[1] ?? "", /\$0\.00 · FC 4\/20 cr · — tok\/s/);
+
+  eventHandlers.get(FIRECRAWL_USAGE_CHANNEL)?.({
+    creditsUsed: 6,
+    budget: 20,
+    unlimited: true,
+  });
+  assert.match(footer.render(120)[1] ?? "", /\$0\.00 · FC 6\/∞ cr · — tok\/s/);
 });
