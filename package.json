@@ -47,7 +47,6 @@
       "./extensions/firecrawl-usage/index.ts",
       "./extensions/read-pdf/index.ts",
       "./extensions/subagents/index.ts",
-      "./extensions/summaries/index.ts",
       "./extensions/ui/index.ts",
       "./extensions/copy-all/index.ts"
     ],
