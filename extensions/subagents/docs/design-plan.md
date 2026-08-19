@@ -48,8 +48,8 @@ the concurrency cap, and that children can't orchestrate/see the parent conversa
 - Children are **in-process pi `AgentSession`s** created via the SDK
   (`createAgentSession` + `SessionManager.create(cwd)` → real session files visible in
   `/resume`), with child resources loaded per-cwd (`DefaultResourceLoader`, trust-gated
-  project resources) and a tool denylist (`excludeTools`: the subagent_* tools,
-  `workflow`, `ask_user`).
+  project resources) and a tool denylist (`excludeTools`: the subagent_* tools and
+  `ask_user`).
 - Settlement is driven by session lifecycle events (`agent_start` re-marks running;
   `agent_settled` settles). Failure detection: thrown prompt error, last assistant
   `stopReason === "error" | "aborted"`, error text bounded to 4096 chars.
@@ -494,7 +494,6 @@ views are exercised end to end:
     ├── result-delivery.test.ts
     ├── prompt.ts              # all model-facing strings (v1 copy + `agent` param description)
     ├── format.ts              # elapsed/context-utilization/activity-status formatting
-    │                          # (merged copies of ../shared/{context-utilization,activity-status}.ts)
     └── ui/
         ├── transcript.ts      # sanitize + buildTranscriptLines over SubagentSnapshot
         └── takeover.ts        # SubagentDashboard + TakeoverView + openSubagentPicker (ported)
@@ -503,8 +502,8 @@ views are exercised end to end:
 Notes:
 - `package.json` is needed because `effect` is an npm dependency (extension-with-deps
   style from the extension docs). Everything else avoids new dependencies.
-- v1's `child-session.ts` trust/tool-policy helpers are **not** copied in v1 of v2 (the
-  stubs don't need them); the real pi backend will bring the needed subset into
+- The original child-session trust/tool-policy helpers are **not** copied in v1 of v2
+  (the stubs don't need them); the real pi backend will bring the needed subset into
   `backends/pi.ts` when implemented. The `resolveStandaloneChildProjectTrust` logic *is*
   still referenced by the design (SpawnTask.parentContext.projectTrusted) so the tool
   layer computes trust the same way v1 does.
