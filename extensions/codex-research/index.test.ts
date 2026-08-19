@@ -348,7 +348,7 @@ test("cleans up its temporary session directory", async () => {
 });
 
 // Consumes ChatGPT subscription quota; run explicitly with
-// CODEX_RESEARCH_LIVE=1 npm --prefix extensions/codex-research test
+// npm run test:live:research
 test(
   "live codex research",
   { skip: !process.env.CODEX_RESEARCH_LIVE },

@@ -59,51 +59,17 @@ extensions/background-terminals/
 └── ps.test.ts                # selection-reconciliation tests (like takeover.test.ts)
 ```
 
-Tests live at the package root, plain `node --test --experimental-strip-types`, exactly like
-`extensions/subagents/package.json`'s `test` script. Note the repo-root `package.json` test
-script (`node --test --experimental-strip-types extensions/*/*.test.ts`) will automatically
-pick these up.
+Tests live beside the extension entry point and use plain
+`node --test --experimental-strip-types`. The repository-root `npm test` script picks them
+up automatically; dependency versions and package scripts are managed only at the root.
 
-## 3. Toolchain (copy exactly, per effect-v4-extension-guide.md §1)
+## 3. Toolchain
 
-`package.json`:
+The repository root owns dependencies, scripts, and TypeScript configuration. Keep Effect
+and its platform packages on the same exact beta and do not add extension-local manifests
+or lockfiles. Validate with the root `npm run check` and `npm test` scripts.
 
-```jsonc
-{
-  "name": "background-terminals",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "check": "tsc --noEmit -p .",
-    "prepare": "effect-tsgo patch",
-    "test": "node --test --experimental-strip-types manager.test.ts output.test.ts result-delivery.test.ts ps.test.ts"
-  },
-  "dependencies": {
-    "effect": "^4.0.0-beta.99"
-  },
-  "devDependencies": {
-    "@effect/tsgo": "^0.24.2",
-    "typescript": "^7.0.2"
-  }
-}
-```
-
-`tsconfig.json` — identical to `extensions/subagents/tsconfig.json`:
-
-```jsonc
-{
-  "extends": "../../tsconfig.json",
-  "compilerOptions": { "plugins": [{ "name": "@effect/language-service" }] },
-  "include": ["index.ts", "src/**/*.ts", "*.test.ts"]
-}
-```
-
-Per AGENTS.md: add deps with an install command (`npm install effect@^4.0.0-beta.99`),
-run `npm run check` when done, avoid explicit return types unless needed, no `as any`.
-Verification runs from inside `extensions/background-terminals/` only — never root scripts
-(house rule, effect-v4-extension-guide.md §7/§8).
-
-Note: we do **not** need `@effect/platform-node`. Subagents' codex backend uses raw
+This extension does not need `@effect/platform-node`. Subagents' Codex backend uses raw
 `node:child_process` `spawn` inside Effect and that is the right model here too (§6).
 
 ## 4. Domain model (`src/domain.ts`)
