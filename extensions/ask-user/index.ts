@@ -20,6 +20,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { Cause, Effect, Exit } from "effect";
 import { Type, type Static } from "typebox";
+import { withHerdrBlocked } from "../shared/herdr.ts";
 import {
   ASK_USER_PARAMETER_DESCRIPTIONS,
   ASK_USER_PROMPT_GUIDELINES,
@@ -590,9 +591,11 @@ export default function askUser(pi: ExtensionAPI) {
           };
         });
 
-      const uiExit = await Effect.runPromiseExit(
-        Effect.tryPromise(showQuestions),
-        signal ? { signal } : undefined,
+      const uiExit = await withHerdrBlocked(pi, "Waiting for your answer", () =>
+        Effect.runPromiseExit(
+          Effect.tryPromise(showQuestions),
+          signal ? { signal } : undefined,
+        ),
       );
 
       if (Exit.isFailure(uiExit)) {
