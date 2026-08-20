@@ -24,7 +24,7 @@
     "format:check": "prettier --check \"extensions/**/*.{ts,cjs}\" \"*.json\"",
     "test": "node --test --experimental-strip-types extensions/*/*.test.ts && vitest run extensions/file-search/index.spec.ts",
     "test:live": "node --test --experimental-strip-types extensions/subagents/claude.live.ts extensions/subagents/codex.live.ts",
-    "test:live:research": "CODEX_RESEARCH_LIVE=1 node --test --experimental-strip-types extensions/codex-research/index.test.ts"
+    "test:live:research": "CODEX_RESEARCH_LIVE=1 node --test --experimental-strip-types extensions/web-search/research.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -42,9 +42,7 @@
       "./extensions/ask-user/index.ts",
       "./extensions/background-terminals/index.ts",
       "./extensions/file-search/index.ts",
-      "./extensions/codex-research/index.ts",
-      "./extensions/firecrawl-search/index.ts",
-      "./extensions/firecrawl-usage/index.ts",
+      "./extensions/web-search/index.ts",
       "./extensions/read-pdf/index.ts",
       "./extensions/subagents/index.ts",
       "./extensions/ui/index.ts",

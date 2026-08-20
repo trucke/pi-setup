@@ -29,15 +29,15 @@ Source: `/Users/davis/.pi/agent/extensions/subagents/` (`index.ts`, `manager.ts`
 
 | Tool | Parameters | Behavior |
 |---|---|---|
-| `subagent_spawn` | `prompt`, `title`, `working_dir?`, `model?`, `provider?`, `reasoning_effort?` | Fire-and-forget spawn. Returns immediately with an id (`sa-N`). Enforces `MAX_RUNNING = 4` with a synchronous reservation so parallel tool calls can't race past the cap. Validates `working_dir`, resolves model against the registry (inherit parent model/thinking level by default), truncates title to 160 chars. |
-| `subagent_wait` | `ids[]` (max 64) | Blocks until all listed subagents settle; respects the tool `AbortSignal`; streams `Waiting for ...` via `onUpdate`. Marks the awaited results "consumed" so they are not also auto-delivered. Output budgets: 48KB total, 16KB per agent, with per-section fallbacks (`[omitted: ...]`). Errors on unknown ids (lists known ids). |
-| `subagent_cancel` | `ids[]` | Aborts running subagents (marks consumed first to avoid duplicate delivery), waits for settlement, reports per-id `Cancelled ...` / `was already <status>`. Partial transcripts remain on disk. |
-| `subagent_check` | `id` | Non-blocking peek: status line, turn count, error text, up to 2KB/20 lines of latest output (includes the live streaming assistant message). Does not consume the result. |
-| `subagent_list` | — | One `describeSubagent()` line per agent: `id [status] "title" (provider/model, ctx%, elapsed, cwd)`. |
+| `subagent-spawn` | `prompt`, `title`, `working_dir?`, `model?`, `provider?`, `reasoning_effort?` | Fire-and-forget spawn. Returns immediately with an id (`sa-N`). Enforces `MAX_RUNNING = 4` with a synchronous reservation so parallel tool calls can't race past the cap. Validates `working_dir`, resolves model against the registry (inherit parent model/thinking level by default), truncates title to 160 chars. |
+| `subagent-wait` | `ids[]` (max 64) | Blocks until all listed subagents settle; respects the tool `AbortSignal`; streams `Waiting for ...` via `onUpdate`. Marks the awaited results "consumed" so they are not also auto-delivered. Output budgets: 48KB total, 16KB per agent, with per-section fallbacks (`[omitted: ...]`). Errors on unknown ids (lists known ids). |
+| `subagent-cancel` | `ids[]` | Aborts running subagents (marks consumed first to avoid duplicate delivery), waits for settlement, reports per-id `Cancelled ...` / `was already <status>`. Partial transcripts remain on disk. |
+| `subagent-check` | `id` | Non-blocking peek: status line, turn count, error text, up to 2KB/20 lines of latest output (includes the live streaming assistant message). Does not consume the result. |
+| `subagent-list` | — | One `describeSubagent()` line per agent: `id [status] "title" (provider/model, ctx%, elapsed, cwd)`. |
 
-Prompt metadata (all strings live in `prompt.ts`): `subagent_spawn` has a
+Prompt metadata (all strings live in `prompt.ts`): `subagent-spawn` has a
 `promptSnippet` and two `promptGuidelines` (delegate self-contained tasks; don't block on
-`subagent_wait` unless necessary). Tool descriptions explain fire-and-forget semantics,
+`subagent-wait` unless necessary). Tool descriptions explain fire-and-forget semantics,
 the concurrency cap, and that children can't orchestrate/see the parent conversation.
 
 ### 1.2 State tracking (v1 `SubagentManager`)
@@ -49,7 +49,7 @@ the concurrency cap, and that children can't orchestrate/see the parent conversa
   (`createAgentSession` + `SessionManager.create(cwd)` → real session files visible in
   `/resume`), with child resources loaded per-cwd (`DefaultResourceLoader`, trust-gated
   project resources) and a tool denylist (`excludeTools`: the subagent_* tools and
-  `ask_user`).
+  `ask-user`).
 - Settlement is driven by session lifecycle events (`agent_start` re-marks running;
   `agent_settled` settles). Failure detection: thrown prompt error, last assistant
   `stopReason === "error" | "aborted"`, error text bounded to 4096 chars.
@@ -68,7 +68,7 @@ the concurrency cap, and that children can't orchestrate/see the parent conversa
 - When a child settles **unconsumed**, `onSettled` defers it into a tiny
   `createDeferredResultDelivery` buffer (defer/consume/drain/clear keyed by id).
 - Flush happens when the parent goes idle: immediately if `sessionContext.isIdle()`,
-  otherwise on the parent's `agent_settled` event. A later `subagent_wait` can still
+  otherwise on the parent's `agent_settled` event. A later `subagent-wait` can still
   consume a deferred result before flush (that's why it is a buffer, not an immediate
   send).
 - Delivery = `pi.sendMessage({ customType: "subagent-result", content, display: true,
@@ -331,7 +331,7 @@ interface SubagentSnapshot {      // what the UI and tools read; plain immutable
   queued: ReadonlyArray<{ text: string; kind: "steer" | "follow-up" }>;
   finalText: string;             // last Completed finalText (v1 finalOutput)
   latestText: string;            // finalText or live buffer (v1 latestOutput)
-  turns: number;                 // count of AssistantMessage events (for subagent_check)
+  turns: number;                 // count of AssistantMessage events (for subagent-check)
 }
 
 class SubagentManager extends ServiceMap.Key<SubagentManager, {
@@ -421,7 +421,7 @@ Layer graph:
   `runtime.runPromise(program, { signal })`; tool-visible errors are converted from
   tagged errors to `Error` messages matching v1 wording. `onUpdate` and `ctx`
   (model registry, cwd, trust) are captured into the program as plain values/callbacks.
-- **Tool schema change:** `subagent_spawn` gains
+- **Tool schema change:** `subagent-spawn` gains
   `agent: StringEnum(["pi", "claude", "codex"])` (optional, default `"pi"`), and
   `model`/`provider`/`reasoning_effort` keep their v1 shapes but are documented as
   backend-interpreted (pi validates against the registry; claude/codex validate against
@@ -446,12 +446,12 @@ views are exercised end to end:
   streaming is visible), one fake `ToolStart/Update/End` cycle (`bash` with an args
   preview), `UsageChanged` ramping tokens, a final `AssistantMessage`, and `RunSettled`
   with `Completed` — final text echoes the task: `"[stub:claude] completed: <first 200
-  chars of prompt>"`. Total runtime ~3–6s (configurable per profile) so `subagent_wait`,
+  chars of prompt>"`. Total runtime ~3–6s (configurable per profile) so `subagent-wait`,
   the footer counters, and the dashboard's running→done transition are observable.
 - **send**: emits `UserMessage` + `QueueChanged` (briefly, to exercise the queued-line
   rendering) and runs another scripted turn — so takeover steering works.
 - **interrupt**: stops the script timer and settles with `Interrupted` (→ status
-  `error`, errorText `"Run was aborted"`, matching v1) — so `subagent_cancel` and the
+  `error`, errorText `"Run was aborted"`, matching v1) — so `subagent-cancel` and the
   `x`/`app.clear` keybindings work.
 - **failure path**: a magic prompt prefix (e.g. `FAIL:`) makes the run settle with
   `Failed` — so error rendering, `errorText` rows, and failed result delivery are
@@ -513,7 +513,7 @@ Notes:
 
 ## 5. Migration/coexistence note
 
-v1 and v2 register the same tool names (`subagent_spawn`, ...) and the same
+v1 and v2 register the same tool names (`subagent-spawn`, ...) and the same
 `/subagents` command. While both live in `~/.pi/agent/extensions/`, pi will suffix
 duplicate commands (`/subagents:1`, `/subagents:2`) and both tool sets would be
 registered. During development, either (a) v2 uses temporary names
@@ -553,7 +553,7 @@ Recommendation: (a) during development, rename to final names when v2 replaces v
    model is meaningless cross-backend. Proposal: per-backend default model in a small
    config block; confirm.
 7. **Binary/SDK discovery + failure UX.** When `codex`/`claude` isn't installed or has
-   no credentials, should `subagent_spawn` fail fast with a clear tool error (proposed),
+   no credentials, should `subagent-spawn` fail fast with a clear tool error (proposed),
    or should the backends be hidden from the `agent` enum dynamically?
 8. **Result truncation budgets.** Keep v1's numbers (24KB result message, 48KB wait
    total, 16KB per agent, 2KB check preview) unchanged?

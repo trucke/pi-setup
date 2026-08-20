@@ -139,7 +139,7 @@ export interface TerminalReadModel {
    * settle still flows back to the model as a follow-up message. */
   requestKill(id: string): void;
   /**
-   * Register the settle hook. `consumed` is true when an active bg_kill is
+   * Register the settle hook. `consumed` is true when an active bg-kill is
    * collecting the result (so it must not also be delivered as a follow-up).
    */
   setOnSettled(
@@ -542,7 +542,7 @@ const makeManager = Effect.gen(function* () {
           }
           if (runningCount() + reserved >= MAX_RUNNING) {
             return new ConcurrencyLimitError({
-              message: `Max ${MAX_RUNNING} background terminals can run concurrently. Stop one with bg_kill before starting another.`,
+              message: `Max ${MAX_RUNNING} background terminals can run concurrently. Stop one with bg-kill before starting another.`,
             });
           }
           reserved++;

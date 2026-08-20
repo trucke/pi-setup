@@ -45,6 +45,81 @@ test("normalizes search result groups and keeps excerpt structure", () => {
   ]);
 });
 
+test("normalizes exa search details into the shared item view", () => {
+  const items = searchItems({
+    backend: "exa",
+    results: [
+      {
+        title: "Exa result",
+        url: "https://example.com/exa",
+        publishedDate: "2026-08-01T00:00:00.000Z",
+        snippet: "A relevant highlight",
+      },
+      { title: "", url: "https://example.com/untitled", snippet: "" },
+    ],
+  });
+
+  assert.deepEqual(items, [
+    {
+      kind: "web",
+      title: "Exa result",
+      url: "https://example.com/exa",
+      description: "A relevant highlight",
+    },
+    {
+      kind: "web",
+      title: "https://example.com/untitled",
+      url: "https://example.com/untitled",
+      description: "",
+    },
+  ]);
+
+  const text = searchResultText({
+    backend: "exa",
+    results: [
+      {
+        title: "Exa result",
+        url: "https://example.com/exa",
+        snippet: "A relevant highlight",
+      },
+    ],
+  });
+  assert.match(text, /1\. \[web\] Exa result/);
+  assert.match(text, /URL: https:\/\/example\.com\/exa/);
+  assert.match(text, /   A relevant highlight/);
+});
+
+test("strips terminal control sequences from every rendered view", () => {
+  const [item] = searchItems({
+    web: [
+      {
+        title: "Evil\u001b[31m red\u0007 title",
+        url: "https://example.com/\u001b[2Ja",
+        description: "safe \u001b]0;owned\u0007text",
+      },
+    ],
+  });
+  assert.equal(item.title, "Evil red title");
+  assert.equal(item.url, "https://example.com/a");
+  assert.equal(item.description, "safe text");
+
+  const document = documentView({
+    markdown: "# Head\u001b[2Jing\nBody",
+    metadata: {
+      title: "Doc\u0007ument",
+      sourceURL: "https://example.com/doc",
+    },
+  });
+  assert.equal(document.title, "Document");
+  assert.equal(document.markdown, "# Heading\nBody");
+
+  const crawl = crawlView({
+    status: "completed\u001b[31m",
+    data: [],
+  });
+  assert.equal(crawl.status, "completed");
+});
+
 test("keeps defensive image descriptions compact", () => {
   const text = searchResultText({
     images: [

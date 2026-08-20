@@ -1,8 +1,8 @@
 /** All model-facing strings for the subagents tools. */
 
-/** Describes subagent_spawn, including harnesses and the fixed concurrency cap. */
+/** Describes subagent-spawn, including harnesses and the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
-  "Spawn a background subagent: a fully autonomous, headless agent with its own context window and the selected harness's normal host permissions. You choose the harness it runs on: pi (in-process pi session, inherits this environment's tools and config), claude (Claude Code), or codex (Codex CLI). Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. Max 4 subagents can be running at once across all harnesses.";
+  "Spawn a background subagent: a fully autonomous, headless agent with its own context window and the selected harness's normal host permissions. You choose the harness it runs on: pi (in-process pi session, inherits this environment's tools and config), claude (Claude Code), or codex (Codex CLI). Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent-wait. Children cannot orchestrate more agents or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. Max 4 subagents can be running at once across all harnesses.";
 
 /** Adds background subagent delegation to the parent model's available-tools prompt. */
 export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
@@ -10,12 +10,12 @@ export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
 
 /** Guides the parent model to delegate standalone tasks and avoid unnecessary blocking waits. */
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
-  "Use subagent_spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
+  "Use subagent-spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
   "Pick the subagent harness deliberately: pi unless you have a reason to prefer Claude Code or Codex (e.g. the user asked for one, or the task suits that harness).",
-  "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
+  "After subagent-spawn, keep working; results arrive automatically. Only call subagent-wait when you cannot proceed without the result.",
 ];
 
-/** Model-facing schema descriptions for subagent_spawn task and execution options. */
+/** Model-facing schema descriptions for subagent-spawn task and execution options. */
 export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
   prompt:
     "Task prompt for the subagent. Must be self-contained: include all needed context, file paths, and what to report back.",
@@ -30,7 +30,7 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
     "Reasoning effort on a shared scale; the harness maps it to its nearest native equivalent (pi thinking level, codex reasoning effort, claude thinking budget). Omit for the harness default (pi inherits the current level).",
 };
 
-/** Builds the subagent_spawn result that tells the parent model how to continue or inspect the child. */
+/** Builds the subagent-spawn result that tells the parent model how to continue or inspect the child. */
 export function buildSubagentSpawnResult(options: {
   id: string;
   title: string;
@@ -41,7 +41,7 @@ export function buildSubagentSpawnResult(options: {
   return (
     `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).\n` +
     `It runs in the background. Its result will be delivered to you when it finishes, ` +
-    `or use subagent_wait(ids: ["${options.id}"]) to block for it, subagent_cancel to stop it, subagent_check to peek, subagent_list to see all.`
+    `or use subagent-wait(ids: ["${options.id}"]) to block for it, subagent-cancel to stop it, subagent-check to peek, subagent-list to see all.`
   );
 }
 

@@ -58,12 +58,12 @@ Requires the Codex CLI to be installed and authenticated.
 
 ## Spawn and Manage
 
-Call `subagent_spawn` with a complete `prompt`, short `name`, chosen `harness`, and optional `working_dir`, `model`, and `reasoning_effort`. At most four subagents run concurrently.
+Call `subagent-spawn` with a complete `prompt`, short `name`, chosen `harness`, and optional `working_dir`, `model`, and `reasoning_effort`. At most four subagents run concurrently.
 
-- `subagent_check({ id })`: peek without blocking.
-- `subagent_list()`: list all runs.
-- `subagent_wait({ ids })`: block only when results are required to proceed.
-- `subagent_cancel({ ids })`: stop runs while preserving partial transcripts.
+- `subagent-check({ id })`: peek without blocking.
+- `subagent-list()`: list all runs.
+- `subagent-wait({ ids })`: block only when results are required to proceed.
+- `subagent-cancel({ ids })`: stop runs while preserving partial transcripts.
 - `/subagents`: inspect or take over a run interactively.
 
 Results return automatically. After spawning, continue useful parent work instead of immediately waiting.

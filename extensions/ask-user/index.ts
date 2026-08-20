@@ -1,5 +1,5 @@
 /**
- * ask_user - Lets the model ask one or more single-select questions.
+ * ask-user - Lets the model ask one or more single-select questions.
  *
  * - One question, or a batch of up to 4 questions
  * - 2 to 5 model-provided options per question, plus "Write my own answer"
@@ -151,7 +151,7 @@ export function normalizeQuestions(params: AskUserInput) {
 function validateQuestions(questions: NormalizedQuestion[]) {
   if (questions.length < MIN_QUESTIONS || questions.length > MAX_QUESTIONS) {
     throw new Error(
-      `ask_user requires between ${MIN_QUESTIONS} and ${MAX_QUESTIONS} questions (got ${questions.length}). Retry with a valid number of questions.`,
+      `ask-user requires between ${MIN_QUESTIONS} and ${MAX_QUESTIONS} questions (got ${questions.length}). Retry with a valid number of questions.`,
     );
   }
 
@@ -161,7 +161,7 @@ function validateQuestions(questions: NormalizedQuestion[]) {
       question.options.length > MAX_OPTIONS
     ) {
       throw new Error(
-        `ask_user question ${index + 1} requires between ${MIN_OPTIONS} and ${MAX_OPTIONS} options (got ${question.options.length}). Retry with a valid number of options.`,
+        `ask-user question ${index + 1} requires between ${MIN_OPTIONS} and ${MAX_OPTIONS} options (got ${question.options.length}). Retry with a valid number of options.`,
       );
     }
   });
@@ -191,7 +191,7 @@ function isLegacyDetails(
 
 export default function askUser(pi: ExtensionAPI) {
   pi.registerTool({
-    name: "ask_user",
+    name: "ask-user",
     label: "Ask User",
     description: ASK_USER_TOOL_DESCRIPTION,
     promptSnippet: ASK_USER_PROMPT_SNIPPET,
@@ -648,13 +648,13 @@ export default function askUser(pi: ExtensionAPI) {
               question.label?.trim() || `Q${index + 1}`,
           )
           .join(", ");
-        let text = theme.fg("toolTitle", theme.bold("ask_user "));
+        let text = theme.fg("toolTitle", theme.bold("ask-user "));
         text += theme.fg("muted", `${count} question${count === 1 ? "" : "s"}`);
         if (labels) text += theme.fg("dim", ` (${labels})`);
         return new Text(text, 0, 0);
       }
 
-      let text = theme.fg("toolTitle", theme.bold("ask_user "));
+      let text = theme.fg("toolTitle", theme.bold("ask-user "));
       text += theme.fg(
         "muted",
         typeof args.question === "string" ? args.question : "",

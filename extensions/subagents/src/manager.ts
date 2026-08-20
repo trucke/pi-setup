@@ -121,7 +121,7 @@ export interface SubagentReadModel {
   requestAbort(id: string): void;
   /**
    * Register the settle hook. `consumed` is true when an active
-   * subagent_wait/cancel is collecting the result (so it must not also be
+   * subagent-wait/cancel is collecting the result (so it must not also be
    * delivered as a follow-up message).
    */
   setOnSettled(

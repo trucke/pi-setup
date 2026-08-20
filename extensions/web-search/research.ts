@@ -2,19 +2,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  DEFAULT_MAX_BYTES,
-  DEFAULT_MAX_LINES,
-  formatSize,
   getMarkdownTheme,
-  keyHint,
-  truncateHead,
   type AgentToolResult,
   type ExecResult,
   type ExtensionAPI,
-  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import type { CommandExecutor } from "./env.ts";
+import { boundedOutput, expandHint, resultText } from "./output.ts";
 import {
   RESEARCH_PARAMETER_DESCRIPTIONS,
   RESEARCH_PROMPT_GUIDELINES,
@@ -22,12 +18,11 @@ import {
   RESEARCH_TOOL_DESCRIPTION,
   researchPrompt,
 } from "./prompt.ts";
+import { sanitizeLine, sanitizeText } from "./sanitize.ts";
 
 export const DEFAULT_MAX_SOURCES = 5;
 export const MAX_SOURCES_LIMIT = 10;
 export const CODEX_TIMEOUT_MS = 300 * 1_000;
-
-type CommandExecutor = Pick<ExtensionAPI, "exec">;
 
 export interface ResearchSource {
   title: string;
@@ -103,29 +98,11 @@ export function buildCodexArgs(options: {
   ];
 }
 
-// Query, answer, and source titles are model/web-controlled strings rendered
-// in the TUI: strip ANSI/CSI/OSC sequences and other control characters so
-// they cannot inject terminal commands or desync the renderer. Same patterns
-// as background-terminals' output sanitizer.
-const TERMINAL_CONTROL_PATTERN =
-  // eslint-disable-next-line no-control-regex
-  /(?:\u001b\]|\u009d)(?:[^\u0007\u001b\u009c]|\u001b(?!\\))*(?:\u0007|\u001b\\|\u009c)|(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]|\u001b(?:[()][0-2A-Z]|[ -/]*[@-~])|[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
-
-/** Multi-line safe: keeps newlines and tabs for Markdown answers. */
-export function sanitizeText(text: string) {
-  return text.replace(TERMINAL_CONTROL_PATTERN, "");
-}
-
-/** Single-line variant for fixed-height call/header rendering. */
-export function sanitizeLine(text: string) {
-  return sanitizeText(text).replace(/\s+/g, " ").trim();
-}
-
 class MalformedOutputError extends Error {}
 
 function malformed(reason: string) {
   return new MalformedOutputError(
-    `Codex returned malformed research output (${reason}). Retry codex_research or fall back to firecrawl_search.`,
+    `Codex returned malformed research output (${reason}). Retry web-research or fall back to web-search.`,
   );
 }
 
@@ -201,17 +178,17 @@ function processError(result: ExecResult) {
   const detail = result.stderr.trim() || result.stdout.trim();
   if (!detail) {
     return new Error(
-      "Codex CLI could not be started. Install the `codex` CLI and make sure it is on PATH; firecrawl_search remains available as a fallback.",
+      "Codex CLI could not be started. Install the `codex` CLI and make sure it is on PATH; web-search remains available as a fallback.",
     );
   }
   if (/not logged in|unauthorized|401|log ?in|authenticat/i.test(detail)) {
     return new Error(
-      "Codex is not authenticated. Run `codex login` with the ChatGPT account; until then use firecrawl_search as a fallback.",
+      "Codex is not authenticated. Run `codex login` with the ChatGPT account; until then use web-search as a fallback.",
     );
   }
   if (/usage limit|quota|rate limit|too many requests|429/i.test(detail)) {
     return new Error(
-      "Codex usage limit or rate limit reached. Retry later or use firecrawl_search as a fallback.",
+      "Codex usage limit or rate limit reached. Retry later or use web-search as a fallback.",
     );
   }
   return new Error(
@@ -219,24 +196,10 @@ function processError(result: ExecResult) {
   );
 }
 
-/** Mirrors the Firecrawl output limits: truncate for context, keep the full text on disk. */
-async function boundedOutput(text: string) {
-  const truncation = truncateHead(text, {
-    maxBytes: DEFAULT_MAX_BYTES,
-    maxLines: DEFAULT_MAX_LINES,
-  });
-  if (!truncation.truncated) return text;
-
-  const outputDirectory = await mkdtemp(join(tmpdir(), "pi-codex-research-"));
-  const outputPath = join(outputDirectory, "research.md");
-  await writeFile(outputPath, text, "utf8");
-  return `${truncation.content}\n\n[Output truncated: ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}). Full output saved to: ${outputPath}]`;
-}
-
 /**
  * Runs one ephemeral `codex exec` research session in an empty read-only
- * workspace and returns the validated answer. Never falls back to Firecrawl
- * on its own; errors name the fallback so the model can decide.
+ * workspace and returns the validated answer. Never falls back to another
+ * backend on its own; errors name the fallback so the model can decide.
  */
 export async function runCodexResearch(
   executor: CommandExecutor,
@@ -246,7 +209,7 @@ export async function runCodexResearch(
   const query = sanitizeLine(params.query);
   if (!query) {
     throw new Error(
-      "codex_research requires a non-empty query. Provide the research question to investigate.",
+      "web-research requires a non-empty query. Provide the research question to investigate.",
     );
   }
   const maxSources = Math.min(
@@ -286,7 +249,7 @@ export async function runCodexResearch(
     if (signal?.aborted) throw new Error("Codex research cancelled");
     if (result.killed) {
       throw new Error(
-        `Codex research timed out after ${CODEX_TIMEOUT_MS / 1_000} seconds. Narrow the query or use firecrawl_search as a fallback.`,
+        `Codex research timed out after ${CODEX_TIMEOUT_MS / 1_000} seconds. Narrow the query or use web-search as a fallback.`,
       );
     }
     if (result.code !== 0) throw processError(result);
@@ -303,7 +266,7 @@ export async function runCodexResearch(
       content: [
         {
           type: "text",
-          text: await boundedOutput(researchResultText(research)),
+          text: await boundedOutput(researchResultText(research), "research"),
         },
       ],
       details: {
@@ -319,11 +282,6 @@ export async function runCodexResearch(
   }
 }
 
-interface RenderableResult {
-  content: Array<{ type: string; text?: string }>;
-  details?: unknown;
-}
-
 function researchDetails(value: unknown): ResearchDetails | undefined {
   const details = value as ResearchDetails | undefined;
   return details?.provider === "codex" && details.success === true
@@ -331,22 +289,15 @@ function researchDetails(value: unknown): ResearchDetails | undefined {
     : undefined;
 }
 
-function resultText(result: RenderableResult) {
-  return result.content.find(
-    (item): item is { type: "text"; text: string } =>
-      item.type === "text" && typeof item.text === "string",
-  )?.text;
-}
-
 function summary(details: ResearchDetails) {
   const seconds = Math.round(details.durationMs / 1_000);
   return `✓ ${details.sourceCount} source${details.sourceCount === 1 ? "" : "s"} · ${seconds}s`;
 }
 
-export default function codexResearch(pi: ExtensionAPI) {
+export function registerResearchTool(pi: ExtensionAPI) {
   pi.registerTool({
-    name: "codex_research",
-    label: "Codex Research",
+    name: "web-research",
+    label: "Web Research",
     description: RESEARCH_TOOL_DESCRIPTION,
     promptSnippet: RESEARCH_PROMPT_SNIPPET,
     promptGuidelines: RESEARCH_PROMPT_GUIDELINES,
@@ -376,7 +327,7 @@ export default function codexResearch(pi: ExtensionAPI) {
       return runCodexResearch(pi, params, signal);
     },
     renderCall(args, theme) {
-      let text = theme.fg("toolTitle", theme.bold("codex_research"));
+      let text = theme.fg("toolTitle", theme.bold("web-research"));
       text += ` ${theme.fg("accent", `“${sanitizeLine(args.query)}”`)}`;
       text += theme.fg(
         "muted",
@@ -424,13 +375,14 @@ export default function codexResearch(pi: ExtensionAPI) {
       const container = new Container();
       container.addChild(new Text(theme.fg("success", summary(details)), 0, 0));
       container.addChild(
-        new Markdown(resultText(result) ?? "", 0, 0, getMarkdownTheme()),
+        new Markdown(
+          sanitizeText(resultText(result) ?? ""),
+          0,
+          0,
+          getMarkdownTheme(),
+        ),
       );
       return container;
     },
   });
-}
-
-function expandHint(theme: Theme) {
-  return theme.fg("dim", keyHint("app.tools.expand", "to expand"));
 }

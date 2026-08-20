@@ -3,11 +3,11 @@
  * inspect and stop, but never write to (stdin is ignored at the OS level).
  *
  * Tools (for the LLM):
- * - bg_start: fire-and-forget spawn (command, title, working_dir). Max 8
+ * - bg-start: fire-and-forget spawn (command, title, working_dir). Max 8
  *   running at once. The model is notified exactly once when a process exits.
- * - bg_status: peek at one terminal's status + tail-truncated output.
- * - bg_list: list all tracked terminals (running and settled).
- * - bg_kill: SIGTERM→SIGKILL the whole process tree; returns final state.
+ * - bg-status: peek at one terminal's status + tail-truncated output.
+ * - bg-list: list all tracked terminals (running and settled).
+ * - bg-kill: SIGTERM→SIGKILL the whole process tree; returns final state.
  *
  * While ≥1 process runs, a one-line widget above the editor shows
  * "N background terminal(s) running • /ps to view". `/ps` opens a two-stage
@@ -154,7 +154,7 @@ export default function (pi: ExtensionAPI) {
 
   const onSettled = (snap: TerminalSnapshot, consumed: boolean) => {
     if (consumed) {
-      // An in-flight bg_kill is returning this settlement itself.
+      // An in-flight bg-kill is returning this settlement itself.
       resultDelivery.consume([snap.id]);
       return;
     }
@@ -204,7 +204,7 @@ export default function (pi: ExtensionAPI) {
   // --- Tools -------------------------------------------------------------
 
   pi.registerTool({
-    name: "bg_start",
+    name: "bg-start",
     label: "Start Background Terminal",
     description: BG_START_TOOL_DESCRIPTION,
     promptSnippet: BG_START_PROMPT_SNIPPET,
@@ -250,7 +250,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "bg_status",
+    name: "bg-status",
     label: "Check Background Terminal",
     description: BG_STATUS_TOOL_DESCRIPTION,
     parameters: Type.Object({
@@ -284,7 +284,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "bg_list",
+    name: "bg-list",
     label: "List Background Terminals",
     description: BG_LIST_TOOL_DESCRIPTION,
     parameters: Type.Object({}),
@@ -310,7 +310,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "bg_kill",
+    name: "bg-kill",
     label: "Kill Background Terminals",
     description: BG_KILL_TOOL_DESCRIPTION,
     parameters: Type.Object({
@@ -436,7 +436,7 @@ export default function (pi: ExtensionAPI) {
       }
       if (manager.view.size() === 0) {
         ctx.ui.notify(
-          "No background terminals yet. The agent starts them with bg_start.",
+          "No background terminals yet. The agent starts them with bg-start.",
           "info",
         );
         return;
