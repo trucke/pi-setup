@@ -3,7 +3,6 @@ import { assert, it } from "@effect/vitest";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect, FileSystem } from "effect";
-import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import {
   buildFdArgs,
   buildRgArgs,
@@ -11,20 +10,14 @@ import {
   normalizeSearchPath,
 } from "./src/args.ts";
 import {
-  FD_INTEL_DARWIN_VERSION,
-  InstallError,
-  readBoundedResponse,
-  releaseAsset,
+  MissingBinaryError,
   resolveBinary,
   TOOL_SPECS,
-  UnsupportedPlatformError,
   type BinaryEnv,
-  type ReleaseAsset,
-  type ResolvedBinary,
 } from "./src/binaries.ts";
 import { formatCapturedOutput, formatOutput } from "./src/output.ts";
 import { executeSearchProcess } from "./src/process.ts";
-import { installNotifications, makeBinaryInitializers } from "./index.ts";
+import { fdParameters, makeBinaryInitializers, rgParameters } from "./index.ts";
 
 // --- argument construction -------------------------------------------------
 
@@ -46,7 +39,7 @@ it("fd args: all options are translated and pattern stays behind --", () => {
     extension: ".ts",
     glob: true,
     hidden: true,
-    max_depth: 3,
+    maxDepth: 3,
     limit: 50,
   });
   assert.deepEqual(args, [
@@ -68,7 +61,7 @@ it("fd args: all options are translated and pattern stays behind --", () => {
 });
 
 it("fd args: out-of-range values are clamped", () => {
-  const args = buildFdArgs({ max_depth: 500, limit: 1_000_000 });
+  const args = buildFdArgs({ maxDepth: 500, limit: 1_000_000 });
   assert.deepEqual(args, [
     "--color=never",
     "--max-depth",
@@ -99,9 +92,9 @@ it("rg args: all options are translated", () => {
     pattern: "TODO",
     path: "@lib",
     glob: "*.ts",
-    file_type: "ts",
-    case_sensitive: true,
-    fixed_strings: true,
+    fileType: "ts",
+    caseSensitive: true,
+    fixedStrings: true,
     hidden: true,
     context: 2,
     limit: 10,
@@ -128,10 +121,34 @@ it("rg args: all options are translated", () => {
   ]);
 });
 
-it("rg args: case_sensitive false forces ignore-case", () => {
-  const args = buildRgArgs({ pattern: "x", case_sensitive: false });
+it("rg args: caseSensitive false forces ignore-case", () => {
+  const args = buildRgArgs({ pattern: "x", caseSensitive: false });
   assert.isTrue(args.includes("--ignore-case"));
   assert.isFalse(args.includes("--smart-case"));
+});
+
+it("public parameter schemas use camelCase", () => {
+  assert.deepEqual(Object.keys(fdParameters().properties), [
+    "pattern",
+    "path",
+    "type",
+    "extension",
+    "glob",
+    "hidden",
+    "maxDepth",
+    "limit",
+  ]);
+  assert.deepEqual(Object.keys(rgParameters().properties), [
+    "pattern",
+    "path",
+    "glob",
+    "fileType",
+    "caseSensitive",
+    "fixedStrings",
+    "hidden",
+    "context",
+    "limit",
+  ]);
 });
 
 it("path normalization strips leading @ and expands ~", () => {
@@ -143,243 +160,71 @@ it("path normalization strips leading @ and expands ~", () => {
 
 // --- binary resolution -----------------------------------------------------
 
-function makeEnv(options: {
-  available?: string[];
-  installShouldFail?: boolean;
-}): BinaryEnv & { installs: ReleaseAsset[]; probes: string[] } {
-  const installs: ReleaseAsset[] = [];
+function makeEnv(available: string[]): BinaryEnv & { probes: string[] } {
   const probes: string[] = [];
-  const installed = new Set<string>();
   return {
-    installs,
     probes,
     probe: (command) =>
       Effect.sync(() => {
         probes.push(command);
-        return (
-          (options.available ?? []).includes(command) || installed.has(command)
-        );
+        return available.includes(command);
       }),
-    install: (asset, destination) => {
-      if (options.installShouldFail) {
-        return Effect.fail(new InstallError({ message: "network down" }));
-      }
-      return Effect.sync(() => {
-        installs.push(asset);
-        installed.add(destination);
-      });
-    },
   };
 }
 
-const darwinArm = { os: "darwin", arch: "arm64" } as const;
-
-it.effect("binary resolution: system fd wins and nothing is installed", () =>
+it.effect("binary resolution: system fd wins", () =>
   Effect.gen(function* () {
-    const env = makeEnv({ available: ["fd"] });
-    const resolved = yield* resolveBinary(
-      TOOL_SPECS.fd,
-      "/repo/bin",
-      darwinArm,
-      env,
-    );
+    const env = makeEnv(["fd"]);
+    const resolved = yield* resolveBinary(TOOL_SPECS.fd, env);
 
     assert.deepEqual(resolved, {
       tool: "fd",
       command: "fd",
       source: "system",
     });
-    assert.equal(env.installs.length, 0);
+    assert.deepEqual(env.probes, ["fd"]);
   }),
 );
 
 it.effect("binary resolution: fdfind is accepted as a system fd", () =>
   Effect.gen(function* () {
-    const env = makeEnv({ available: ["fdfind"] });
-    const resolved = yield* resolveBinary(
-      TOOL_SPECS.fd,
-      "/repo/bin",
-      darwinArm,
-      env,
-    );
+    const env = makeEnv(["fdfind"]);
+    const resolved = yield* resolveBinary(TOOL_SPECS.fd, env);
 
     assert.deepEqual(resolved, {
       tool: "fd",
       command: "fdfind",
       source: "system",
     });
-    assert.equal(env.installs.length, 0);
+    assert.deepEqual(env.probes, ["fd", "fdfind"]);
   }),
 );
 
-it.effect("binary resolution: existing bin fallback is used silently", () =>
+it.effect("binary resolution: a missing executable fails clearly", () =>
   Effect.gen(function* () {
-    const env = makeEnv({ available: ["/repo/bin/rg"] });
-    const resolved = yield* resolveBinary(
-      TOOL_SPECS.rg,
-      "/repo/bin",
-      darwinArm,
-      env,
-    );
+    const error = yield* Effect.flip(resolveBinary(TOOL_SPECS.rg, makeEnv([])));
 
-    assert.deepEqual(resolved, {
-      tool: "rg",
-      command: "/repo/bin/rg",
-      source: "bundled",
-    });
-    assert.equal(env.installs.length, 0);
+    assert.instanceOf(error, MissingBinaryError);
+    assert.match(error.message, /requires `rg` on PATH/);
+    assert.match(error.message, /Install rg and restart Pi/);
   }),
 );
 
 it.effect(
-  "binary resolution: missing everywhere triggers exactly one install",
+  "binary resolution: one missing tool does not disable the other",
   () =>
     Effect.gen(function* () {
-      const env = makeEnv({ available: [] });
-      const resolved = yield* resolveBinary(
-        TOOL_SPECS.rg,
-        "/repo/bin",
-        darwinArm,
-        env,
-      );
+      const initializers = makeBinaryInitializers(makeEnv(["rg"]));
 
-      assert.equal(resolved.source, "installed");
-      assert.equal(resolved.command, "/repo/bin/rg");
-      assert.equal(env.installs.length, 1);
-      assert.match(
-        env.installs[0].url,
-        /^https:\/\/github\.com\/BurntSushi\/ripgrep\//,
-      );
+      const fdError = yield* Effect.flip(initializers.fd);
+      const rg = yield* initializers.rg;
+
+      assert.instanceOf(fdError, MissingBinaryError);
+      assert.deepEqual(rg, { tool: "rg", command: "rg", source: "system" });
     }),
 );
 
-it.effect("binary resolution: install failure surfaces a typed error", () =>
-  Effect.gen(function* () {
-    const env = makeEnv({ available: [], installShouldFail: true });
-    const error = yield* Effect.flip(
-      resolveBinary(TOOL_SPECS.fd, "/repo/bin", darwinArm, env),
-    );
-
-    assert.instanceOf(error, InstallError);
-    assert.equal(error.message, "network down");
-  }),
-);
-
-it.effect(
-  "binary resolution: unsupported platform fails without installing",
-  () =>
-    Effect.gen(function* () {
-      const env = makeEnv({ available: [] });
-      const error = yield* Effect.flip(
-        resolveBinary(
-          TOOL_SPECS.fd,
-          "/repo/bin",
-          { os: "linux", arch: "s390x" },
-          env,
-        ),
-      );
-
-      assert.instanceOf(error, UnsupportedPlatformError);
-      assert.equal(env.installs.length, 0);
-    }),
-);
-
-it.effect("binary resolution: one failed tool does not disable the other", () =>
-  Effect.gen(function* () {
-    const env = makeEnv({
-      available: ["rg"],
-      installShouldFail: true,
-    });
-    const initializers = makeBinaryInitializers("/repo/bin", darwinArm, env);
-
-    const fdError = yield* Effect.flip(initializers.fd);
-    const rg = yield* initializers.rg;
-
-    assert.instanceOf(fdError, InstallError);
-    assert.deepEqual(rg, { tool: "rg", command: "rg", source: "system" });
-  }),
-);
-
-it("release assets cover macOS and Linux on arm64 and x64 over HTTPS", () => {
-  for (const os of ["darwin", "linux"] as const) {
-    for (const arch of ["arm64", "x64"] as const) {
-      for (const tool of ["fd", "rg"] as const) {
-        const asset = releaseAsset(tool, { os, arch });
-        assert.isDefined(asset, `${tool} ${os}/${arch}`);
-        assert.match(asset.url, /^https:\/\//);
-        assert.isTrue(asset.url.endsWith(asset.fileName));
-        assert.match(asset.sha256, /^[a-f0-9]{64}$/);
-      }
-    }
-  }
-});
-
-it("linux assets use statically linked musl builds", () => {
-  const asset = releaseAsset("fd", { os: "linux", arch: "x64" });
-  assert.isTrue(asset?.url.includes("unknown-linux-musl"));
-});
-
-it("Intel macOS uses the latest fd release that publishes that target", () => {
-  const asset = releaseAsset("fd", { os: "darwin", arch: "x64" });
-  assert.equal(asset?.version, FD_INTEL_DARWIN_VERSION);
-});
-
-it.effect(
-  "bounded downloads reject oversized declared and streamed bodies",
-  () =>
-    Effect.gen(function* () {
-      const request = HttpClientRequest.get(
-        "https://example.com/archive.tar.gz",
-      );
-      const declared = HttpClientResponse.fromWeb(
-        request,
-        new Response("small", {
-          headers: { "content-length": "100" },
-        }),
-      );
-      const declaredError = yield* Effect.flip(
-        readBoundedResponse(declared, 10),
-      );
-      assert.match(declaredError.message, /size limit/);
-
-      const streamed = HttpClientResponse.fromWeb(
-        request,
-        new Response("this body is too large"),
-      );
-      const streamedError = yield* Effect.flip(
-        readBoundedResponse(streamed, 5),
-      );
-      assert.match(streamedError.message, /size limit/);
-    }),
-);
-
-// --- notification policy ----------------------------------------------------
-
-it("notifications: only fresh installs notify", () => {
-  const system: ResolvedBinary = {
-    tool: "fd",
-    command: "fd",
-    source: "system",
-  };
-  const bundled: ResolvedBinary = {
-    tool: "rg",
-    command: "/repo/bin/rg",
-    source: "bundled",
-  };
-  const installed: ResolvedBinary = {
-    tool: "rg",
-    command: "/repo/bin/rg",
-    source: "installed",
-    version: "15.2.0",
-  };
-
-  assert.deepEqual(installNotifications([system, bundled]), []);
-  const messages = installNotifications([system, installed]);
-  assert.equal(messages.length, 1);
-  assert.match(messages[0], /downloaded rg 15\.2\.0/);
-});
-
-// --- output truncation -------------------------------------------------------
+// --- output truncation -----------------------------------------------------
 
 it.effect("process output is streamed to a complete spill file", () =>
   Effect.gen(function* () {

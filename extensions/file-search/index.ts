@@ -1,12 +1,9 @@
 /**
  * file-search — first-class `fd` and `rg` tools for pi.
  *
- * On session start the extension resolves a usable binary for each tool:
- * a normally installed system binary is preferred (silently), then an
- * existing fallback in this repo's `bin/` directory (silently), and only
- * when neither exists is an official release downloaded into `bin/` — the
- * single case that shows a UI notification. Tools await that initialization
- * before executing, and report a clear error if it failed.
+ * On session start the extension resolves the required system binaries.
+ * Tools await that initialization before executing and report a clear error
+ * when `fd`/`fdfind` or `rg` is unavailable.
  */
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -28,15 +25,11 @@ import {
   RG_MAX_COUNT_LIMIT,
 } from "./src/args.ts";
 import {
-  currentTarget,
   liveBinaryEnv,
-  repositoryBinDir,
   resolveBinary,
   TOOL_SPECS,
   type BinaryEnv,
   type BinarySource,
-  type PlatformTarget,
-  type ResolvedBinary,
 } from "./src/binaries.ts";
 import { formatCapturedOutput, type CapturedOutput } from "./src/output.ts";
 import {
@@ -51,30 +44,11 @@ import {
 } from "./src/prompt.ts";
 import { discardCapturedOutput, executeSearchProcess } from "./src/process.ts";
 
-export function makeBinaryInitializers(
-  binDir: string,
-  target: PlatformTarget,
-  env: BinaryEnv,
-) {
+export function makeBinaryInitializers(env: BinaryEnv) {
   return {
-    fd: Effect.runSync(
-      Effect.cached(resolveBinary(TOOL_SPECS.fd, binDir, target, env)),
-    ),
-    rg: Effect.runSync(
-      Effect.cached(resolveBinary(TOOL_SPECS.rg, binDir, target, env)),
-    ),
+    fd: Effect.runSync(Effect.cached(resolveBinary(TOOL_SPECS.fd, env))),
+    rg: Effect.runSync(Effect.cached(resolveBinary(TOOL_SPECS.rg, env))),
   };
-}
-
-/** Human-readable install notice, shown only for fresh downloads. */
-export function installNotifications(binaries: readonly ResolvedBinary[]) {
-  return binaries
-    .filter((binary) => binary.source === "installed")
-    .map(
-      (binary) =>
-        `file-search: no system ${binary.tool} found — downloaded ${binary.tool} ${binary.version ?? ""}`.trimEnd() +
-        ` to ${repositoryBinDir()}`,
-    );
 }
 
 class SearchError extends Data.TaggedError("SearchError")<{
@@ -119,9 +93,7 @@ function unwrapToolExit<A, E>(exit: Exit.Exit<A, E>, tool: "fd" | "rg") {
 export default function fileSearchTools(pi: ExtensionAPI) {
   let notified = false;
 
-  const binDir = repositoryBinDir();
-  const target = currentTarget();
-  const initializers = makeBinaryInitializers(binDir, target, liveBinaryEnv);
+  const initializers = makeBinaryInitializers(liveBinaryEnv);
 
   pi.on("session_start", async (_event, ctx) => {
     const exit = await Effect.runPromiseExit(
@@ -138,11 +110,7 @@ export default function fileSearchTools(pi: ExtensionAPI) {
         notified = true;
         for (const tool of ["fd", "rg"] as const) {
           const toolExit = initialized[tool];
-          if (Exit.isSuccess(toolExit)) {
-            for (const message of installNotifications([toolExit.value])) {
-              ctx.ui.notify(message, "info");
-            }
-          } else {
+          if (Exit.isFailure(toolExit)) {
             ctx.ui.notify(
               `file-search ${tool} setup failed: ${causeMessage(toolExit.cause)}`,
               "error",
@@ -255,7 +223,7 @@ export default function fileSearchTools(pi: ExtensionAPI) {
         args.extension && `ext=${args.extension}`,
         args.glob && "glob",
         args.hidden && "hidden",
-        args.max_depth !== undefined && `depth≤${args.max_depth}`,
+        args.maxDepth !== undefined && `depth≤${args.maxDepth}`,
       ].filter((flag): flag is string => typeof flag === "string");
       if (flags.length > 0) text += " " + theme.fg("dim", flags.join(" "));
       return new Text(text, 0, 0);
@@ -323,8 +291,8 @@ export default function fileSearchTools(pi: ExtensionAPI) {
       if (args.path) text += theme.fg("muted", ` in ${args.path}`);
       const flags = [
         args.glob && `glob=${args.glob}`,
-        args.file_type && `type=${args.file_type}`,
-        args.fixed_strings && "literal",
+        args.fileType && `type=${args.fileType}`,
+        args.fixedStrings && "literal",
         args.hidden && "hidden",
         args.context !== undefined && `ctx=${args.context}`,
       ].filter((flag): flag is string => typeof flag === "string");
@@ -378,7 +346,7 @@ function expandedPreview(
   return text;
 }
 
-function fdParameters() {
+export function fdParameters() {
   return Type.Object({
     pattern: Type.Optional(
       Type.String({ description: FD_PARAMETER_DESCRIPTIONS.pattern }),
@@ -400,9 +368,9 @@ function fdParameters() {
     hidden: Type.Optional(
       Type.Boolean({ description: FD_PARAMETER_DESCRIPTIONS.hidden }),
     ),
-    max_depth: Type.Optional(
+    maxDepth: Type.Optional(
       Type.Integer({
-        description: FD_PARAMETER_DESCRIPTIONS.max_depth,
+        description: FD_PARAMETER_DESCRIPTIONS.maxDepth,
         minimum: 1,
         maximum: FD_MAX_DEPTH_LIMIT,
       }),
@@ -417,7 +385,7 @@ function fdParameters() {
   });
 }
 
-function rgParameters() {
+export function rgParameters() {
   return Type.Object({
     pattern: Type.String({ description: RG_PARAMETER_DESCRIPTIONS.pattern }),
     path: Type.Optional(
@@ -426,14 +394,14 @@ function rgParameters() {
     glob: Type.Optional(
       Type.String({ description: RG_PARAMETER_DESCRIPTIONS.glob }),
     ),
-    file_type: Type.Optional(
-      Type.String({ description: RG_PARAMETER_DESCRIPTIONS.file_type }),
+    fileType: Type.Optional(
+      Type.String({ description: RG_PARAMETER_DESCRIPTIONS.fileType }),
     ),
-    case_sensitive: Type.Optional(
-      Type.Boolean({ description: RG_PARAMETER_DESCRIPTIONS.case_sensitive }),
+    caseSensitive: Type.Optional(
+      Type.Boolean({ description: RG_PARAMETER_DESCRIPTIONS.caseSensitive }),
     ),
-    fixed_strings: Type.Optional(
-      Type.Boolean({ description: RG_PARAMETER_DESCRIPTIONS.fixed_strings }),
+    fixedStrings: Type.Optional(
+      Type.Boolean({ description: RG_PARAMETER_DESCRIPTIONS.fixedStrings }),
     ),
     hidden: Type.Optional(
       Type.Boolean({ description: RG_PARAMETER_DESCRIPTIONS.hidden }),
