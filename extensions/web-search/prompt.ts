@@ -20,7 +20,7 @@ export const WEB_ROUTING_GUIDELINES = [
 
 /** Describes Codex live web research and its model-context output limits. */
 export const RESEARCH_TOOL_DESCRIPTION =
-  "Research a question with OpenAI Codex using live web search and receive a concise, cited Markdown answer. Backed by the ChatGPT subscription, so it consumes no search-API credits. Runs for up to 300 seconds. Output is limited to 50KB or 2000 lines; complete truncated output is saved to a temporary file.";
+  "Research a question with OpenAI Codex using live web search and receive a concise, cited Markdown answer. Backed by the ChatGPT subscription, so it consumes no search-API credits. Runs for up to 10 minutes. Output is limited to 50KB or 2000 lines; complete truncated output is saved to a temporary file.";
 
 /** Adds Codex's synthesized web-research capability to the model's tool prompt. */
 export const RESEARCH_PROMPT_SNIPPET =

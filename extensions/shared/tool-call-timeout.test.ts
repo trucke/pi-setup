@@ -71,7 +71,7 @@ test("the guard wraps each definition once and can discover later tools", () => 
     getAllTools: () => [...definitions.keys()].map((name) => ({ name })),
     getToolDefinition: (name: string) => definitions.get(name),
   };
-  const guard = createToolCallTimeoutGuard(10);
+  const guard = createToolCallTimeoutGuard({ timeoutMs: 10 });
 
   const firstExecute = first.execute;
   guard.apply(registry);
@@ -85,6 +85,34 @@ test("the guard wraps each definition once and can discover later tools", () => 
 
   assert.equal(first.execute, firstWrappedExecute);
   assert.notEqual(second.execute, secondExecute);
+});
+
+test("the guard leaves explicitly exempt tools unchanged", () => {
+  const definition = {
+    name: "web-research",
+    label: "Web Research",
+    description: "fixture",
+    parameters: Type.Object({}),
+    async execute() {
+      return {
+        content: [{ type: "text" as const, text: "done" }],
+        details: {},
+      };
+    },
+  } satisfies ToolDefinition;
+  const registry = {
+    getAllTools: () => [{ name: definition.name }],
+    getToolDefinition: () => definition,
+  };
+  const guard = createToolCallTimeoutGuard({
+    timeoutMs: 10,
+    exemptToolNames: ["web-research"],
+  });
+  const execute = definition.execute;
+
+  guard.apply(registry);
+
+  assert.equal(definition.execute, execute);
 });
 
 test("successful and terminating tool results pass through unchanged", async () => {

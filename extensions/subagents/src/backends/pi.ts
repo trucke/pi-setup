@@ -37,6 +37,8 @@ import { SendError, SpawnError } from "../domain.ts";
 import { createToolCallTimeoutGuard } from "../../../shared/tool-call-timeout.ts";
 
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
+// web-research enforces its own longer timeout for legitimate Codex runs.
+const CHILD_TIMEOUT_EXEMPT_TOOL_NAMES = ["web-research"] as const;
 
 /** Tools that headless children must not receive. Everything else stays enabled. */
 const CHILD_EXCLUDED_TOOL_NAMES = [
@@ -321,7 +323,9 @@ const makePiSession = (
       Queue.offerUnsafe(events, event);
     };
 
-    const toolTimeout = createToolCallTimeoutGuard();
+    const toolTimeout = createToolCallTimeoutGuard({
+      exemptToolNames: CHILD_TIMEOUT_EXEMPT_TOOL_NAMES,
+    });
     toolTimeout.apply(session);
 
     const activeModel = (): Model<any> | undefined => {

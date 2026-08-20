@@ -44,6 +44,7 @@ function successfulExecutor(
 test("registers web-research with bounded source parameters", () => {
   const tools: Array<{
     name: string;
+    description?: string;
     parameters?: { properties?: Record<string, unknown> };
   }> = [];
   const pi = {
@@ -59,6 +60,7 @@ test("registers web-research with bounded source parameters", () => {
     tools.map((tool) => tool.name),
     ["web-research"],
   );
+  assert.match(tools[0].description ?? "", /up to 10 minutes/);
   const parameters = tools[0].parameters?.properties ?? {};
   assert.deepEqual(Object.keys(parameters), ["query", "maxSources"]);
   assert.equal((parameters.query as { minLength?: number }).minLength, 1);
@@ -256,7 +258,7 @@ test("reports timeout when codex is killed by the exec timeout", async () => {
 
   await assert.rejects(
     runCodexResearch(executor, { query: "q" }),
-    /timed out after 300 seconds/,
+    /timed out after 10 minutes/,
   );
 });
 
