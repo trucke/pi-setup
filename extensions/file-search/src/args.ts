@@ -2,7 +2,7 @@
  * Pure CLI argument construction for the fd and rg tools.
  *
  * Everything here is synchronous and side-effect free so the exact argv
- * passed to pi.exec can be asserted in tests. Patterns are always placed
+ * passed to the child process can be asserted in tests. Patterns are always placed
  * after a `--` separator so user-controlled input can never be parsed as a
  * flag, and paths are normalized (leading `@`, `~` expansion) before use.
  */
@@ -45,7 +45,7 @@ export interface FdToolParams {
   extension?: string;
   glob?: boolean;
   hidden?: boolean;
-  max_depth?: number;
+  maxDepth?: number;
   limit?: number;
 }
 
@@ -63,10 +63,10 @@ export function buildFdArgs(params: FdToolParams) {
   if (params.extension) {
     args.push("--extension", params.extension.replace(/^\.+/, ""));
   }
-  if (params.max_depth !== undefined) {
+  if (params.maxDepth !== undefined) {
     args.push(
       "--max-depth",
-      String(clamp(params.max_depth, 1, FD_MAX_DEPTH_LIMIT)),
+      String(clamp(params.maxDepth, 1, FD_MAX_DEPTH_LIMIT)),
     );
   }
   args.push(
@@ -84,9 +84,9 @@ export interface RgToolParams {
   pattern: string;
   path?: string;
   glob?: string;
-  file_type?: string;
-  case_sensitive?: boolean;
-  fixed_strings?: boolean;
+  fileType?: string;
+  caseSensitive?: boolean;
+  fixedStrings?: boolean;
   hidden?: boolean;
   context?: number;
   limit?: number;
@@ -99,16 +99,16 @@ export function buildRgArgs(params: RgToolParams) {
     "--no-heading",
     "--with-filename",
   ];
-  if (params.case_sensitive === true) args.push("--case-sensitive");
-  else if (params.case_sensitive === false) args.push("--ignore-case");
+  if (params.caseSensitive === true) args.push("--case-sensitive");
+  else if (params.caseSensitive === false) args.push("--ignore-case");
   else args.push("--smart-case");
-  if (params.fixed_strings) args.push("--fixed-strings");
+  if (params.fixedStrings) args.push("--fixed-strings");
   if (params.hidden) args.push("--hidden");
   if (params.context !== undefined) {
     args.push("--context", String(clamp(params.context, 0, RG_MAX_CONTEXT)));
   }
   if (params.glob) args.push("--glob", params.glob);
-  if (params.file_type) args.push("--type", params.file_type);
+  if (params.fileType) args.push("--type", params.fileType);
   args.push(
     "--max-count",
     String(

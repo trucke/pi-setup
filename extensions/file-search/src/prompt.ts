@@ -20,7 +20,7 @@ export const FD_PARAMETER_DESCRIPTIONS = {
   extension: "Only return files with this extension, e.g. 'ts' or 'md'.",
   glob: "Treat pattern as a glob (e.g. '*.test.ts') instead of a regex.",
   hidden: "Include hidden files and directories. Defaults to false.",
-  max_depth: "Maximum directory depth to descend (1-64).",
+  maxDepth: "Maximum directory depth to descend (1-64).",
   limit: "Maximum number of results (1-10000). Defaults to 1000.",
 };
 
@@ -33,19 +33,19 @@ export const RG_PROMPT_SNIPPET =
 export const RG_PROMPT_GUIDELINES = [
   "Use rg as the primary tool for searching file contents instead of bash with grep.",
   "Use fd instead of rg when looking for files by name rather than content.",
-  "Set fixed_strings on rg when searching for literal code snippets containing regex metacharacters.",
+  "Set fixedStrings on rg when searching for literal code snippets containing regex metacharacters.",
   "Keep using bash for complex multi-step workflows that combine searching with other commands.",
 ];
 
 export const RG_PARAMETER_DESCRIPTIONS = {
-  pattern: "Regex to search for (literal text when fixed_strings is true).",
+  pattern: "Regex to search for (literal text when fixedStrings is true).",
   path: "File or directory to search. Defaults to the current working directory.",
   glob: "Only search files matching this glob, e.g. '*.ts' or 'src/**'.",
-  file_type:
+  fileType:
     "Only search files of this ripgrep type, e.g. 'ts', 'js', 'py', 'rust'.",
-  case_sensitive:
+  caseSensitive:
     "true forces case-sensitive matching, false forces case-insensitive. Defaults to smart-case.",
-  fixed_strings: "Treat pattern as a literal string instead of a regex.",
+  fixedStrings: "Treat pattern as a literal string instead of a regex.",
   hidden: "Search hidden files and directories. Defaults to false.",
   context: "Lines of context to show around each match (0-20).",
   limit: "Maximum matches per file (1-1000). Defaults to 100.",
