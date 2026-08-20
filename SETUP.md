@@ -15,6 +15,13 @@ The root `AGENTS.md` contains repository-specific guidance only. Package install
 do not deploy global agent instructions. Keep personal or machine-wide context in
 a separately managed private file.
 
+## File search
+
+The `fd`, `rg`, and `fuzzy-find` tools require system executables on `PATH`:
+`fd` (or `fdfind` on Debian/Ubuntu), `rg` (ripgrep), and `fzf` (0.35 or newer
+for `--scheme`). Nothing is downloaded at runtime; install the tools with the
+system package manager and restart Pi.
+
 ## Web tools
 
 The package registers four consolidated web tools: `web-research`,

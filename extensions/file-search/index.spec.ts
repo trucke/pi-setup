@@ -5,9 +5,14 @@ import { dirname, join } from "node:path";
 import { Effect, FileSystem } from "effect";
 import {
   buildFdArgs,
+  buildFuzzyFdArgs,
+  buildFzfArgs,
   buildRgArgs,
   FD_DEFAULT_LIMIT,
+  FUZZY_DEFAULT_LIMIT,
+  FUZZY_MAX_LIMIT,
   normalizeSearchPath,
+  resolveFuzzyLimit,
 } from "./src/args.ts";
 import {
   MissingBinaryError,
@@ -17,7 +22,16 @@ import {
 } from "./src/binaries.ts";
 import { formatCapturedOutput, formatOutput } from "./src/output.ts";
 import { executeSearchProcess } from "./src/process.ts";
-import { fdParameters, makeBinaryInitializers, rgParameters } from "./index.ts";
+import {
+  executeFuzzyPipeline,
+  makeNulDelimitedCollector,
+} from "./src/fuzzy.ts";
+import {
+  fdParameters,
+  fuzzyFindParameters,
+  makeBinaryInitializers,
+  rgParameters,
+} from "./index.ts";
 
 // --- argument construction -------------------------------------------------
 
@@ -127,6 +141,50 @@ it("rg args: caseSensitive false forces ignore-case", () => {
   assert.isFalse(args.includes("--smart-case"));
 });
 
+it("fuzzy args: fd generates NUL-delimited candidates without a result cap", () => {
+  assert.deepEqual(buildFuzzyFdArgs({ query: "usrctrl" }), [
+    "--color=never",
+    "--print0",
+    "--strip-cwd-prefix",
+    "--",
+    "",
+  ]);
+  assert.deepEqual(
+    buildFuzzyFdArgs({
+      query: "usrctrl",
+      path: "@src",
+      type: "directory",
+      hidden: true,
+    }),
+    [
+      "--color=never",
+      "--print0",
+      "--strip-cwd-prefix",
+      "--hidden",
+      "--type",
+      "d",
+      "--",
+      "",
+      "src",
+    ],
+  );
+});
+
+it("fuzzy args: fzf filters non-interactively with the query out of flag position", () => {
+  assert.deepEqual(buildFzfArgs({ query: "--help" }), [
+    "--read0",
+    "--print0",
+    "--scheme=path",
+    "--filter=--help",
+  ]);
+});
+
+it("fuzzy limit is defaulted and clamped", () => {
+  assert.equal(resolveFuzzyLimit(undefined), FUZZY_DEFAULT_LIMIT);
+  assert.equal(resolveFuzzyLimit(5), 5);
+  assert.equal(resolveFuzzyLimit(1_000_000), FUZZY_MAX_LIMIT);
+});
+
 it("public parameter schemas use camelCase", () => {
   assert.deepEqual(Object.keys(fdParameters().properties), [
     "pattern",
@@ -147,6 +205,13 @@ it("public parameter schemas use camelCase", () => {
     "fixedStrings",
     "hidden",
     "context",
+    "limit",
+  ]);
+  assert.deepEqual(Object.keys(fuzzyFindParameters().properties), [
+    "query",
+    "path",
+    "type",
+    "hidden",
     "limit",
   ]);
 });
@@ -222,6 +287,90 @@ it.effect(
       assert.instanceOf(fdError, MissingBinaryError);
       assert.deepEqual(rg, { tool: "rg", command: "rg", source: "system" });
     }),
+);
+
+it.effect("binary resolution: fzf resolves like the other tools", () =>
+  Effect.gen(function* () {
+    const env = makeEnv(["fzf"]);
+    const resolved = yield* resolveBinary(TOOL_SPECS.fzf, env);
+
+    assert.deepEqual(resolved, {
+      tool: "fzf",
+      command: "fzf",
+      source: "system",
+    });
+    assert.deepEqual(env.probes, ["fzf"]);
+
+    const error = yield* Effect.flip(
+      resolveBinary(TOOL_SPECS.fzf, makeEnv([])),
+    );
+    assert.instanceOf(error, MissingBinaryError);
+    assert.match(error.message, /requires `fzf` on PATH/);
+  }),
+);
+
+// --- fuzzy pipeline --------------------------------------------------------
+
+it("NUL collector: splits across chunks and counts beyond the limit", () => {
+  const encoder = new TextEncoder();
+  const collector = makeNulDelimitedCollector(2);
+  collector.observe(encoder.encode("a/b.ts\0we ird\nna"));
+  collector.observe(encoder.encode("me.ts\0c.ts\0d.ts"));
+  const matches = collector.finish();
+
+  assert.deepEqual(matches.paths, ["a/b.ts", "we ird\nname.ts"]);
+  assert.equal(matches.matchCount, 4);
+});
+
+it("NUL collector: empty input yields no matches", () => {
+  const matches = makeNulDelimitedCollector(10).finish();
+  assert.deepEqual(matches.paths, []);
+  assert.equal(matches.matchCount, 0);
+});
+
+it.effect(
+  "fuzzy pipeline connects source stdout to filter stdin NUL-safely",
+  () =>
+    Effect.gen(function* () {
+      const result = yield* executeFuzzyPipeline({
+        source: {
+          command: process.execPath,
+          args: ["-e", 'process.stdout.write("one.ts\\0dir/two two.ts\\0")'],
+        },
+        filter: {
+          command: process.execPath,
+          args: ["-e", "process.stdin.pipe(process.stdout)"],
+        },
+        cwd: process.cwd(),
+        limit: 1,
+      });
+
+      assert.equal(result.sourceCode, 0);
+      assert.equal(result.filterCode, 0);
+      assert.deepEqual(result.paths, ["one.ts"]);
+      assert.equal(result.matchCount, 2);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("fuzzy pipeline surfaces source failures with stderr", () =>
+  Effect.gen(function* () {
+    const result = yield* executeFuzzyPipeline({
+      source: {
+        command: process.execPath,
+        args: ["-e", 'process.stderr.write("boom"); process.exit(3)'],
+      },
+      filter: {
+        command: process.execPath,
+        args: ["-e", "process.stdin.pipe(process.stdout)"],
+      },
+      cwd: process.cwd(),
+      limit: 10,
+    });
+
+    assert.equal(result.sourceCode, 3);
+    assert.equal(result.sourceStderr, "boom");
+    assert.equal(result.matchCount, 0);
+  }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 // --- output truncation -----------------------------------------------------

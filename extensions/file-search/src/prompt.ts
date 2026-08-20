@@ -1,4 +1,4 @@
-/** Model-facing text for the fd and rg tools. */
+/** Model-facing text for the fd, rg, and fuzzy-find tools. */
 
 export const FD_TOOL_DESCRIPTION =
   "Find files and directories by name with fd. Respects .gitignore by default. Results are limited to 1000 entries unless a higher limit is given; output is limited to 2000 lines or 50KB, and complete truncated output is saved to a temporary file.";
@@ -9,6 +9,7 @@ export const FD_PROMPT_SNIPPET =
 export const FD_PROMPT_GUIDELINES = [
   "Use fd as the primary tool for discovering files and directories by name, extension, or glob instead of bash with find or ls -R.",
   "Use rg instead of fd when searching file contents rather than file names.",
+  "Use fuzzy-find instead of fd when you only roughly know the name or path.",
   "Keep using bash for complex multi-step workflows that pipe or post-process file listings.",
 ];
 
@@ -49,4 +50,26 @@ export const RG_PARAMETER_DESCRIPTIONS = {
   hidden: "Search hidden files and directories. Defaults to false.",
   context: "Lines of context to show around each match (0-20).",
   limit: "Maximum matches per file (1-1000). Defaults to 100.",
+};
+
+export const FUZZY_TOOL_DESCRIPTION =
+  "Fuzzily match file and directory paths by piping fd candidates into fzf. Candidates respect .gitignore; matches are ranked with fzf's path scoring. Returns at most 100 ranked paths unless a higher limit (up to 1000) is given and reports when further matches existed.";
+
+export const FUZZY_PROMPT_SNIPPET =
+  "Fuzzily find files and directories by approximate name or path (fd + fzf).";
+
+export const FUZZY_PROMPT_GUIDELINES = [
+  "Use fuzzy-find when you only roughly know a file name or path, e.g. query 'usrctrl' for src/user/controller.ts.",
+  "Use fd instead of fuzzy-find when the name can be expressed as an exact regex, glob, or extension filter.",
+  "Use rg instead of fuzzy-find when searching file contents rather than paths.",
+];
+
+export const FUZZY_PARAMETER_DESCRIPTIONS = {
+  query:
+    "Approximate name or path fragment to match, e.g. 'usrctrl' or 'auth spec'.",
+  path: "Directory to search. Defaults to the current working directory.",
+  type: "Only return entries of this type: file or directory.",
+  hidden: "Include hidden files and directories. Defaults to false.",
+  limit:
+    "Maximum number of ranked matches to return (1-1000). Defaults to 100.",
 };

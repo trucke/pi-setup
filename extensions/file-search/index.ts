@@ -1,9 +1,9 @@
 /**
- * file-search — first-class `fd` and `rg` tools for pi.
+ * file-search — first-class `fd`, `rg`, and `fuzzy-find` tools for pi.
  *
  * On session start the extension resolves the required system binaries.
  * Tools await that initialization before executing and report a clear error
- * when `fd`/`fdfind` or `rg` is unavailable.
+ * when `fd`/`fdfind`, `rg`, or `fzf` is unavailable.
  */
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -18,11 +18,16 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   buildFdArgs,
+  buildFuzzyFdArgs,
+  buildFzfArgs,
   buildRgArgs,
   FD_MAX_DEPTH_LIMIT,
   FD_MAX_LIMIT,
+  FUZZY_MAX_LIMIT,
+  resolveFuzzyLimit,
   RG_MAX_CONTEXT,
   RG_MAX_COUNT_LIMIT,
+  type FuzzyFindParams,
 } from "./src/args.ts";
 import {
   liveBinaryEnv,
@@ -31,23 +36,33 @@ import {
   type BinaryEnv,
   type BinarySource,
 } from "./src/binaries.ts";
-import { formatCapturedOutput, type CapturedOutput } from "./src/output.ts";
+import {
+  formatCapturedOutput,
+  formatOutput,
+  type CapturedOutput,
+} from "./src/output.ts";
 import {
   FD_PARAMETER_DESCRIPTIONS,
   FD_PROMPT_GUIDELINES,
   FD_PROMPT_SNIPPET,
   FD_TOOL_DESCRIPTION,
+  FUZZY_PARAMETER_DESCRIPTIONS,
+  FUZZY_PROMPT_GUIDELINES,
+  FUZZY_PROMPT_SNIPPET,
+  FUZZY_TOOL_DESCRIPTION,
   RG_PARAMETER_DESCRIPTIONS,
   RG_PROMPT_GUIDELINES,
   RG_PROMPT_SNIPPET,
   RG_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 import { discardCapturedOutput, executeSearchProcess } from "./src/process.ts";
+import { executeFuzzyPipeline } from "./src/fuzzy.ts";
 
 export function makeBinaryInitializers(env: BinaryEnv) {
   return {
     fd: Effect.runSync(Effect.cached(resolveBinary(TOOL_SPECS.fd, env))),
     rg: Effect.runSync(Effect.cached(resolveBinary(TOOL_SPECS.rg, env))),
+    fzf: Effect.runSync(Effect.cached(resolveBinary(TOOL_SPECS.fzf, env))),
   };
 }
 
@@ -75,14 +90,46 @@ export interface RgToolDetails {
   readonly fullOutputPath?: string;
 }
 
+export interface FuzzyFindToolDetails {
+  readonly binarySource: BinarySource;
+  /** Paths returned to the model (bounded by limit). */
+  readonly matchCount: number;
+  /** All fuzzy matches fzf reported, including those beyond limit. */
+  readonly totalMatches: number;
+  readonly truncated: boolean;
+  readonly fullOutputPath?: string;
+}
+
 const EXEC_TIMEOUT_MS = 60_000;
+
+/** Apply the shared timeout, error normalization, and platform services. */
+function withToolLifecycle<A, E extends { readonly _tag: string }, R>(
+  tool: string,
+  effect: Effect.Effect<A, E, R>,
+) {
+  return effect.pipe(
+    Effect.timeout(EXEC_TIMEOUT_MS),
+    Effect.mapError((error) => {
+      if (error instanceof SearchError) return error;
+      return new SearchError({
+        message:
+          error._tag === "TimeoutError"
+            ? `${tool} timed out.`
+            : error instanceof Error
+              ? error.message
+              : String(error),
+      });
+    }),
+    Effect.provide(NodeServices.layer),
+  );
+}
 
 function causeMessage<E>(cause: Cause.Cause<E>) {
   const [first] = Cause.prettyErrors(cause);
   return first?.message ?? Cause.pretty(cause);
 }
 
-function unwrapToolExit<A, E>(exit: Exit.Exit<A, E>, tool: "fd" | "rg") {
+function unwrapToolExit<A, E>(exit: Exit.Exit<A, E>, tool: string) {
   if (Exit.isSuccess(exit)) return exit.value;
   if (Cause.hasInterruptsOnly(exit.cause)) {
     throw new Error(`${tool} search was cancelled.`);
@@ -102,13 +149,14 @@ export default function fileSearchTools(pi: ExtensionAPI) {
           {
             fd: Effect.exit(initializers.fd),
             rg: Effect.exit(initializers.rg),
+            fzf: Effect.exit(initializers.fzf),
           },
           { concurrency: "unbounded" },
         );
         if (!ctx.hasUI || notified) return;
 
         notified = true;
-        for (const tool of ["fd", "rg"] as const) {
+        for (const tool of ["fd", "rg", "fzf"] as const) {
           const toolExit = initialized[tool];
           if (Exit.isFailure(toolExit)) {
             ctx.ui.notify(
@@ -158,21 +206,38 @@ export default function fileSearchTools(pi: ExtensionAPI) {
         noMatches: result.output.lineCount === 0,
         binarySource: binary.source,
       } satisfies SearchOutcome;
-    }).pipe(
-      Effect.timeout(EXEC_TIMEOUT_MS),
-      Effect.mapError((error) => {
-        if (error instanceof SearchError) return error;
-        return new SearchError({
-          message:
-            error._tag === "TimeoutError"
-              ? `${tool} timed out.`
-              : error instanceof Error
-                ? error.message
-                : String(error),
-        });
-      }),
-      Effect.provide(NodeServices.layer),
-    );
+    }).pipe((effect) => withToolLifecycle(tool, effect));
+  }
+
+  /** Await init, run the fd → fzf pipeline, and classify both exits. */
+  function runFuzzyFind(params: FuzzyFindParams, ctx: ExtensionContext) {
+    return Effect.gen(function* () {
+      const fd = yield* initializers.fd;
+      const fzf = yield* initializers.fzf;
+      const result = yield* executeFuzzyPipeline({
+        source: { command: fd.command, args: buildFuzzyFdArgs(params) },
+        filter: { command: fzf.command, args: buildFzfArgs(params) },
+        cwd: ctx.cwd,
+        limit: resolveFuzzyLimit(params.limit),
+      });
+
+      if (result.sourceCode !== 0) {
+        const detail =
+          result.sourceStderr.trim() || `exit code ${result.sourceCode}`;
+        return yield* new SearchError({ message: `fd failed: ${detail}` });
+      }
+      // fzf exits 1 when the filter matches nothing; that is a normal result.
+      if (result.filterCode !== 0 && result.filterCode !== 1) {
+        const detail =
+          result.filterStderr.trim() || `exit code ${result.filterCode}`;
+        return yield* new SearchError({ message: `fzf failed: ${detail}` });
+      }
+      return {
+        paths: result.paths,
+        totalMatches: result.matchCount,
+        binarySource: fzf.source,
+      };
+    }).pipe((effect) => withToolLifecycle("fuzzy-find", effect));
   }
 
   pi.registerTool<ReturnType<typeof fdParameters>, FdToolDetails>({
@@ -316,6 +381,93 @@ export default function fileSearchTools(pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
   });
+
+  pi.registerTool<ReturnType<typeof fuzzyFindParameters>, FuzzyFindToolDetails>(
+    {
+      name: "fuzzy-find",
+      label: "Fuzzy Find Paths",
+      description: FUZZY_TOOL_DESCRIPTION,
+      promptSnippet: FUZZY_PROMPT_SNIPPET,
+      promptGuidelines: FUZZY_PROMPT_GUIDELINES,
+      parameters: fuzzyFindParameters(),
+
+      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+        const exit = await Effect.runPromiseExit(
+          Effect.gen(function* () {
+            const outcome = yield* runFuzzyFind(params, ctx);
+            if (outcome.totalMatches === 0) {
+              return {
+                content: [{ type: "text", text: "No matches found" }],
+                details: {
+                  binarySource: outcome.binarySource,
+                  matchCount: 0,
+                  totalMatches: 0,
+                  truncated: false,
+                },
+              } satisfies AgentToolResult<FuzzyFindToolDetails>;
+            }
+
+            const formatted = yield* Effect.promise(() =>
+              formatOutput(outcome.paths.join("\n"), {
+                tempPrefix: "pi-fuzzy-find-",
+              }),
+            );
+            const hiddenMatches = outcome.totalMatches - outcome.paths.length;
+            const text =
+              hiddenMatches > 0
+                ? `${formatted.text}\n\n[${hiddenMatches} additional fuzzy ${
+                    hiddenMatches === 1 ? "match" : "matches"
+                  } not shown; refine the query or raise limit]`
+                : formatted.text;
+            return {
+              content: [{ type: "text", text }],
+              details: {
+                binarySource: outcome.binarySource,
+                matchCount: outcome.paths.length,
+                totalMatches: outcome.totalMatches,
+                truncated: formatted.truncated || hiddenMatches > 0,
+                fullOutputPath: formatted.fullOutputPath,
+              },
+            } satisfies AgentToolResult<FuzzyFindToolDetails>;
+          }),
+          signal ? { signal } : undefined,
+        );
+        return unwrapToolExit(exit, "fuzzy-find");
+      },
+
+      renderCall(args, theme) {
+        let text = theme.fg("toolTitle", theme.bold("fuzzy-find "));
+        text += theme.fg("accent", `"${args.query}"`);
+        if (args.path) text += theme.fg("muted", ` in ${args.path}`);
+        const flags = [
+          args.type && `type=${args.type}`,
+          args.hidden && "hidden",
+          args.limit !== undefined && `limit=${args.limit}`,
+        ].filter((flag): flag is string => typeof flag === "string");
+        if (flags.length > 0) text += " " + theme.fg("dim", flags.join(" "));
+        return new Text(text, 0, 0);
+      },
+
+      renderResult(result, { expanded, isPartial }, theme) {
+        if (isPartial)
+          return new Text(theme.fg("warning", "Searching..."), 0, 0);
+        const details = result.details;
+        if (!details || details.totalMatches === 0) {
+          return new Text(theme.fg("dim", "No matches found"), 0, 0);
+        }
+        let text = theme.fg(
+          "success",
+          `${details.matchCount} ${details.matchCount === 1 ? "match" : "matches"}`,
+        );
+        if (details.totalMatches > details.matchCount) {
+          text += theme.fg("warning", ` (of ${details.totalMatches})`);
+        }
+        if (expanded)
+          text += expandedPreview(result, details.fullOutputPath, theme);
+        return new Text(text, 0, 0);
+      },
+    },
+  );
 }
 
 const PREVIEW_LINES = 20;
@@ -380,6 +532,33 @@ export function fdParameters() {
         description: FD_PARAMETER_DESCRIPTIONS.limit,
         minimum: 1,
         maximum: FD_MAX_LIMIT,
+      }),
+    ),
+  });
+}
+
+export function fuzzyFindParameters() {
+  return Type.Object({
+    query: Type.String({
+      description: FUZZY_PARAMETER_DESCRIPTIONS.query,
+      minLength: 1,
+    }),
+    path: Type.Optional(
+      Type.String({ description: FUZZY_PARAMETER_DESCRIPTIONS.path }),
+    ),
+    type: Type.Optional(
+      StringEnum(["file", "directory"] as const, {
+        description: FUZZY_PARAMETER_DESCRIPTIONS.type,
+      }),
+    ),
+    hidden: Type.Optional(
+      Type.Boolean({ description: FUZZY_PARAMETER_DESCRIPTIONS.hidden }),
+    ),
+    limit: Type.Optional(
+      Type.Integer({
+        description: FUZZY_PARAMETER_DESCRIPTIONS.limit,
+        minimum: 1,
+        maximum: FUZZY_MAX_LIMIT,
       }),
     ),
   });

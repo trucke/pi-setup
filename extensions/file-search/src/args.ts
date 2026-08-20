@@ -1,9 +1,9 @@
 /**
- * Pure CLI argument construction for the fd and rg tools.
+ * Pure CLI argument construction for the fd, rg, and fuzzy-find tools.
  *
  * Everything here is synchronous and side-effect free so the exact argv
- * passed to the child process can be asserted in tests. Patterns are always placed
- * after a `--` separator so user-controlled input can never be parsed as a
+ * passed to the child process can be asserted in tests. Patterns are always
+ * placed after a `--` separator so user-controlled input cannot become a
  * flag, and paths are normalized (leading `@`, `~` expansion) before use.
  */
 
@@ -16,6 +16,8 @@ export const FD_MAX_DEPTH_LIMIT = 64;
 export const RG_DEFAULT_COUNT_LIMIT = 100;
 export const RG_MAX_COUNT_LIMIT = 1000;
 export const RG_MAX_CONTEXT = 20;
+export const FUZZY_DEFAULT_LIMIT = 100;
+export const FUZZY_MAX_LIMIT = 1000;
 
 /** Some models prefix path arguments with @; built-in tools strip it, so do we. */
 export function normalizeSearchPath(raw: string) {
@@ -119,4 +121,39 @@ export function buildRgArgs(params: RgToolParams) {
   const path = optionalPath(params.path);
   if (path) args.push(path);
   return args;
+}
+
+export type FuzzyEntryType = "file" | "directory";
+
+export interface FuzzyFindParams {
+  query: string;
+  path?: string;
+  type?: FuzzyEntryType;
+  hidden?: boolean;
+  limit?: number;
+}
+
+/**
+ * Candidate generation for fuzzy-find: every path fd would report,
+ * NUL-delimited for fzf. Deliberately unbounded — fzf ranks the whole
+ * candidate set, so capping fd would drop candidates arbitrarily. Runaway
+ * trees are bounded by the tool timeout instead.
+ */
+export function buildFuzzyFdArgs(params: FuzzyFindParams) {
+  const args = ["--color=never", "--print0", "--strip-cwd-prefix"];
+  if (params.hidden) args.push("--hidden");
+  if (params.type) args.push("--type", FD_TYPE_FLAGS[params.type]);
+  args.push("--", "");
+  const path = optionalPath(params.path);
+  if (path) args.push(path);
+  return args;
+}
+
+/** `--filter=` keeps user queries out of flag position; no interactive UI. */
+export function buildFzfArgs(params: FuzzyFindParams) {
+  return ["--read0", "--print0", "--scheme=path", `--filter=${params.query}`];
+}
+
+export function resolveFuzzyLimit(limit: number | undefined) {
+  return clamp(limit ?? FUZZY_DEFAULT_LIMIT, 1, FUZZY_MAX_LIMIT);
 }
