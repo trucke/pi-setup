@@ -67,7 +67,7 @@ function finishStdout(state: PreviewState, fullOutputPath: string) {
   } satisfies CapturedOutput;
 }
 
-function collectStderr<E, R>(stream: Stream.Stream<Uint8Array, E, R>) {
+export function collectStderr<E, R>(stream: Stream.Stream<Uint8Array, E, R>) {
   return Stream.runFold(
     stream,
     () => Buffer.alloc(0),
