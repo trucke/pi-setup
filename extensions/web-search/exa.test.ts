@@ -246,6 +246,67 @@ test("names the status and explicit retry on HTTP failures", async () => {
   );
 });
 
+test("bounds stalled requests with the operation timeout", async () => {
+  let requestSignal: AbortSignal | undefined;
+  const transport = {
+    timeoutMs: 25,
+    fetch: (async (_url: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        requestSignal = init?.signal ?? undefined;
+        init?.signal?.addEventListener("abort", () =>
+          reject(
+            Object.assign(new Error("The operation was aborted"), {
+              name: "AbortError",
+            }),
+          ),
+        );
+      })) as typeof fetch,
+  };
+
+  await assert.rejects(
+    exaSearch(
+      keyProvider(),
+      { query: "q", limit: 5 },
+      RETRY_HINT,
+      undefined,
+      transport,
+    ),
+    /Exa search timed out after 0\.025 seconds\. Retry with backend: "firecrawl"\./,
+  );
+  assert.equal(requestSignal?.aborted, true);
+});
+
+test("propagates tool cancellation to the in-flight request", async () => {
+  const controller = new AbortController();
+  let requestSignal: AbortSignal | undefined;
+  const transport = {
+    fetch: (async (_url: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        requestSignal = init?.signal ?? undefined;
+        init?.signal?.addEventListener("abort", () =>
+          reject(
+            Object.assign(new Error("The operation was aborted"), {
+              name: "AbortError",
+            }),
+          ),
+        );
+        queueMicrotask(() => controller.abort());
+      })) as typeof fetch,
+  };
+
+  await assert.rejects(
+    exaSearch(
+      keyProvider(),
+      { query: "q", limit: 5 },
+      RETRY_HINT,
+      controller.signal,
+      transport,
+    ),
+    /Exa search cancelled/,
+  );
+  assert.equal(requestSignal?.aborted, true);
+});
+
 test("reports cancellation distinctly from failures", async () => {
   const controller = new AbortController();
   const transport = {

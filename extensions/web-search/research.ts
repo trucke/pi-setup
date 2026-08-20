@@ -7,10 +7,16 @@ import {
   type ExecResult,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { Cause, Data, Effect, Exit } from "effect";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { CommandExecutor } from "./env.ts";
-import { boundedOutput, expandHint, resultText } from "./output.ts";
+import {
+  boundedOutput,
+  errorMessage,
+  expandHint,
+  resultText,
+} from "./output.ts";
 import {
   RESEARCH_PARAMETER_DESCRIPTIONS,
   RESEARCH_PROMPT_GUIDELINES,
@@ -98,12 +104,16 @@ export function buildCodexArgs(options: {
   ];
 }
 
-class MalformedOutputError extends Error {}
+/** Typed research failure; `message` is the complete model-facing error text. */
+class ResearchError extends Data.TaggedError("ResearchError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
 
 function malformed(reason: string) {
-  return new MalformedOutputError(
-    `Codex returned malformed research output (${reason}). Retry web-research or fall back to web-search.`,
-  );
+  return new ResearchError({
+    message: `Codex returned malformed research output (${reason}). Retry web-research or fall back to web-search.`,
+  });
 }
 
 /** Parses and validates the Codex last message, keeping only deduplicated http(s) sources. */
@@ -177,98 +187,128 @@ function excerpt(text: string) {
 function processError(result: ExecResult) {
   const detail = result.stderr.trim() || result.stdout.trim();
   if (!detail) {
-    return new Error(
-      "Codex CLI could not be started. Install the `codex` CLI and make sure it is on PATH; web-search remains available as a fallback.",
-    );
+    return new ResearchError({
+      message:
+        "Codex CLI could not be started. Install the `codex` CLI and make sure it is on PATH; web-search remains available as a fallback.",
+    });
   }
   if (/not logged in|unauthorized|401|log ?in|authenticat/i.test(detail)) {
-    return new Error(
-      "Codex is not authenticated. Run `codex login` with the ChatGPT account; until then use web-search as a fallback.",
-    );
+    return new ResearchError({
+      message:
+        "Codex is not authenticated. Run `codex login` with the ChatGPT account; until then use web-search as a fallback.",
+    });
   }
   if (/usage limit|quota|rate limit|too many requests|429/i.test(detail)) {
-    return new Error(
-      "Codex usage limit or rate limit reached. Retry later or use web-search as a fallback.",
-    );
+    return new ResearchError({
+      message:
+        "Codex usage limit or rate limit reached. Retry later or use web-search as a fallback.",
+    });
   }
-  return new Error(
-    `Codex research failed (exit ${result.code}): ${excerpt(detail)}`,
-  );
+  return new ResearchError({
+    message: `Codex research failed (exit ${result.code}): ${excerpt(detail)}`,
+  });
 }
 
-/**
- * Runs one ephemeral `codex exec` research session in an empty read-only
- * workspace and returns the validated answer. Never falls back to another
- * backend on its own; errors name the fallback so the model can decide.
- */
-export async function runCodexResearch(
+/** Scoped temporary session directory; removed by the finalizer on every exit. */
+const sessionDirectory = Effect.acquireRelease(
+  Effect.tryPromise({
+    try: () => mkdtemp(join(tmpdir(), "pi-codex-exec-")),
+    catch: (cause) =>
+      new ResearchError({
+        message: `Could not create the Codex session directory: ${errorMessage(cause)}`,
+        cause,
+      }),
+  }),
+  (directory) =>
+    Effect.promise(() => rm(directory, { recursive: true, force: true })),
+);
+
+function codexResearchEffect(
   executor: CommandExecutor,
   params: { query: string; maxSources?: number },
-  signal?: AbortSignal,
-): Promise<AgentToolResult<ResearchDetails>> {
-  const query = sanitizeLine(params.query);
-  if (!query) {
-    throw new Error(
-      "web-research requires a non-empty query. Provide the research question to investigate.",
+): Effect.Effect<AgentToolResult<ResearchDetails>, ResearchError> {
+  return Effect.gen(function* () {
+    const query = sanitizeLine(params.query);
+    if (!query) {
+      return yield* new ResearchError({
+        message:
+          "web-research requires a non-empty query. Provide the research question to investigate.",
+      });
+    }
+    const maxSources = Math.min(
+      Math.max(Math.trunc(params.maxSources ?? DEFAULT_MAX_SOURCES), 1),
+      MAX_SOURCES_LIMIT,
     );
-  }
-  const maxSources = Math.min(
-    Math.max(Math.trunc(params.maxSources ?? DEFAULT_MAX_SOURCES), 1),
-    MAX_SOURCES_LIMIT,
-  );
-  const startedAt = performance.now();
-  const directory = await mkdtemp(join(tmpdir(), "pi-codex-exec-"));
+    const startedAt = performance.now();
 
-  try {
+    const directory = yield* sessionDirectory;
     const workDir = join(directory, "workspace");
     const schemaPath = join(directory, "schema.json");
     const lastMessagePath = join(directory, "last-message.json");
-    await mkdir(workDir);
-    await writeFile(schemaPath, JSON.stringify(CODEX_OUTPUT_SCHEMA), "utf8");
-
-    let result: ExecResult;
-    try {
-      result = await executor.exec(
-        "codex",
-        buildCodexArgs({
-          query,
-          maxSources,
-          workDir,
+    yield* Effect.tryPromise({
+      try: async () => {
+        await mkdir(workDir);
+        await writeFile(
           schemaPath,
-          lastMessagePath,
+          JSON.stringify(CODEX_OUTPUT_SCHEMA),
+          "utf8",
+        );
+      },
+      catch: (cause) =>
+        new ResearchError({
+          message: `Could not prepare the Codex session directory: ${errorMessage(cause)}`,
+          cause,
         }),
-        { cwd: workDir, signal, timeout: CODEX_TIMEOUT_MS },
-      );
-    } catch (error) {
-      if (error instanceof Error && /ENOENT/.test(error.message)) {
-        throw processError({ stdout: "", stderr: "", code: 1, killed: false });
-      }
-      throw error;
-    }
+    });
 
-    if (signal?.aborted) throw new Error("Codex research cancelled");
+    // Fiber interruption (tool cancellation) aborts the codex process via the
+    // forwarded signal; the exec timeout kills runaway sessions (killed: true).
+    const result = yield* Effect.tryPromise({
+      try: (signal) =>
+        executor.exec(
+          "codex",
+          buildCodexArgs({
+            query,
+            maxSources,
+            workDir,
+            schemaPath,
+            lastMessagePath,
+          }),
+          { cwd: workDir, signal, timeout: CODEX_TIMEOUT_MS },
+        ),
+      catch: (cause) =>
+        cause instanceof Error && /ENOENT/.test(cause.message)
+          ? processError({ stdout: "", stderr: "", code: 1, killed: false })
+          : new ResearchError({ message: errorMessage(cause), cause }),
+    });
+
     if (result.killed) {
-      throw new Error(
-        `Codex research timed out after ${CODEX_TIMEOUT_MS / 1_000} seconds. Narrow the query or use web-search as a fallback.`,
-      );
+      return yield* new ResearchError({
+        message: `Codex research timed out after ${CODEX_TIMEOUT_MS / 1_000} seconds. Narrow the query or use web-search as a fallback.`,
+      });
     }
-    if (result.code !== 0) throw processError(result);
+    if (result.code !== 0) return yield* processError(result);
 
-    let raw: string;
-    try {
-      raw = await readFile(lastMessagePath, "utf8");
-    } catch {
-      throw malformed("no structured output file was written");
-    }
-    const research = parseResearchOutput(raw, maxSources);
+    const raw = yield* Effect.tryPromise({
+      try: () => readFile(lastMessagePath, "utf8"),
+      catch: () => malformed("no structured output file was written"),
+    });
+    const research = yield* Effect.try({
+      try: () => parseResearchOutput(raw, maxSources),
+      catch: (cause) =>
+        cause instanceof ResearchError
+          ? cause
+          : new ResearchError({ message: errorMessage(cause), cause }),
+    });
+
+    const text = yield* Effect.tryPromise({
+      try: () => boundedOutput(researchResultText(research), "research"),
+      catch: (cause) =>
+        new ResearchError({ message: errorMessage(cause), cause }),
+    });
 
     return {
-      content: [
-        {
-          type: "text",
-          text: await boundedOutput(researchResultText(research), "research"),
-        },
-      ],
+      content: [{ type: "text" as const, text }],
       details: {
         provider: "codex",
         durationMs: Math.round(performance.now() - startedAt),
@@ -276,10 +316,38 @@ export async function runCodexResearch(
         success: true,
         sources: research.sources,
       },
-    };
-  } finally {
-    await rm(directory, { recursive: true, force: true });
+    } satisfies AgentToolResult<ResearchDetails>;
+  }).pipe(Effect.scoped);
+}
+
+/**
+ * Runs one ephemeral `codex exec` research session in an empty read-only
+ * workspace and returns the validated answer. Never falls back to another
+ * backend on its own; errors name the fallback so the model can decide.
+ *
+ * Promise boundary for the tool API: the tool AbortSignal interrupts the
+ * fiber, which aborts the codex process and still runs the session-directory
+ * finalizer.
+ */
+export async function runCodexResearch(
+  executor: CommandExecutor,
+  params: { query: string; maxSources?: number },
+  signal?: AbortSignal,
+): Promise<AgentToolResult<ResearchDetails>> {
+  const exit = await Effect.runPromiseExit(
+    codexResearchEffect(executor, params),
+    signal ? { signal } : undefined,
+  );
+  if (
+    signal?.aborted ||
+    (!Exit.isSuccess(exit) && Cause.hasInterruptsOnly(exit.cause))
+  ) {
+    throw new Error("Codex research cancelled");
   }
+  if (Exit.isSuccess(exit)) return exit.value;
+
+  const error = Cause.squash(exit.cause);
+  throw error instanceof Error ? error : new Error(errorMessage(error));
 }
 
 function researchDetails(value: unknown): ResearchDetails | undefined {

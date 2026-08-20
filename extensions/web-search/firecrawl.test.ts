@@ -9,11 +9,24 @@ import { resolveApiKey } from "./env.ts";
 import {
   crawlEffect,
   createFirecrawlProvider,
+  runFirecrawl,
   type CrawlClient,
 } from "./firecrawl.ts";
 
 function makeExecutor(exec: Pick<ExtensionAPI, "exec">["exec"]) {
   return { exec };
+}
+
+function testClientProvider() {
+  return createFirecrawlProvider(
+    makeExecutor(async () => ({
+      stdout: "",
+      stderr: "",
+      code: 1,
+      killed: false,
+    })),
+    { env: { FIRECRAWL_API_KEY: "test-key" }, envPath: "/not-used" },
+  );
 }
 
 test("uses the process environment before other credential sources", async () => {
@@ -153,6 +166,57 @@ test("defers crawl pagination until the job reaches a terminal state", async () 
 
   assert.equal(result.data.length, 2);
   assert.deepEqual(pagination, [{ autoPaginate: false }, undefined]);
+});
+
+test("bounds Firecrawl operations with an explicit timeout", async () => {
+  const getClient = testClientProvider();
+
+  await assert.rejects(
+    runFirecrawl(
+      getClient,
+      "search",
+      "Searching",
+      25,
+      "Retry web-search.",
+      undefined,
+      undefined,
+      () => Effect.never,
+    ),
+    /Firecrawl search timed out after 0\.025 seconds\. Retry web-search\./,
+  );
+});
+
+test("Firecrawl cancellation cleans up its request timeout", async () => {
+  const getClient = testClientProvider();
+  await getClient();
+
+  let requestStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    requestStarted = resolve;
+  });
+  const controller = new AbortController();
+  const timeoutCount = () =>
+    process.getActiveResourcesInfo().filter((type) => type === "Timeout")
+      .length;
+  const before = timeoutCount();
+
+  const running = runFirecrawl(
+    getClient,
+    "search",
+    "Searching",
+    120_000,
+    "Retry web-search.",
+    controller.signal,
+    undefined,
+    () => Effect.sync(requestStarted).pipe(Effect.andThen(Effect.never)),
+  );
+
+  await started;
+  controller.abort();
+  await assert.rejects(running, /Firecrawl request cancelled/);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(timeoutCount(), before);
 });
 
 test("cancels the remote crawl when polling is interrupted", async () => {
