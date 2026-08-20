@@ -9,8 +9,7 @@
 > and `typescript@7.0.2`. The root `npm run check` passes clean — use it as the
 > reference implementation.
 >
-> Audience: the agents migrating `firecrawl-search`, `ask-user`,
-> `ui` and `copy-all`.
+> Audience: the agents maintaining `web-search`, `ask-user`, and `ui`.
 
 ---
 
@@ -25,8 +24,8 @@ Reach for Effect only where you actually get something from it:
 
 - **Yes:** async work that needs typed errors, cancellation via the tool `AbortSignal`,
   timeouts, retries/polling, or a resource whose lifetime must outlive one call
-  (child process, subscription) → child processes (`ui`, `copy-all`), the
-  Firecrawl SDK calls (`firecrawl-search`), and UI's Git/JJ/GitHub polling.
+  (child process, subscription) → child processes (`ui`), the
+  Firecrawl adapter in `web-search`, and UI's Git/JJ/GitHub polling.
 - **No / barely:** pure TUI popups, rendering, and model bookkeeping (`ask-user`, `ui`). These are
   synchronous or already-Promise UI code; wrapping them in Effect adds ceremony and no
   safety. Migrate them by keeping the logic and only touching whatever genuinely async
@@ -103,7 +102,7 @@ export default function (pi: ExtensionAPI) {
   const getRuntime = () => (runtime ??= createRuntime());
 
   pi.registerTool({
-    name: "my_tool",
+    name: "my-tool",
     parameters: Type.Object({/* typebox */}),
     async execute(_id, params, signal) {
       return await runTool(getRuntime(), myEffect(params), {
@@ -178,7 +177,7 @@ the child-process / concurrency APIs live in `effect-v4-notes.md` — don't re-d
 
 ---
 
-## 4. Recipe: wrapping a Promise SDK (firecrawl-search)
+## 4. Recipe: wrapping a Promise SDK (web-search)
 
 The Firecrawl client is Promise-based. Wrap each call in `Effect.tryPromise` with a typed
 error; the callback receives an `AbortSignal` tied to fiber interruption — forward it to any
@@ -205,10 +204,10 @@ string trimming.
 
 ---
 
-## 5. Recipe: child processes + timeout + polling (ui, copy-all)
+## 5. Recipe: child processes + timeout + polling (ui)
 
-`ui` shells out to `git`/`jj`/`gh` with per-command timeouts and polls on an interval;
-`copy-all` pipes text into `pbcopy`. Two viable levels — pick the lightest that fits.
+`ui` shells out to `git`/`jj`/`gh` with per-command timeouts and polls on an interval.
+Two viable levels — pick the lightest that fits.
 
 **Simple, one-shot, small:** if all you do is "run a command, capture stdout, with a
 timeout," the Effect win is `Effect.timeout` + interruption killing the child. Use the
@@ -244,11 +243,6 @@ const pollLoop = refresh.pipe(
 );
 const fiber = runtime.runFork(pollLoop); // interrupted by runtime.dispose()
 ```
-
-**When to stay plain:** `copy-all` spawning `pbcopy` is a trivial one-shot with no
-cancellation need — the existing `node:child_process` + Promise wrapper is honestly fine.
-Migrate it only for consistency; if you do, `Effect.callback` around `child.once("exit", …)`
-(see notes §4) is the minimal wrapper. Don't add a service/layer for a clipboard write.
 
 ---
 
