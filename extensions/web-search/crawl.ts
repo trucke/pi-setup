@@ -24,6 +24,7 @@ import {
   crawlView,
   displayUrl,
 } from "./render.ts";
+import { parsePublicHttpUrl } from "../shared/public-url.ts";
 import { sanitizeLine } from "./sanitize.ts";
 
 const DEFAULT_CRAWL_LIMIT = 5;
@@ -94,17 +95,18 @@ export function registerCrawlTool(
         }),
       ),
     }),
-    execute: (_toolCallId, params, signal, onUpdate) =>
-      runFirecrawl(
+    execute: (_toolCallId, params, signal, onUpdate) => {
+      const url = parsePublicHttpUrl(params.url, "Web URL").href;
+      return runFirecrawl(
         getFirecrawl,
         "crawl",
-        `Crawling up to ${params.limit ?? DEFAULT_CRAWL_LIMIT} pages from: ${sanitizeLine(params.url)}`,
+        `Crawling up to ${params.limit ?? DEFAULT_CRAWL_LIMIT} pages from: ${sanitizeLine(url)}`,
         ((params.timeout ?? 120) + 5) * 1_000,
         CRAWL_RETRY_HINT,
         signal,
         onUpdate,
         (client) =>
-          crawlEffect(client, params.url, {
+          crawlEffect(client, url, {
             limit: params.limit ?? DEFAULT_CRAWL_LIMIT,
             maxDiscoveryDepth: params.maxDiscoveryDepth,
             includePaths: params.includePaths,
@@ -122,7 +124,8 @@ export function registerCrawlTool(
               output: crawlResultText(result),
             })),
           ),
-      ),
+      );
+    },
     renderCall(args, theme) {
       let text = theme.fg("toolTitle", theme.bold("web-crawl"));
       text += ` ${theme.fg("accent", displayUrl(args.url))}`;

@@ -5,6 +5,7 @@ import webSearch from "./index.ts";
 import { registerFetchTool } from "./fetch.ts";
 import { registerSearchTool } from "./search.ts";
 import type { ScrapeCache } from "./cache.ts";
+import { parsePublicHttpUrl } from "../shared/public-url.ts";
 
 interface RegisteredTool {
   name: string;
@@ -135,6 +136,41 @@ function stubDependencies(overrides: { fetchImpl?: typeof fetch } = {}) {
     },
   };
 }
+
+test("rejects private, credentialed, and non-HTTP web URLs", async () => {
+  assert.throws(
+    () => parsePublicHttpUrl("http://127.0.0.1/admin", "Web URL"),
+    /destination is not public/,
+  );
+  assert.throws(
+    () => parsePublicHttpUrl("https://secret.internal/docs", "Web URL"),
+    /destination is not public/,
+  );
+  assert.throws(
+    () => parsePublicHttpUrl("https://user:secret@example.com", "Web URL"),
+    /embedded credentials/,
+  );
+  assert.throws(
+    () => parsePublicHttpUrl("file:///tmp/private", "Web URL"),
+    /HTTP or HTTPS/,
+  );
+
+  const tools: RegisteredTool[] = [];
+  const deps = stubDependencies();
+  registerFetchTool(makePi(tools), deps);
+  const fetchTool = tools.find((tool) => tool.name === "web-fetch");
+  assert.ok(fetchTool);
+  await assert.rejects(
+    fetchTool.execute(
+      "private-fetch",
+      { url: "http://localhost/admin" },
+      undefined,
+      undefined,
+    ),
+    /destination is not public/,
+  );
+  assert.equal(deps.firecrawlCallCount(), 0);
+});
 
 test("rejects backend-incompatible parameters with explicit retries", async () => {
   const tools: RegisteredTool[] = [];
