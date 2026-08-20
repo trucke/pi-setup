@@ -28,7 +28,7 @@ import { sanitizeLine, sanitizeText } from "./sanitize.ts";
 
 export const DEFAULT_MAX_SOURCES = 5;
 export const MAX_SOURCES_LIMIT = 10;
-export const CODEX_TIMEOUT_MS = 300 * 1_000;
+export const CODEX_TIMEOUT_MS = 10 * 60 * 1_000;
 
 export interface ResearchSource {
   title: string;
@@ -284,7 +284,7 @@ function codexResearchEffect(
 
     if (result.killed) {
       return yield* new ResearchError({
-        message: `Codex research timed out after ${CODEX_TIMEOUT_MS / 1_000} seconds. Narrow the query or use web-search as a fallback.`,
+        message: `Codex research timed out after ${CODEX_TIMEOUT_MS / 60_000} minutes. Narrow the query or use web-search as a fallback.`,
       });
     }
     if (result.code !== 0) return yield* processError(result);

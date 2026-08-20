@@ -73,17 +73,24 @@ export async function runWithToolCallTimeout<T>(
   }
 }
 
+interface ToolCallTimeoutGuardOptions {
+  readonly timeoutMs?: number;
+  readonly exemptToolNames?: readonly string[];
+}
+
 /**
- * Wrap every currently registered child tool with an independent execution
+ * Wrap every non-exempt registered child tool with an independent execution
  * timeout. Calling apply() again is safe and picks up tools registered later.
  */
 export function createToolCallTimeoutGuard(
-  timeoutMs = CHILD_TOOL_CALL_TIMEOUT_MS,
+  options: ToolCallTimeoutGuardOptions = {},
 ) {
+  const timeoutMs = options.timeoutMs ?? CHILD_TOOL_CALL_TIMEOUT_MS;
+  const exemptToolNames = new Set(options.exemptToolNames);
   const wrapped = new WeakSet<ToolDefinition>();
 
   const wrap = (definition: ToolDefinition) => {
-    if (wrapped.has(definition)) return;
+    if (exemptToolNames.has(definition.name) || wrapped.has(definition)) return;
     wrapped.add(definition);
 
     const execute = definition.execute;
