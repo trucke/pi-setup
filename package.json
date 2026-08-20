@@ -45,8 +45,7 @@
       "./extensions/web-search/index.ts",
       "./extensions/read-pdf/index.ts",
       "./extensions/subagents/index.ts",
-      "./extensions/ui/index.ts",
-      "./extensions/copy-all/index.ts"
+      "./extensions/ui/index.ts"
     ],
     "skills": [
       "./skills/babysit-pr",
