@@ -131,9 +131,7 @@ export function buildExaContentsRequest(options: ExaContentsOptions) {
       text: options.maxCharacters
         ? { maxCharacters: options.maxCharacters }
         : true,
-      livecrawl: options.fresh
-        ? ("preferred" as const)
-        : ("fallback" as const),
+      livecrawl: options.fresh ? ("preferred" as const) : ("fallback" as const),
     },
   };
 }

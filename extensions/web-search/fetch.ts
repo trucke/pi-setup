@@ -44,6 +44,7 @@ import {
   documentView,
   type DocumentView,
 } from "./render.ts";
+import { parsePublicHttpUrl } from "../shared/public-url.ts";
 import { sanitizeLine } from "./sanitize.ts";
 
 const EXA_RETRY_HINT =
@@ -196,6 +197,7 @@ export function registerFetchTool(
     }),
     execute: async (_toolCallId, params, signal, onUpdate) => {
       const backend = params.backend ?? "exa";
+      const url = parsePublicHttpUrl(params.url, "Web URL").href;
 
       if (backend === "exa") {
         const unsupported = FIRECRAWL_ONLY_PARAMETERS.filter(
@@ -211,7 +213,7 @@ export function registerFetchTool(
           content: [
             {
               type: "text",
-              text: `Fetching with Exa: ${sanitizeLine(params.url)}`,
+              text: `Fetching with Exa: ${sanitizeLine(url)}`,
             },
           ],
           details: undefined,
@@ -220,7 +222,7 @@ export function registerFetchTool(
         const { details, output } = await exaFetch(
           getExaKey,
           {
-            url: params.url,
+            url,
             maxCharacters: params.maxCharacters,
             fresh: params.fresh,
           },
@@ -249,14 +251,14 @@ export function registerFetchTool(
       return runFirecrawl(
         getFirecrawl,
         "scrape",
-        `Scraping page with Firecrawl: ${sanitizeLine(params.url)}`,
+        `Scraping page with Firecrawl: ${sanitizeLine(url)}`,
         (params.timeout ?? 30_000) + 5_000,
         FIRECRAWL_RETRY_HINT,
         signal,
         onUpdate,
         (client) => {
           const request = {
-            url: params.url,
+            url,
             onlyMainContent: params.onlyMainContent,
             waitFor: params.waitFor,
             timeout: params.timeout,
@@ -265,7 +267,7 @@ export function registerFetchTool(
           if (params.fresh) scrapeCache.delete(key);
           return firecrawlRequest(() =>
             memoizedRequest(scrapeCache, key, () =>
-              client.scrape(params.url, {
+              client.scrape(url, {
                 formats: ["markdown"],
                 onlyMainContent: params.onlyMainContent ?? true,
                 waitFor: params.waitFor,

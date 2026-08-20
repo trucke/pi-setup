@@ -118,6 +118,10 @@ test("accepts only credential-free HTTP(S) URLs with public literal hosts", () =
     /not public/,
   );
   assert.throws(
+    () => parseRemotePdfUrl("https://records.internal/a.pdf"),
+    /not public/,
+  );
+  assert.throws(
     () => parseRemotePdfUrl("http://127.0.0.1/a.pdf"),
     /not public/,
   );
