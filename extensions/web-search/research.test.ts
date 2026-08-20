@@ -348,6 +348,43 @@ test("cleans up its temporary session directory", async () => {
   await assert.rejects(access(workDir));
 });
 
+test("cleans up the session directory when codex fails", async () => {
+  let workDir = "";
+  const executor = makeExecutor(async (_command, args) => {
+    workDir = args[args.indexOf("--cd") + 1];
+    return { stdout: "", stderr: "broken pipe", code: 3, killed: false };
+  });
+
+  await assert.rejects(
+    runCodexResearch(executor, { query: "q" }),
+    /failed \(exit 3\)/,
+  );
+  assert.ok(workDir);
+  await assert.rejects(access(workDir));
+});
+
+test("cleans up the session directory when the tool call is cancelled", async () => {
+  const controller = new AbortController();
+  let workDir = "";
+  const executor = makeExecutor(async (_command, args, options) => {
+    workDir = args[args.indexOf("--cd") + 1];
+    controller.abort();
+    return new Promise<ExecResult>((resolve) => {
+      const finish = () =>
+        resolve({ stdout: "", stderr: "", code: 1, killed: true });
+      if (options?.signal?.aborted) finish();
+      else options?.signal?.addEventListener("abort", finish);
+    });
+  });
+
+  await assert.rejects(
+    runCodexResearch(executor, { query: "q" }, controller.signal),
+    /cancelled/,
+  );
+  assert.ok(workDir);
+  await assert.rejects(access(workDir));
+});
+
 // Consumes ChatGPT subscription quota; run explicitly with
 // npm run test:live:research
 test(

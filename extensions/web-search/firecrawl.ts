@@ -25,6 +25,31 @@ class OutputError extends Data.TaggedError("OutputError")<{
   readonly cause: unknown;
 }> {}
 
+class FirecrawlTimeoutError extends Data.TaggedError("FirecrawlTimeoutError")<{
+  readonly timeoutMs: number;
+}> {}
+
+/**
+ * Races an operation against an unref'd timer whose cleanup runs on every exit.
+ * Effect v4.0.0-beta.98 can retain the timer behind `Effect.timeout` when the
+ * outer fiber is interrupted, so cancelled calls could otherwise prevent a
+ * short-lived process from exiting until the full request timeout elapsed.
+ */
+function withUnrefTimeout<A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  timeoutMs: number,
+) {
+  const timeout = Effect.callback<never, FirecrawlTimeoutError>((resume) => {
+    const timer = setTimeout(
+      () => resume(Effect.fail(new FirecrawlTimeoutError({ timeoutMs }))),
+      timeoutMs,
+    );
+    timer.unref();
+    return Effect.sync(() => clearTimeout(timer));
+  });
+  return Effect.raceFirst(effect, timeout);
+}
+
 export type FirecrawlProvider = (signal?: AbortSignal) => Promise<Firecrawl>;
 
 export function createFirecrawlProvider(
@@ -115,16 +140,22 @@ export function crawlEffect(
     (job, exit) =>
       Exit.isSuccess(exit)
         ? Effect.void
-        : firecrawlRequest(() => client.cancelCrawl(job.id)).pipe(
-            Effect.timeout("10 seconds"),
-            Effect.ignore,
-          ),
+        : withUnrefTimeout(
+            firecrawlRequest(() => client.cancelCrawl(job.id)),
+            10_000,
+          ).pipe(Effect.ignore),
   );
 }
 
 function operationError(operation: string, error: unknown, retryHint: string) {
   if (error instanceof MissingApiKeyError) {
     return new Error(`${error.message}. ${retryHint}`);
+  }
+  if (error instanceof FirecrawlTimeoutError) {
+    return new Error(
+      `Firecrawl ${operation} timed out after ${error.timeoutMs / 1_000} seconds. ${retryHint}`,
+      { cause: error },
+    );
   }
 
   const cause =
@@ -162,8 +193,9 @@ export async function runFirecrawl<T>(
       }),
     );
 
-    const { details, output } = yield* request(client).pipe(
-      Effect.timeout(timeout),
+    const { details, output } = yield* withUnrefTimeout(
+      request(client),
+      timeout,
     );
     const formatted = yield* Effect.tryPromise({
       try: () => boundedOutput(output, operation, "json"),

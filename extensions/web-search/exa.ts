@@ -1,3 +1,4 @@
+import { Cause, Data, Effect, Exit } from "effect";
 import {
   MissingApiKeyError,
   resolveApiKey,
@@ -165,64 +166,93 @@ export function createExaKeyProvider(
 
 export interface ExaTransport {
   fetch?: typeof fetch;
+  /** Test-only override of the per-operation timeout. */
+  timeoutMs?: number;
 }
 
-async function exaRequest<T>(
+/** Typed Exa failure; `message` is the complete model-facing error text. */
+export class ExaError extends Data.TaggedError("ExaError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+/**
+ * One Exa HTTP call as an Effect: fiber interruption (tool cancellation)
+ * aborts the in-flight request, and `AbortSignal.timeout` bounds the request
+ * including body reads.
+ *
+ * The timeout deliberately stays on the web-standard unref'd signal instead
+ * of `Effect.timeout`: in Effect v4.0.0-beta.98, interrupting a fiber inside
+ * the timeout race leaks the raced sleep's timer, holding the event loop for
+ * the full timeout after every cancelled call.
+ */
+function exaRequest<T>(
   operation: string,
   endpoint: string,
   body: unknown,
   apiKey: string,
   timeoutMs: number,
   retryHint: string,
-  signal?: AbortSignal,
   transport: ExaTransport = {},
-): Promise<T> {
+): Effect.Effect<T, ExaError> {
   const doFetch = transport.fetch ?? fetch;
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const requestTimeoutMs = transport.timeoutMs ?? timeoutMs;
 
-  let response: Response;
-  try {
-    response = await doFetch(endpoint, {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: combined,
-    });
-  } catch (error) {
-    if (signal?.aborted) throw new Error(`Exa ${operation} cancelled`);
-    if (timeout.aborted) {
-      throw new Error(
-        `Exa ${operation} timed out after ${timeoutMs / 1_000} seconds. ${retryHint}`,
-      );
-    }
-    throw new Error(
-      `Exa ${operation} request failed: ${errorMessage(error)}. ${retryHint}`,
-      { cause: error },
-    );
-  }
+  return Effect.tryPromise({
+    try: async (signal) => {
+      const timeout = AbortSignal.timeout(requestTimeoutMs);
+      const combined = AbortSignal.any([signal, timeout]);
 
-  if (!response.ok) {
-    const detail = sanitizeLine(await response.text().catch(() => "")).slice(
-      0,
-      300,
-    );
-    throw new Error(
-      `Exa ${operation} failed (HTTP ${response.status})${detail ? `: ${detail}` : ""}. ${retryHint}`,
-    );
-  }
+      let response: Response;
+      try {
+        response = await doFetch(endpoint, {
+          method: "POST",
+          headers: {
+            "x-api-key": apiKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: combined,
+        });
 
-  try {
-    return (await response.json()) as T;
-  } catch (error) {
-    throw new Error(
-      `Exa ${operation} returned invalid JSON: ${errorMessage(error)}. ${retryHint}`,
-      { cause: error },
-    );
-  }
+        if (!response.ok) {
+          const detail = sanitizeLine(
+            await response.text().catch(() => ""),
+          ).slice(0, 300);
+          throw new ExaError({
+            message: `Exa ${operation} failed (HTTP ${response.status})${detail ? `: ${detail}` : ""}. ${retryHint}`,
+          });
+        }
+
+        try {
+          return (await response.json()) as T;
+        } catch (error) {
+          throw new ExaError({
+            message: `Exa ${operation} returned invalid JSON: ${errorMessage(error)}. ${retryHint}`,
+            cause: error,
+          });
+        }
+      } catch (error) {
+        if (
+          !(error instanceof ExaError) &&
+          timeout.aborted &&
+          !signal.aborted
+        ) {
+          throw new ExaError({
+            message: `Exa ${operation} timed out after ${requestTimeoutMs / 1_000} seconds. ${retryHint}`,
+          });
+        }
+        throw error;
+      }
+    },
+    catch: (cause) =>
+      cause instanceof ExaError
+        ? cause
+        : new ExaError({
+            message: `Exa ${operation} request failed: ${errorMessage(cause)}. ${retryHint}`,
+            cause,
+          }),
+  });
 }
 
 function boundedSnippet(item: ExaApiResult) {
@@ -326,55 +356,92 @@ export function exaFetchResult(
   };
 }
 
-function withKeyHint(error: unknown, retryHint: string): never {
+/** Resolves the memoized API key, keeping the missing-key case tag-typed. */
+function exaApiKey(
+  getApiKey: ExaKeyProvider,
+): Effect.Effect<string, ExaError | MissingApiKeyError> {
+  return Effect.tryPromise({
+    try: (signal) => getApiKey(signal),
+    catch: (cause) =>
+      cause instanceof MissingApiKeyError
+        ? cause
+        : new ExaError({ message: errorMessage(cause), cause }),
+  });
+}
+
+/**
+ * Promise boundary for the tool API: success value, or a thrown Error whose
+ * message names the explicit retry. Tool cancellation interrupts the fiber
+ * and reports distinctly from failures.
+ */
+async function runExa<A>(
+  effect: Effect.Effect<A, ExaError | MissingApiKeyError>,
+  operation: string,
+  retryHint: string,
+  signal?: AbortSignal,
+): Promise<A> {
+  const exit = await Effect.runPromiseExit(
+    effect,
+    signal ? { signal } : undefined,
+  );
+  if (Exit.isSuccess(exit)) return exit.value;
+  if (signal?.aborted || Cause.hasInterruptsOnly(exit.cause)) {
+    throw new Error(`Exa ${operation} cancelled`);
+  }
+
+  const error = Cause.squash(exit.cause);
   if (error instanceof MissingApiKeyError) {
     throw new Error(`${error.message}. ${retryHint}`);
   }
-  throw error;
+  throw error instanceof Error ? error : new Error(errorMessage(error));
 }
 
-export async function exaSearch(
+export function exaSearch(
   getApiKey: ExaKeyProvider,
   options: ExaSearchOptions,
   retryHint: string,
   signal?: AbortSignal,
   transport: ExaTransport = {},
 ) {
-  const apiKey = await getApiKey(signal).catch((error) =>
-    withKeyHint(error, retryHint),
-  );
-  const response = await exaRequest<ExaSearchResponse>(
-    "search",
-    EXA_SEARCH_URL,
-    buildExaSearchRequest(options),
-    apiKey,
-    EXA_SEARCH_TIMEOUT_MS,
-    retryHint,
-    signal,
-    transport,
-  );
-  return exaSearchDetails(response);
+  const program = Effect.gen(function* () {
+    const apiKey = yield* exaApiKey(getApiKey);
+    const response = yield* exaRequest<ExaSearchResponse>(
+      "search",
+      EXA_SEARCH_URL,
+      buildExaSearchRequest(options),
+      apiKey,
+      EXA_SEARCH_TIMEOUT_MS,
+      retryHint,
+      transport,
+    );
+    return exaSearchDetails(response);
+  });
+  return runExa(program, "search", retryHint, signal);
 }
 
-export async function exaFetch(
+export function exaFetch(
   getApiKey: ExaKeyProvider,
   options: ExaContentsOptions,
   retryHint: string,
   signal?: AbortSignal,
   transport: ExaTransport = {},
 ) {
-  const apiKey = await getApiKey(signal).catch((error) =>
-    withKeyHint(error, retryHint),
-  );
-  const response = await exaRequest<ExaContentsResponse>(
-    "fetch",
-    EXA_CONTENTS_URL,
-    buildExaContentsRequest(options),
-    apiKey,
-    EXA_CONTENTS_TIMEOUT_MS,
-    retryHint,
-    signal,
-    transport,
-  );
-  return exaFetchResult(response, options.url, retryHint);
+  const program = Effect.gen(function* () {
+    const apiKey = yield* exaApiKey(getApiKey);
+    const response = yield* exaRequest<ExaContentsResponse>(
+      "fetch",
+      EXA_CONTENTS_URL,
+      buildExaContentsRequest(options),
+      apiKey,
+      EXA_CONTENTS_TIMEOUT_MS,
+      retryHint,
+      transport,
+    );
+    // exaFetchResult stays a pure throwing helper; adopt its failure here.
+    return yield* Effect.try({
+      try: () => exaFetchResult(response, options.url, retryHint),
+      catch: (cause) => new ExaError({ message: errorMessage(cause), cause }),
+    });
+  });
+  return runExa(program, "fetch", retryHint, signal);
 }
