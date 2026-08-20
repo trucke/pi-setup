@@ -13,6 +13,27 @@ export interface ScrapeRequest {
   timeout?: number;
 }
 
+/**
+ * Maps current and legacy persisted tool names to the cache-relevant
+ * Firecrawl operation. Exa-backed calls produce no Firecrawl documents, so
+ * seeding naturally no-ops on their details.
+ */
+function cacheOperation(toolName: string) {
+  switch (toolName) {
+    case "web-fetch":
+    case "firecrawl_scrape":
+      return "fetch";
+    case "web-search":
+    case "firecrawl_search":
+      return "search";
+    case "web-crawl":
+    case "firecrawl_crawl":
+      return "crawl";
+    default:
+      return undefined;
+  }
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)
@@ -89,9 +110,10 @@ export function seedFirecrawlResult(
   input: unknown,
   details: unknown,
 ) {
+  const operation = cacheOperation(toolName);
   const request = record(input);
 
-  if (toolName === "firecrawl_scrape") {
+  if (operation === "fetch") {
     const url = stringValue(request?.url);
     if (!url || !isDocument(details)) return 0;
     return cacheDocument(cache, details, {
@@ -111,9 +133,9 @@ export function seedFirecrawlResult(
 
   const result = record(details);
   const candidates =
-    toolName === "firecrawl_crawl"
+    operation === "crawl"
       ? [result?.data]
-      : toolName === "firecrawl_search"
+      : operation === "search"
         ? [result?.web, result?.news, result?.images]
         : [];
   const onlyMainContent =
@@ -135,7 +157,7 @@ export function seedFirecrawlResult(
   return added;
 }
 
-function firecrawlCalls(entries: readonly SessionEntry[]) {
+function webToolCalls(entries: readonly SessionEntry[]) {
   const calls = new Map<string, { name: string; input: unknown }>();
 
   for (const entry of entries) {
@@ -161,7 +183,7 @@ export function restoreScrapeCache(
   cache: ScrapeCache,
   entries: readonly SessionEntry[],
 ) {
-  const calls = firecrawlCalls(entries);
+  const calls = webToolCalls(entries);
 
   for (const entry of entries) {
     if (

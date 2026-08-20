@@ -7,13 +7,14 @@ import type {
   ExecResult,
   ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import codexResearch, {
+import {
+  registerResearchTool,
   CODEX_OUTPUT_SCHEMA,
   CODEX_TIMEOUT_MS,
   parseResearchOutput,
   runCodexResearch,
   type ResearchResult,
-} from "./index.ts";
+} from "./research.ts";
 
 type Exec = Pick<ExtensionAPI, "exec">["exec"];
 
@@ -40,7 +41,7 @@ function successfulExecutor(
   });
 }
 
-test("registers codex_research with bounded source parameters", () => {
+test("registers web-research with bounded source parameters", () => {
   const tools: Array<{
     name: string;
     parameters?: { properties?: Record<string, unknown> };
@@ -52,11 +53,11 @@ test("registers codex_research with bounded source parameters", () => {
     },
   } as unknown as ExtensionAPI;
 
-  codexResearch(pi);
+  registerResearchTool(pi);
 
   assert.deepEqual(
     tools.map((tool) => tool.name),
-    ["codex_research"],
+    ["web-research"],
   );
   const parameters = tools[0].parameters?.properties ?? {};
   assert.deepEqual(Object.keys(parameters), ["query", "maxSources"]);

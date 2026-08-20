@@ -3,6 +3,7 @@ import {
   DEFAULT_MAX_LINES,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
+import { sanitizeLine, sanitizeText } from "./sanitize.ts";
 
 export interface SearchItemView {
   kind: "web" | "news" | "images";
@@ -67,15 +68,40 @@ export function displayUrl(value: string) {
   try {
     const url = new URL(value);
     const path = url.pathname === "/" ? "" : url.pathname;
-    return `${url.hostname}${path}`;
+    return sanitizeLine(`${url.hostname}${path}`);
   } catch {
-    return value;
+    return sanitizeLine(value);
   }
 }
 
+/**
+ * Normalizes search details from either backend into one renderable list.
+ * Exa results arrive as `{ backend: "exa", results: [...] }`; Firecrawl keeps
+ * its `{ web, news, images }` groups. All web-controlled strings are
+ * sanitized here so every render path stays terminal-safe.
+ */
 export function searchItems(value: unknown): SearchItemView[] {
   const data = record(value);
   if (!data) return [];
+
+  if (data.backend === "exa") {
+    const results = Array.isArray(data.results) ? data.results : [];
+    return results.flatMap((candidate): SearchItemView[] => {
+      const item = record(candidate);
+      if (!item) return [];
+      const url = sanitizeLine(stringValue(item.url));
+      return [
+        {
+          kind: "web",
+          title:
+            sanitizeLine(firstString(item.title, url, "Untitled result")) ||
+            "Untitled result",
+          url,
+          description: sanitizeText(stringValue(item.snippet)),
+        },
+      ];
+    });
+  }
 
   const items: SearchItemView[] = [];
   for (const kind of ["web", "news", "images"] as const) {
@@ -86,21 +112,27 @@ export function searchItems(value: unknown): SearchItemView[] {
       const item = record(candidate);
       if (!item) continue;
       const metadata = record(item.metadata);
-      const url = firstString(
-        item.url,
-        metadata?.sourceURL,
-        metadata?.url,
-        item.imageUrl,
+      const url = sanitizeLine(
+        firstString(
+          item.url,
+          metadata?.sourceURL,
+          metadata?.url,
+          item.imageUrl,
+        ),
       );
-      const description = firstString(
-        item.description,
-        item.snippet,
-        metadata?.description,
-        metadata?.ogDescription,
+      const description = sanitizeText(
+        firstString(
+          item.description,
+          item.snippet,
+          metadata?.description,
+          metadata?.ogDescription,
+        ),
       );
       items.push({
         kind,
-        title: firstString(item.title, metadata?.title, url, "Untitled result"),
+        title: sanitizeLine(
+          firstString(item.title, metadata?.title, url, "Untitled result"),
+        ),
         url,
         // Web and news highlights can contain Markdown. Images do not receive
         // highlights, so keep their defensive description fallback compact.
@@ -116,15 +148,19 @@ export function searchItems(value: unknown): SearchItemView[] {
 export function documentView(value: unknown): DocumentView {
   const document = record(value) ?? {};
   const metadata = record(document.metadata) ?? {};
-  const url = firstString(metadata.sourceURL, metadata.url, metadata.ogUrl);
+  const url = sanitizeLine(
+    firstString(metadata.sourceURL, metadata.url, metadata.ogUrl),
+  );
 
   return {
-    title: firstString(metadata.title, metadata.ogTitle, url, "Untitled page"),
-    url,
-    description: oneLine(
-      firstString(metadata.description, metadata.ogDescription),
+    title: sanitizeLine(
+      firstString(metadata.title, metadata.ogTitle, url, "Untitled page"),
     ),
-    markdown: stringValue(document.markdown),
+    url,
+    description: sanitizeLine(
+      oneLine(firstString(metadata.description, metadata.ogDescription)),
+    ),
+    markdown: sanitizeText(stringValue(document.markdown)),
     statusCode: numberValue(metadata.statusCode),
     creditsUsed: numberValue(metadata.creditsUsed),
   };
@@ -135,8 +171,8 @@ export function crawlView(value: unknown): CrawlView {
   const data = Array.isArray(crawl.data) ? crawl.data : [];
 
   return {
-    id: stringValue(crawl.id),
-    status: firstString(crawl.status, "unknown"),
+    id: sanitizeLine(stringValue(crawl.id)),
+    status: sanitizeLine(firstString(crawl.status, "unknown")),
     completed: numberValue(crawl.completed) ?? data.length,
     total: numberValue(crawl.total) ?? data.length,
     creditsUsed: numberValue(crawl.creditsUsed),

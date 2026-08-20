@@ -3,12 +3,12 @@
  * (pi, Claude Code, Codex) unified behind a single Effect service interface.
  *
  * Tools (for the parent LLM):
- * - subagent_spawn: fire-and-forget spawn (prompt, title, agent, working_dir,
+ * - subagent-spawn: fire-and-forget spawn (prompt, title, agent, working_dir,
  *   model, reasoning_effort). Max 4 running at once across all backends.
- * - subagent_wait: block until the listed subagents settle, return results.
- * - subagent_cancel: stop one or more running subagents.
- * - subagent_check: peek at a subagent's status and recent activity.
- * - subagent_list: list all subagents.
+ * - subagent-wait: block until the listed subagents settle, return results.
+ * - subagent-cancel: stop one or more running subagents.
+ * - subagent-check: peek at a subagent's status and recent activity.
+ * - subagent-list: list all subagents.
  *
  * Unawaited subagents queue their result as a follow-up message when they
  * settle. `/subagents` opens a picker + full interactive takeover view.
@@ -236,7 +236,7 @@ export default function (pi: ExtensionAPI) {
       return;
     }
     // Keep the result retractable while the parent is working. A later
-    // subagent_wait can consume it before agent_settled flushes follow-ups.
+    // subagent-wait can consume it before agent_settled flushes follow-ups.
     // Defer a copy: the live snapshot keeps mutating if the subagent is
     // restarted before the deferred result flushes.
     resultDelivery.defer({ ...snap, meta: { ...snap.meta } });
@@ -268,7 +268,7 @@ export default function (pi: ExtensionAPI) {
   // --- Tools -------------------------------------------------------------
 
   pi.registerTool({
-    name: "subagent_spawn",
+    name: "subagent-spawn",
     label: "Spawn Subagent",
     description: SUBAGENT_SPAWN_TOOL_DESCRIPTION,
     promptSnippet: SUBAGENT_SPAWN_PROMPT_SNIPPET,
@@ -359,7 +359,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "subagent_wait",
+    name: "subagent-wait",
     label: "Wait for Subagents",
     description: SUBAGENT_WAIT_TOOL_DESCRIPTION,
     parameters: Type.Object({
@@ -453,7 +453,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "subagent_cancel",
+    name: "subagent-cancel",
     label: "Cancel Subagents",
     description: SUBAGENT_CANCEL_TOOL_DESCRIPTION,
     parameters: Type.Object({
@@ -506,7 +506,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "subagent_check",
+    name: "subagent-check",
     label: "Check Subagent",
     description: SUBAGENT_CHECK_TOOL_DESCRIPTION,
     parameters: Type.Object({
@@ -547,7 +547,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "subagent_list",
+    name: "subagent-list",
     label: "List Subagents",
     description: SUBAGENT_LIST_TOOL_DESCRIPTION,
     parameters: Type.Object({}),
@@ -738,7 +738,7 @@ export default function (pi: ExtensionAPI) {
       const manager = await getManager();
       if (manager.view.size() === 0) {
         ctx.ui.notify(
-          "No subagents yet. The agent spawns them with subagent_spawn.",
+          "No subagents yet. The agent spawns them with subagent-spawn.",
           "info",
         );
         return;

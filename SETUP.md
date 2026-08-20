@@ -15,44 +15,69 @@ The root `AGENTS.md` contains repository-specific guidance only. Package install
 do not deploy global agent instructions. Keep personal or machine-wide context in
 a separately managed private file.
 
-## Codex research
+## Web tools
 
-The package registers `codex_research`, the preferred tool for current
-information and general web research. It runs a one-shot `codex exec` session
-(ephemeral, read-only sandbox, empty temporary working directory) with live web
-search enabled and returns a concise, cited Markdown answer with at most 10
-sources.
+The package registers four consolidated web tools: `web-research`,
+`web-search`, `web-fetch`, and `web-crawl`.
+
+### web-research
+
+`web-research` is the preferred tool for current information and general web
+research. It runs a one-shot `codex exec` session (ephemeral, read-only
+sandbox, empty temporary working directory) with live web search enabled and
+returns a concise, cited Markdown answer with at most 10 sources.
 
 It requires the [Codex CLI](https://github.com/openai/codex) on `PATH`,
 authenticated via `codex login` with the ChatGPT subscription. No OpenAI API
-key is needed, and calls consume no Firecrawl credits. Firecrawl search remains
+key is needed, and calls consume no search-API credits. `web-search` remains
 available as a fallback when Codex is unavailable or structured search-result
 listings are needed.
 
-## Firecrawl
+### web-search and web-fetch
 
-The package registers `firecrawl_search`, `firecrawl_scrape`, and
-`firecrawl_crawl`. They resolve `FIRECRAWL_API_KEY` in this order:
+Both tools default to the `exa` backend, which calls the Exa Search and
+Contents HTTP APIs directly and is the cheap default. The `firecrawl` backend
+is the explicit escalation: structured web/news/image search listings for
+`web-search`, and robust browser-rendered scraping for `web-fetch`. Backends
+never fall back to each other silently; errors name the retry to make.
+
+### web-crawl
+
+`web-crawl` crawls multiple pages of one website with Firecrawl and defaults
+to 5 pages.
+
+## Credentials
+
+The tools resolve `EXA_API_KEY` and `FIRECRAWL_API_KEY` in this order:
 
 1. Process environment
 2. Infisical project configured at `~/.pi/agent`
 3. `~/.pi/agent/.env`
 
 For the file fallback, copy `.env.example` to `~/.pi/agent/.env` and replace the
-placeholder. Never commit the resulting file.
+placeholders. Never commit the resulting file. Credentials are resolved lazily
+on first use, so a missing key for one backend does not affect the others.
 
-Firecrawl retrieval is credit-aware:
+## Firecrawl credit budgeting
 
-- `firecrawl_search` discovers at most 10 results and returns query-relevant
-  excerpts when available, without returning complete page content.
-- `firecrawl_crawl` defaults to 5 pages.
-- Equivalent page scrapes are reused across reloads and resumes, including pages
-  already returned by crawls. Set `fresh: true` only when revalidation is needed.
+Firecrawl-backed retrieval is credit-aware:
+
+- `web-search` with `backend: "firecrawl"` discovers at most 10 results and
+  returns query-relevant excerpts when available, without returning complete
+  page content.
+- `web-crawl` defaults to 5 pages.
+- Equivalent Firecrawl page scrapes are reused across reloads and resumes,
+  including pages already returned by crawls and sessions recorded under the
+  legacy `firecrawl_*` tool names. Set `fresh: true` only when revalidation is
+  needed.
 - The default session budget is 20 credits. Interactive sessions can raise the
   budget, allow all remaining requests for the session, or decline; non-interactive
   sessions block requests that would exceed the budget.
 - Approved budget settings persist in the session, and the dashboard displays
   `used/budget` credits (`used/∞` when all requests are allowed).
+
+Exa-backed calls (the default for `web-search` and `web-fetch`) never reserve
+or consume Firecrawl credits.
 
 ## Theme
 

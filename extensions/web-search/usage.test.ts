@@ -11,11 +11,12 @@ import {
   REFRESH_CHANNEL,
 } from "../shared/dashboard-state.ts";
 import { HERDR_BLOCKED_CHANNEL } from "../shared/herdr.ts";
-import firecrawlUsage, {
+import {
+  registerUsageTracking,
   creditsForFirecrawlResult,
   estimatedCreditsForCall,
   usageForEntries,
-} from "./index.ts";
+} from "./usage.ts";
 
 function messageEntry(message: Record<string, unknown>, id: string) {
   return {
@@ -87,6 +88,42 @@ test("estimates Firecrawl calls conservatively", () => {
   assert.equal(estimatedCreditsForCall("read", {}), 0);
 });
 
+test("only explicit firecrawl backends reserve credits for the new tools", () => {
+  // Exa is the default backend and must never reserve Firecrawl credits.
+  assert.equal(estimatedCreditsForCall("web-search", { limit: 5 }), 0);
+  assert.equal(estimatedCreditsForCall("web-search", { backend: "exa" }), 0);
+  assert.equal(estimatedCreditsForCall("web-fetch", { url: "u" }), 0);
+  assert.equal(estimatedCreditsForCall("web-research", { query: "q" }), 0);
+
+  assert.equal(
+    estimatedCreditsForCall("web-search", { backend: "firecrawl", limit: 5 }),
+    2,
+  );
+  assert.equal(
+    estimatedCreditsForCall("web-fetch", { backend: "firecrawl", url: "u" }),
+    1,
+  );
+  assert.equal(estimatedCreditsForCall("web-crawl", { limit: 12 }), 12);
+  assert.equal(estimatedCreditsForCall("web-crawl", {}), 5);
+
+  assert.equal(
+    creditsForFirecrawlResult(
+      "web-search",
+      { backend: "exa", results: [] },
+      { limit: 5 },
+    ),
+    0,
+  );
+  assert.equal(
+    creditsForFirecrawlResult(
+      "web-fetch",
+      { metadata: { creditsUsed: 1 } },
+      { backend: "firecrawl", url: "u" },
+    ),
+    1,
+  );
+});
+
 test("uses reported credits and treats local cache hits as free", () => {
   assert.equal(
     creditsForFirecrawlResult("firecrawl_scrape", {
@@ -146,6 +183,7 @@ test("calculates search credits even for empty or legacy scraped results", () =>
 });
 
 test("reconstructs irreversible spend from all entries including failures", () => {
+  // Legacy snake_case names cover sessions persisted before the rename.
   const usage = usageForEntries([
     toolCallEntry("search-1", "firecrawl_search", { limit: 5 }),
     toolResultEntry({
@@ -222,7 +260,7 @@ function createHarness(
     },
   } as unknown as ExtensionContext;
 
-  firecrawlUsage(pi);
+  registerUsageTracking(pi);
 
   const emit = async (name: string, event: Record<string, unknown>) => {
     const handler = handlers.get(name);
@@ -352,16 +390,16 @@ test("reserves parallel calls and persists an approved budget increase", async (
   assert.equal(
     await emit("tool_call", {
       toolCallId: "crawl-1",
-      toolName: "firecrawl_crawl",
+      toolName: "web-crawl",
       input: { limit: 20 },
     }),
     undefined,
   );
   assert.equal(
     await emit("tool_call", {
-      toolCallId: "scrape-1",
-      toolName: "firecrawl_scrape",
-      input: {},
+      toolCallId: "fetch-1",
+      toolName: "web-fetch",
+      input: { url: "https://example.com", backend: "firecrawl" },
     }),
     undefined,
   );
@@ -543,4 +581,61 @@ test("counts failed calls conservatively and cached calls as free", async () => 
     budget: DEFAULT_FIRECRAWL_BUDGET,
     unlimited: false,
   });
+});
+
+test("restores mixed legacy and current tool names from one session", () => {
+  const usage = usageForEntries([
+    toolCallEntry("legacy-1", "firecrawl_scrape", {}),
+    toolResultEntry({
+      id: "legacy-1",
+      name: "firecrawl_scrape",
+      details: { metadata: { creditsUsed: 1 } },
+    }),
+    toolCallEntry("new-1", "web-crawl", { limit: 4 }),
+    toolResultEntry({
+      id: "new-1",
+      name: "web-crawl",
+      details: { creditsUsed: 4 },
+    }),
+    toolCallEntry("exa-1", "web-search", { query: "q" }),
+    toolResultEntry({
+      id: "exa-1",
+      name: "web-search",
+      details: { backend: "exa", results: [] },
+    }),
+  ]);
+
+  assert.equal(usage.creditsUsed, 5);
+  assert.deepEqual(usage.toolCallIds, new Set(["legacy-1", "new-1"]));
+});
+
+test("never gates or reserves exa-backed search and fetch calls", async () => {
+  const { emit, selections } = createHarness([]);
+  await emit("session_start", { type: "session_start", reason: "startup" });
+
+  // Fill the budget completely with an explicit Firecrawl crawl…
+  await emit("tool_call", {
+    toolCallId: "crawl-1",
+    toolName: "web-crawl",
+    input: { limit: 20 },
+  });
+
+  // …then exa-backed defaults must pass without approval or reservation.
+  assert.equal(
+    await emit("tool_call", {
+      toolCallId: "search-1",
+      toolName: "web-search",
+      input: { query: "q", limit: 10 },
+    }),
+    undefined,
+  );
+  assert.equal(
+    await emit("tool_call", {
+      toolCallId: "fetch-1",
+      toolName: "web-fetch",
+      input: { url: "https://example.com" },
+    }),
+    undefined,
+  );
+  assert.deepEqual(selections, []);
 });

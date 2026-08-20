@@ -209,7 +209,7 @@ export interface SubagentSnapshot {
   readonly queued: ReadonlyArray<QueuedMessage>;
   /** Final text of the most recent completed run (v1 `finalOutput`). */
   readonly finalText: string;
-  /** Count of finalized assistant messages (for subagent_check). */
+  /** Count of finalized assistant messages (for subagent-check). */
   readonly turns: number;
 }
 

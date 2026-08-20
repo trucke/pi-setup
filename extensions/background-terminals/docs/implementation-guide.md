@@ -83,7 +83,7 @@ import { Data } from "effect";
 export type TerminalStatus = "running" | "done" | "failed" | "killed";
 // "done"   = exited with code 0
 // "failed" = exited non-zero, or spawn-level runtime error after start
-// "killed" = terminated by bg_kill, UI kill, or session teardown
+// "killed" = terminated by bg-kill, UI kill, or session teardown
 
 export interface TerminalSnapshot {
   readonly id: string;                 // "bt-1", "bt-2", ... (manager counter, like "sa-N")
@@ -129,7 +129,7 @@ export function formatElapsed(snap: TerminalSnapshot) { /* copy from subagents d
  (none) ────────► running ───────────────────────► done
                     │                exit code ≠0 / 'error' event
                     ├─────────────────────────────► failed
-                    │      bg_kill / UI x / session_shutdown
+                    │      bg-kill / UI x / session_shutdown
                     └─────────────────────────────► killed
  spawn throws (ENOENT etc.) → tool call fails; NO entry is tracked (SpawnError to the model)
 ```
@@ -234,8 +234,8 @@ export const TerminalManagerLive: Layer.Layer<TerminalManager> =
   and pruning. Completed fibers remove themselves; disposal waits for the set within a bound,
   and scope close interrupts cleanup still live after that bound.
 - `let counter = 0` for ids; `let disposed = false`; `waitInterest` is NOT needed (there is no
-  `bg_wait` tool in v1 — see §8 note), but the "consumed" concept still applies to `bg_kill`
-  and `bg_status` so a settle isn't double-announced (§9.3).
+  `bg-wait` tool in v1 — see §8 note), but the "consumed" concept still applies to `bg-kill`
+  and `bg-status` so a settle isn't double-announced (§9.3).
 - `yield* Effect.addFinalizer(() => disposeAll)` — the safety net so `runtime.dispose()` in
   `session_shutdown` kills every process even if the extension forgot (subagents manager.ts
   line 657).
@@ -289,7 +289,7 @@ Decisions and rationale:
   pick in the tool description. Never `shell: true` with an args array (double-parse trap).
 - **`stdin: "ignore"`** enforces the "no subsequent input" requirement at the OS level. A
   process that tries to read stdin gets EOF immediately, which is the honest contract (and the
-  tool description must say so — interactive commands will exit or hang, and `bg_kill` is the
+  tool description must say so — interactive commands will exit or hang, and `bg-kill` is the
   remedy).
 - **`detached: true` on POSIX** gives the child its own process group, so kill can signal
   `-pid` and take down the whole tree (grandchildren from `npm run dev` etc.). `killTree`
@@ -323,7 +323,7 @@ child.once("exit", (code, signal) => {
 - **cwd semantics.** The tool takes optional `working_dir`; resolve with
   `path.resolve(ctx.cwd, params.working_dir ?? ".")` and validate
   `fs.existsSync(cwd) && fs.statSync(cwd).isDirectory()` in the tool handler *before* touching
-  the runtime — throw a plain Error otherwise. This is copied from `subagent_spawn`'s handler
+  the runtime — throw a plain Error otherwise. This is copied from `subagent-spawn`'s handler
   (`extensions/subagents/index.ts` lines 262–265). No trust-store logic is needed (we are not
   spawning an agent in another project; a shell command in another directory is equivalent to
   what the bash tool already allows).
@@ -458,7 +458,7 @@ results and treat already-settled ids as no-ops rather than errors.
   disappears; the only settle source is the `exit`/`error` listener.
 - **Settle during teardown** → `if (!disposed) onSettled?.(...)` so a result is never queued
   into a shutting-down session (subagents `settle`, manager.ts line 280).
-- **Tool AbortSignal during `bg_kill`'s wait** → interruption stops only that caller's
+- **Tool AbortSignal during `bg-kill`'s wait** → interruption stops only that caller's
   `Deferred.await`; the detached scope-close stays owned by the manager `FiberSet`, and
   `Effect.ensuring` still releases bookkeeping.
 - **Late output after exit** → Node may still flush 'data' after 'exit' is observed in rare
@@ -479,7 +479,7 @@ All model-facing strings live in `src/prompt.ts` (subagents convention). Registe
 `@earendil-works/pi-ai` if any enum appears (Google-compat rule, docs/extensions.md
 "Tool Definition"). Throw plain `Error` for failures (that is what sets `isError`).
 
-### 8.1 `bg_start`
+### 8.1 `bg-start`
 
 ```ts
 parameters: Type.Object({
@@ -496,25 +496,25 @@ prompt.ts, like `buildSubagentSpawnResult`):
 ```
 Started background terminal bt-3 "dev server" (pid 12345, /Users/davis/project).
 It runs in the background with no stdin. You'll get a message when it exits, or use
-bg_status(id: "bt-3") to peek, bg_kill to stop it, bg_list to see all.
+bg-status(id: "bt-3") to peek, bg-kill to stop it, bg-list to see all.
 ```
 
 `promptSnippet`: "Run a long-lived shell command in the background (dev servers, builds,
 watchers); output is captured and you're notified on exit".
 `promptGuidelines` (name the tool explicitly — docs warn "this tool" is ambiguous):
-- "Use bg_start for commands expected to run long or indefinitely (servers, watch modes); use the regular bash tool for quick commands."
-- "bg_start processes receive no stdin — never start a command that requires interactive input."
-- "After bg_start, keep working; the exit result arrives automatically. Use bg_status only when you need current output before continuing."
+- "Use bg-start for commands expected to run long or indefinitely (servers, watch modes); use the regular bash tool for quick commands."
+- "bg-start processes receive no stdin — never start a command that requires interactive input."
+- "After bg-start, keep working; the exit result arrives automatically. Use bg-status only when you need current output before continuing."
 
 Description documents the truncation limits (docs requirement) and the no-stdin contract.
 
-### 8.2 `bg_status`
+### 8.2 `bg-status`
 
 ```ts
 parameters: Type.Object({ id: Type.String({ description: 'Terminal id, e.g. "bt-1"' }) })
 ```
 
-Unknown id → throw with the known-ids list (copy the exact error style from `subagent_check`:
+Unknown id → throw with the known-ids list (copy the exact error style from `subagent-check`:
 `Unknown terminal id "x". Known: bt-1, bt-2.`). Result: one metadata line
 (`bt-1 [running] "dev server" (pid 12345, 3m12s, exit -, /path)`) then **tail-truncated**
 stdout and stderr sections:
@@ -528,29 +528,29 @@ const stderr = truncateTail(snap.stderr.text, { maxBytes: 8 * 1024, maxLines: 20
 guidance in docs/extensions.md Output Truncation. When truncated, append
 `[stdout truncated: showing last X of Y. Full log: <spillPath or "in /ps viewer">]` using
 `formatSize` + the truncation result fields (see `truncatedOutput()` in subagents index.ts for
-the message shape). If `bg_status` observes a settled entry whose completion message is still
+the message shape). If `bg-status` observes a settled entry whose completion message is still
 pending delivery, mark it consumed (§9.3).
 
-### 8.3 `bg_list`
+### 8.3 `bg-list`
 
 No parameters. One line per entry via a `describeTerminal(snap)` helper (mirror
 `describeSubagent`): id, status, title, pid, elapsed, exit code/signal, cwd, and total output
 sizes (`formatSize(stdout.totalBytes)`). "No background terminals." when empty. Include both
 running and completed (completed entries are retained up to `MAX_TRACKED`).
 
-### 8.4 `bg_kill`
+### 8.4 `bg-kill`
 
 ```ts
 parameters: Type.Object({ ids: Type.Array(Type.String(), { description: 'Terminal ids to stop, e.g. ["bt-1"]' }) })
 ```
 
-Validate all ids known first (throw listing unknowns, copy `subagent_cancel`). Then
+Validate all ids known first (throw listing unknowns, copy `subagent-cancel`). Then
 `runTool(getRuntime(), manager.kill(ids), { signal, interruptMessage: "Kill wait aborted; termination continues in the background." })`.
 Report per id: `Killed bt-1 "dev server" (SIGTERM).` or `bt-2 "build" was already done (exit 0).`
 Killing marks the settle consumed so the model doesn't also get the async completion message
 (§9.3) — same reason subagents' `cancel` calls `addInterest` before interrupting.
 
-**No `bg_wait` and no `bg_send`.** No stdin is a hard requirement. Blocking wait is
+**No `bg-wait` and no `bg_send`.** No stdin is a hard requirement. Blocking wait is
 deliberately omitted in v1: completion notification makes it redundant, and it would drag in
 subagents' full `waitInterest` machinery. If it's ever wanted, each entry already has a
 settlement `Deferred` and the subagents `waitFor` result shaping is the template.
@@ -600,7 +600,7 @@ const flushResults = () => {
   structurally impossible even if both the `isIdle()` fast-path and the `agent_settled` event
   fire: whoever drains first wins, the second drain sees an empty map.
 - The `consumed` flag closes the remaining hole: if the model is *currently inside*
-  `bg_kill` (which returns the final state itself), the settle must not ALSO queue a message.
+  `bg-kill` (which returns the final state itself), the settle must not ALSO queue a message.
   Manager computes `consumed` = "a kill/status collection is in flight for this id" at settle
   time (subagents: `waitInterest`; here: the `kill()`-marked id set).
 - `if (!disposed)` in `settle` prevents queueing into a shutting-down session.
@@ -609,9 +609,9 @@ const flushResults = () => {
 
 Keep a `Map<string, number> killInterest` in the manager; `kill()` adds interest before
 signaling and releases in `Effect.ensuring` (identical to `addInterest`/`releaseInterest`).
-`settle` computes `consumed = (killInterest.get(id) ?? 0) > 0`. Additionally, `bg_kill`'s tool
+`settle` computes `consumed = (killInterest.get(id) ?? 0) > 0`. Additionally, `bg-kill`'s tool
 handler calls `resultDelivery.consume(ids)` after `runTool` returns, mirroring
-`subagent_wait`'s "settlement may have happened before this wait began" comment (index.ts
+`subagent-wait`'s "settlement may have happened before this wait began" comment (index.ts
 line 352) — belt and suspenders for the settled-before-kill-started ordering.
 
 ### 9.4 Result message content
@@ -762,7 +762,7 @@ Consequences:
   killed by session shutdown") so a resumed session's transcript explains the vanished
   terminal — cheap and worth doing; entries don't enter LLM context (docs: appendEntry).
   The model-facing story stays consistent because tool results always describe terminals as
-  session-scoped ("killed when the session ends" in `bg_start`'s description).
+  session-scoped ("killed when the session ends" in `bg-start`'s description).
 - **Do not spawn from stale contexts.** All spawning goes through tool handlers with a live
   `ctx`; the manager rejects `start` when `disposed` (SpawnError "shutting down", subagents
   manager.ts lines 370–374 precedent).
@@ -771,8 +771,8 @@ Consequences:
 ## 13. Truncation constants (single place, `index.ts` top)
 
 ```ts
-const STATUS_STDOUT_MAX = 16 * 1024;   // bg_status stdout tail
-const STATUS_STDERR_MAX = 8 * 1024;    // bg_status stderr tail
+const STATUS_STDOUT_MAX = 16 * 1024;   // bg-status stdout tail
+const STATUS_STDERR_MAX = 8 * 1024;    // bg-status stderr tail
 const RESULT_STDOUT_MAX = 16 * 1024;   // completion follow-up stdout tail
 const RESULT_STDERR_MAX = 8 * 1024;
 const RETAINED_PER_STREAM = 2 * 1024 * 1024;  // in-memory cap per stream (spill keeps the rest)
@@ -813,7 +813,7 @@ tricks; they exist on any machine running pi)
    no settle hook fires after dispose (`disposed` guard).
 8. pruning: exceed MAX_TRACKED with settled entries → oldest pruned, running never pruned.
 9. SIGTERM-resistant process → SIGKILL after the 2s grace, within the 5s close bound.
-10. aborted `bg_kill` wait → detached escalation still reaches SIGKILL and settles.
+10. aborted `bg-kill` wait → detached escalation still reaches SIGKILL and settles.
 11. overlapping multi-id kills → every caller observes every captured settlement; each
     settle hook fires once and consumed state remains true.
 12. shell `exit` without stdio `close` → bounded cleanup reaps the descendant holding the
@@ -824,7 +824,7 @@ tricks; they exist on any machine running pi)
 **`ps.test.ts`** — `reconcileTerminalSelection` behavior (copy `takeover.test.ts` cases).
 
 **Manual validation (must actually run pi):**
-- `pi` → ask the model to `bg_start` a dev-server-like command → widget appears above editor
+- `pi` → ask the model to `bg-start` a dev-server-like command → widget appears above editor
   with correct count/pluralization → `/ps` list → enter detail → live tail scrolls, `t`
   toggles stderr, ANSI-heavy output (e.g. `npm run dev`) renders without smearing → back →
   `x` kills → widget disappears when last settles → completion message arrives exactly once,
@@ -877,7 +877,7 @@ tricks; they exist on any machine running pi)
 
 - [ ] `npm install && npm run check` green in `extensions/background-terminals` (TS7 + Effect LS).
 - [ ] `npm test` green (manager, output, result-delivery, ps selection).
-- [ ] Tools registered: `bg_start`, `bg_status`, `bg_list`, `bg_kill`; descriptions document
+- [ ] Tools registered: `bg-start`, `bg-status`, `bg-list`, `bg-kill`; descriptions document
       no-stdin, session-scoped lifetime, and truncation limits; no stdin/steer surface exists.
 - [ ] stdout and stderr captured separately and completely (in-memory tail + spill file);
       `/ps` detail can inspect both, read-only, scrollable, ANSI-sanitized, live-tailing.
@@ -896,7 +896,7 @@ tricks; they exist on any machine running pi)
 - [ ] `session_shutdown` (quit/reload/new/resume/fork) kills all processes within bounded
       time via `runtime.dispose()`; no orphans; no messages sent during teardown.
 - [ ] Completed entries retained (≤ MAX_TRACKED, pruned oldest-settled) and visible in
-      `bg_list` + `/ps`; running entries never pruned.
+      `bg-list` + `/ps`; running entries never pruned.
 - [ ] Concurrency cap enforced race-free; ids are `bt-N`; cwd resolved against `ctx.cwd` and
       validated; timestamps and elapsed rendering consistent with subagents.
 - [ ] Code style: model strings in `prompt.ts`, Effect only in the async core, plain TS

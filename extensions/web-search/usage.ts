@@ -10,11 +10,6 @@ import {
 } from "../shared/dashboard-state.ts";
 import { withHerdrBlocked } from "../shared/herdr.ts";
 
-const FIRECRAWL_TOOL_NAMES = new Set([
-  "firecrawl_search",
-  "firecrawl_scrape",
-  "firecrawl_crawl",
-]);
 const FIRECRAWL_BUDGET_ENTRY = "firecrawl-budget";
 const DEFAULT_SEARCH_LIMIT = 5;
 const DEFAULT_CRAWL_LIMIT = 5;
@@ -25,6 +20,31 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+/**
+ * Maps a tool call to the Firecrawl operation it spends credits on, or
+ * undefined for calls that never touch Firecrawl. web-search and web-fetch
+ * default to Exa and only spend (and reserve) credits when the model
+ * explicitly requests backend "firecrawl"; web-crawl is always Firecrawl.
+ * Legacy persisted names remain recognized for session restoration.
+ */
+export function firecrawlOperation(toolName: string, input: unknown) {
+  switch (toolName) {
+    case "firecrawl_search":
+      return "search";
+    case "firecrawl_scrape":
+      return "scrape";
+    case "web-crawl":
+    case "firecrawl_crawl":
+      return "crawl";
+    case "web-search":
+      return record(input)?.backend === "firecrawl" ? "search" : undefined;
+    case "web-fetch":
+      return record(input)?.backend === "firecrawl" ? "scrape" : undefined;
+    default:
+      return undefined;
+  }
 }
 
 function creditValue(value: unknown) {
@@ -39,15 +59,16 @@ function limitValue(input: unknown, fallback: number) {
 }
 
 export function estimatedCreditsForCall(toolName: string, input: unknown) {
-  if (toolName === "firecrawl_search") {
+  const operation = firecrawlOperation(toolName, input);
+  if (operation === "search") {
     const limit = limitValue(input, DEFAULT_SEARCH_LIMIT);
     const searchCredits = Math.ceil(limit / 10) * 2;
     return record(input)?.scrapeResults === true
       ? searchCredits + limit
       : searchCredits;
   }
-  if (toolName === "firecrawl_scrape") return 1;
-  if (toolName === "firecrawl_crawl") {
+  if (operation === "scrape") return 1;
+  if (operation === "crawl") {
     return limitValue(input, DEFAULT_CRAWL_LIMIT);
   }
   return 0;
@@ -96,7 +117,8 @@ export function creditsForFirecrawlResult(
   input: unknown = {},
   isError = false,
 ) {
-  if (!FIRECRAWL_TOOL_NAMES.has(toolName)) return 0;
+  const operation = firecrawlOperation(toolName, input);
+  if (!operation) return 0;
 
   const result = record(details);
   if (result?.localCacheHit === true || result?.localBudgetBlocked === true) {
@@ -104,10 +126,10 @@ export function creditsForFirecrawlResult(
   }
   if (isError) return estimatedCreditsForCall(toolName, input);
 
-  if (toolName === "firecrawl_search") {
+  if (operation === "search") {
     return searchCredits(details, input);
   }
-  if (toolName === "firecrawl_crawl") {
+  if (operation === "crawl") {
     return (
       creditValue(result?.creditsUsed) ??
       estimatedCreditsForCall(toolName, input)
@@ -135,7 +157,7 @@ function toolCallInputs(entries: readonly SessionEntry[]) {
         call?.type === "toolCall" &&
         typeof call.id === "string" &&
         typeof call.name === "string" &&
-        FIRECRAWL_TOOL_NAMES.has(call.name)
+        firecrawlOperation(call.name, call.arguments) !== undefined
       ) {
         inputs.set(call.id, call.arguments);
       }
@@ -156,8 +178,9 @@ export function usageForEntries(entries: readonly SessionEntry[]) {
 
     if (
       message.role !== "toolResult" ||
-      !FIRECRAWL_TOOL_NAMES.has(message.toolName) ||
-      toolCallIds.has(message.toolCallId)
+      toolCallIds.has(message.toolCallId) ||
+      firecrawlOperation(message.toolName, inputs.get(message.toolCallId)) ===
+        undefined
     ) {
       continue;
     }
@@ -195,7 +218,12 @@ function budgetSettingsForEntries(entries: readonly SessionEntry[]) {
   return { budget, unlimited };
 }
 
-export default function firecrawlUsage(pi: ExtensionAPI) {
+/**
+ * Tracks Firecrawl session credits: reserves in-flight calls against the
+ * budget, asks for approval on overruns, and publishes usage for the
+ * dashboard. Exa-backed calls are free and never gated here.
+ */
+export function registerUsageTracking(pi: ExtensionAPI) {
   let creditsUsed = 0;
   let budget = DEFAULT_FIRECRAWL_BUDGET;
   let unlimited = false;
@@ -230,7 +258,7 @@ export default function firecrawlUsage(pi: ExtensionAPI) {
   pi.on("session_tree", (_event, ctx) => restore(ctx));
 
   pi.on("tool_call", async (event, ctx) => {
-    if (!FIRECRAWL_TOOL_NAMES.has(event.toolName)) return;
+    if (firecrawlOperation(event.toolName, event.input) === undefined) return;
 
     const estimate = estimatedCreditsForCall(event.toolName, event.input);
     const reserved = [...reservations.values()].reduce(
@@ -281,7 +309,7 @@ export default function firecrawlUsage(pi: ExtensionAPI) {
 
   pi.on("tool_result", (event) => {
     reservations.delete(event.toolCallId);
-    if (!FIRECRAWL_TOOL_NAMES.has(event.toolName)) return;
+    if (firecrawlOperation(event.toolName, event.input) === undefined) return;
 
     if (blockedToolCallIds.delete(event.toolCallId)) {
       toolCallIds.add(event.toolCallId);

@@ -9,9 +9,9 @@ import {
 import { formatElapsed, formatExit, type TerminalSnapshot } from "./domain.ts";
 import { MAX_RUNNING, type KillResult } from "./manager.ts";
 
-/** bg_status stdout tail. */
+/** bg-status stdout tail. */
 export const STATUS_STDOUT_MAX = 16 * 1024;
-/** bg_status stderr tail. */
+/** bg-status stderr tail. */
 export const STATUS_STDERR_MAX = 8 * 1024;
 /** Completion follow-up stdout tail. Keep this concise; /ps has the detailed view. */
 export const RESULT_STDOUT_MAX = 8 * 1024;
@@ -25,7 +25,7 @@ const RESULT_STDERR_MAX_LINES = 20;
 export const BG_START_TOOL_DESCRIPTION =
   "Start a long-running shell command as a background terminal (executed via the platform shell — sh -c on POSIX, cmd.exe /d /s /c on Windows). " +
   "Fire-and-forget: this returns immediately with an id, and you get a message with the final output when the process exits. " +
-  "The process receives NO stdin (immediate EOF) and there is no way to send input later — interactive commands will not work; use bg_kill to stop a stuck one. " +
+  "The process receives NO stdin (immediate EOF) and there is no way to send input later — interactive commands will not work; use bg-kill to stop a stuck one. " +
   `Terminals are session-scoped: they are killed when the session ends or reloads. Output shown to you is tail-truncated (stdout ${formatSize(STATUS_STDOUT_MAX)}, stderr ${formatSize(STATUS_STDERR_MAX)}); the full logs are captured to files and in the /ps viewer. ` +
   `Max ${MAX_RUNNING} background terminals can run at once.`;
 
@@ -33,9 +33,9 @@ export const BG_START_PROMPT_SNIPPET =
   "Run a long-lived shell command in the background (dev servers, builds, watchers); output is captured and you're notified on exit";
 
 export const BG_START_PROMPT_GUIDELINES = [
-  "Use bg_start for commands expected to run long or indefinitely (servers, watch modes, long builds); use the regular bash tool for quick commands.",
-  "bg_start processes receive no stdin — never start a command that requires interactive input.",
-  "After bg_start, keep working; the exit result arrives automatically. Use bg_status only when you need current output before continuing.",
+  "Use bg-start for commands expected to run long or indefinitely (servers, watch modes, long builds); use the regular bash tool for quick commands.",
+  "bg-start processes receive no stdin — never start a command that requires interactive input.",
+  "After bg-start, keep working; the exit result arrives automatically. Use bg-status only when you need current output before continuing.",
 ];
 
 export const BG_START_PARAMETER_DESCRIPTIONS = {
@@ -66,7 +66,7 @@ export function buildStartResult(snap: TerminalSnapshot) {
   return (
     `Started background terminal ${snap.id} "${snap.title}" (pid ${snap.pid ?? "?"}, ${snap.cwd}).\n` +
     `It runs in the background with no stdin. You'll get a message when it exits, ` +
-    `or use bg_status(id: "${snap.id}") to peek, bg_kill to stop it, bg_list to see all.`
+    `or use bg-status(id: "${snap.id}") to peek, bg-kill to stop it, bg-list to see all.`
   );
 }
 
