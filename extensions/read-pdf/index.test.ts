@@ -1,5 +1,7 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Effect } from "effect";
 import {
   createBoundedPreview,
   formatExtractedPages,
@@ -12,6 +14,7 @@ import {
   truncateByCharacters,
   validateResolvedAddresses,
 } from "./index.ts";
+import { PdfProcessTimeoutError, runPdfCommand } from "./process.ts";
 
 test("uses the kebab-case first-party tool name without a legacy alias", () => {
   assert.equal(READ_PDF_TOOL_NAME, "read-pdf");
@@ -126,6 +129,59 @@ test("accepts only credential-free HTTP(S) URLs with public literal hosts", () =
     /not public/,
   );
   assert.throws(() => parseRemotePdfUrl("http://[::1]/a.pdf"), /not public/);
+});
+
+test("runs Poppler-style child processes through the Effect runtime", async () => {
+  const output = await Effect.runPromise(
+    runPdfCommand({
+      command: process.execPath,
+      args: ["-e", 'process.stdout.write("pdf output")'],
+      maxStdoutBytes: 1_024,
+      timeoutMs: 5_000,
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  assert.equal(output, "pdf output");
+});
+
+test("bounds child processes with a typed timeout", async () => {
+  const error = await Effect.runPromise(
+    Effect.flip(
+      runPdfCommand({
+        command: process.execPath,
+        args: ["-e", "setInterval(() => undefined, 1_000)"],
+        maxStdoutBytes: 1_024,
+        timeoutMs: 25,
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  assert.ok(error instanceof PdfProcessTimeoutError);
+  assert.match(error.message, /timed out after 0\.025 seconds/);
+});
+
+test("cancelling child processes also removes their timeout", async () => {
+  const controller = new AbortController();
+  const timeoutCount = () =>
+    process.getActiveResourcesInfo().filter((type) => type === "Timeout")
+      .length;
+  const before = timeoutCount();
+  const running = Effect.runPromise(
+    runPdfCommand({
+      command: process.execPath,
+      args: ["-e", "setInterval(() => undefined, 1_000)"],
+      maxStdoutBytes: 1_024,
+      timeoutMs: 120_000,
+    }).pipe(Effect.provide(NodeServices.layer)),
+    { signal: controller.signal },
+  );
+
+  await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  controller.abort();
+  await assert.rejects(running);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(timeoutCount(), before);
 });
 
 test("rejects private and special DNS answers", () => {

@@ -5,8 +5,9 @@ import {
   truncateHead,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Cause, Data, Effect, Exit, ManagedRuntime } from "effect";
 import { Type } from "typebox";
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { createReadStream, existsSync } from "node:fs";
@@ -26,9 +27,11 @@ export {
 } from "../shared/public-url.ts";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import {
+  PdfProcessError,
+  PdfProcessTimeoutError,
+  runPdfCommand,
+} from "./process.ts";
 
 export const READ_PDF_TOOL_NAME = "read-pdf";
 
@@ -38,9 +41,23 @@ const MAX_MAX_CHARS = 500_000;
 const MAX_MAX_PAGES = 1_000;
 const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 30_000;
+const POPPLER_PROBE_TIMEOUT_MS = 5_000;
+const PDFINFO_TIMEOUT_MS = 30_000;
+const PDFTOTEXT_TIMEOUT_MS = 60_000;
 const MAX_REDIRECTS = 5;
 
+class PdfError extends Data.TaggedError("PdfError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
 type PageRange = { from: number; to: number };
+
+type PdfSource = {
+  file: string;
+  source: string;
+  cleanupDir?: string;
+};
 
 type PdfMetadata = {
   title?: string;
@@ -201,26 +218,37 @@ export function parseRemotePdfUrl(input: string): URL | undefined {
   return parsePublicHttpUrl(input, "PDF URL");
 }
 
-async function commandExists(command: string, signal?: AbortSignal) {
-  try {
-    await execFileAsync("/usr/bin/env", ["sh", "-c", `command -v ${command}`], {
-      signal,
-    });
-    return true;
-  } catch {
-    return false;
-  }
+function probePoppler(command: "pdfinfo" | "pdftotext") {
+  return runPdfCommand({
+    command,
+    args: ["-v"],
+    maxStdoutBytes: 64 * 1024,
+    timeoutMs: POPPLER_PROBE_TIMEOUT_MS,
+  }).pipe(
+    Effect.as(true),
+    Effect.catch(() => Effect.succeed(false)),
+  );
 }
 
-async function ensurePoppler(signal?: AbortSignal) {
-  const missing: string[] = [];
-  if (!(await commandExists("pdfinfo", signal))) missing.push("pdfinfo");
-  if (!(await commandExists("pdftotext", signal))) missing.push("pdftotext");
-  if (missing.length) {
-    throw new Error(
-      `Missing PDF tools: ${missing.join(", ")}. Install Poppler, then reload Pi. macOS: brew install poppler. Debian/Ubuntu: sudo apt-get install poppler-utils.`,
+function ensurePoppler() {
+  return Effect.gen(function* () {
+    const available = yield* Effect.all(
+      {
+        pdfinfo: probePoppler("pdfinfo"),
+        pdftotext: probePoppler("pdftotext"),
+      },
+      { concurrency: "unbounded" },
     );
-  }
+    const missing = [
+      available.pdfinfo ? undefined : "pdfinfo",
+      available.pdftotext ? undefined : "pdftotext",
+    ].filter((command): command is string => command !== undefined);
+    if (missing.length > 0) {
+      return yield* new PdfError({
+        message: `Missing PDF tools: ${missing.join(", ")}. Install Poppler, then reload Pi. macOS: brew install poppler. Debian/Ubuntu: sudo apt-get install poppler-utils.`,
+      });
+    }
+  });
 }
 
 async function requestUrl(
@@ -295,11 +323,23 @@ async function requestUrl(
   return { response, finalUrl: url };
 }
 
-async function downloadPdf(url: URL, signal?: AbortSignal) {
+async function downloadPdf(url: URL, signal: AbortSignal) {
   const timeoutSignal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
-  const downloadSignal = signal
-    ? AbortSignal.any([signal, timeoutSignal])
-    : timeoutSignal;
+  const downloadSignal = AbortSignal.any([signal, timeoutSignal]);
+  try {
+    return await downloadPdfWithSignal(url, downloadSignal);
+  } catch (error) {
+    if (timeoutSignal.aborted && !signal.aborted) {
+      throw new Error(
+        `PDF download timed out after ${DOWNLOAD_TIMEOUT_MS / 1_000} seconds.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+async function downloadPdfWithSignal(url: URL, downloadSignal: AbortSignal) {
   const { response, finalUrl } = await requestUrl(url, downloadSignal);
 
   const contentLength = response.headers["content-length"];
@@ -342,6 +382,59 @@ async function downloadPdf(url: URL, signal?: AbortSignal) {
     await rm(dir, { recursive: true, force: true });
     throw error;
   }
+}
+
+function pdfError(cause: unknown) {
+  return cause instanceof PdfError ||
+    cause instanceof PdfProcessError ||
+    cause instanceof PdfProcessTimeoutError
+    ? cause
+    : new PdfError({
+        message: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      });
+}
+
+function tryPdf<A>(tryValue: () => A) {
+  return Effect.try({ try: tryValue, catch: pdfError });
+}
+
+function tryPdfPromise<A>(tryValue: (signal: AbortSignal) => Promise<A>) {
+  return Effect.tryPromise({ try: tryValue, catch: pdfError });
+}
+
+function acquirePdfSource(
+  remoteUrl: URL | undefined,
+  inputPath: string,
+  cwd: string,
+) {
+  if (!remoteUrl) {
+    return tryPdf(() => {
+      const file = resolveLocalPath(cwd, inputPath);
+      if (!existsSync(file)) throw new Error(`PDF not found: ${file}`);
+      return { file, source: file } satisfies PdfSource;
+    });
+  }
+
+  return Effect.acquireRelease(
+    tryPdfPromise((signal) => downloadPdf(remoteUrl, signal)).pipe(
+      Effect.map(
+        (downloaded) =>
+          ({
+            file: downloaded.file,
+            source: downloaded.finalUrl,
+            cleanupDir: downloaded.cleanupDir,
+          }) satisfies PdfSource,
+      ),
+    ),
+    ({ cleanupDir }) =>
+      cleanupDir
+        ? Effect.tryPromise({
+            try: () => rm(cleanupDir, { recursive: true, force: true }),
+            catch: pdfError,
+          }).pipe(Effect.orDie)
+        : Effect.void,
+  );
 }
 
 async function assertPdf(file: string) {
@@ -427,21 +520,17 @@ async function boundOutput(text: string, maxChars: number) {
   };
 }
 
-async function extractRange(
-  file: string,
-  range: PageRange,
-  layout: boolean,
-  signal?: AbortSignal,
-) {
+function extractRange(file: string, range: PageRange, layout: boolean) {
   const args = ["-enc", "UTF-8"];
   if (layout) args.push("-layout");
   args.push("-f", String(range.from), "-l", String(range.to), file, "-");
 
-  const { stdout } = await execFileAsync("pdftotext", args, {
-    maxBuffer: 32 * 1024 * 1024,
-    signal,
+  return runPdfCommand({
+    command: "pdftotext",
+    args,
+    maxStdoutBytes: 32 * 1024 * 1024,
+    timeoutMs: PDFTOTEXT_TIMEOUT_MS,
   });
-  return String(stdout);
 }
 
 function rangeLabel(range: PageRange) {
@@ -462,7 +551,16 @@ function metadataHeader(metadata: PdfMetadata) {
   ].filter((line): line is string => line !== undefined);
 }
 
+function createPdfRuntime() {
+  return ManagedRuntime.make(NodeServices.layer);
+}
+
+type PdfRuntime = ReturnType<typeof createPdfRuntime>;
+
 export default function readPdfExtension(pi: ExtensionAPI) {
+  let runtime: PdfRuntime | undefined;
+  const getRuntime = () => (runtime ??= createPdfRuntime());
+
   pi.registerTool({
     name: READ_PDF_TOOL_NAME,
     label: "Read PDF",
@@ -504,56 +602,58 @@ export default function readPdfExtension(pi: ExtensionAPI) {
       ),
     }),
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      await ensurePoppler(signal);
+      const program = Effect.gen(function* () {
+        yield* ensurePoppler();
 
-      const maxChars = params.maxChars ?? DEFAULT_MAX_CHARS;
-      const maxPages = params.maxPages ?? DEFAULT_MAX_PAGES;
-      const layout = params.layout ?? true;
-      const ranges = parsePages(params.pages);
-      const remoteUrl = parseRemotePdfUrl(params.path);
-      let cleanupDir: string | undefined;
+        const maxChars = params.maxChars ?? DEFAULT_MAX_CHARS;
+        const maxPages = params.maxPages ?? DEFAULT_MAX_PAGES;
+        const layout = params.layout ?? true;
+        const ranges = yield* tryPdf(() => parsePages(params.pages));
+        const remoteUrl = yield* tryPdf(() => parseRemotePdfUrl(params.path));
 
-      try {
-        onUpdate?.({
-          content: [{ type: "text", text: `Preparing PDF: ${params.path}` }],
-          details: {},
+        yield* Effect.sync(() =>
+          onUpdate?.({
+            content: [{ type: "text", text: `Preparing PDF: ${params.path}` }],
+            details: {},
+          }),
+        );
+
+        const { file, source } = yield* acquirePdfSource(
+          remoteUrl,
+          params.path,
+          ctx.cwd,
+        );
+        yield* tryPdfPromise(() => assertPdf(file));
+
+        const infoOutput = yield* runPdfCommand({
+          command: "pdfinfo",
+          args: [file],
+          maxStdoutBytes: 2 * 1024 * 1024,
+          timeoutMs: PDFINFO_TIMEOUT_MS,
         });
-
-        let file: string;
-        let source: string;
-        if (remoteUrl) {
-          const downloaded = await downloadPdf(remoteUrl, signal);
-          file = downloaded.file;
-          source = downloaded.finalUrl;
-          cleanupDir = downloaded.cleanupDir;
-        } else {
-          file = resolveLocalPath(ctx.cwd, params.path);
-          source = file;
-          if (!existsSync(file)) throw new Error(`PDF not found: ${file}`);
+        const metadata = parsePdfInfo(infoOutput);
+        const pageCount = metadata.pageCount;
+        if (!pageCount) {
+          return yield* new PdfError({
+            message: "pdfinfo did not return a valid page count.",
+          });
         }
-
-        await assertPdf(file);
-
-        const { stdout: infoOutput } = await execFileAsync("pdfinfo", [file], {
-          maxBuffer: 2 * 1024 * 1024,
-          signal,
-        });
-        const metadata = parsePdfInfo(String(infoOutput));
-        if (!metadata.pageCount) {
-          throw new Error("pdfinfo did not return a valid page count.");
-        }
-        const selection = selectPages(ranges, metadata.pageCount, maxPages);
+        const selection = yield* tryPdf(() =>
+          selectPages(ranges, pageCount, maxPages),
+        );
         const groups = contiguousPageGroups(selection.pages);
         const extractedPages: ReturnType<typeof formatExtractedPages> = [];
 
         for (const group of groups) {
-          onUpdate?.({
-            content: [
-              { type: "text", text: `Extracting ${rangeLabel(group)}...` },
-            ],
-            details: {},
-          });
-          const text = await extractRange(file, group, layout, signal);
+          yield* Effect.sync(() =>
+            onUpdate?.({
+              content: [
+                { type: "text", text: `Extracting ${rangeLabel(group)}...` },
+              ],
+              details: {},
+            }),
+          );
+          const text = yield* extractRange(file, group, layout);
           const pages = Array.from(
             { length: group.to - group.from + 1 },
             (_, index) => group.from + index,
@@ -561,7 +661,9 @@ export default function readPdfExtension(pi: ExtensionAPI) {
           extractedPages.push(...formatExtractedPages(text, pages));
         }
 
-        const sha256 = await shortSha256(file, signal);
+        const sha256 = yield* tryPdfPromise((effectSignal) =>
+          shortSha256(file, effectSignal),
+        );
         const budgetNotice = selection.budgetTruncated
           ? `> [Page budget reached: extracted ${selection.pages.length} of ${selection.requestedPageCount} requested pages. Increase maxPages or request a narrower range to continue.]`
           : undefined;
@@ -594,9 +696,11 @@ export default function readPdfExtension(pi: ExtensionAPI) {
           .filter((part): part is string => part !== undefined)
           .join("\n");
 
-        const result = await boundOutput(combined, maxChars);
+        const result = yield* tryPdfPromise(() =>
+          boundOutput(combined, maxChars),
+        );
         return {
-          content: [{ type: "text", text: result.text }],
+          content: [{ type: "text" as const, text: result.text }],
           details: {
             metadata,
             pageCount: metadata.pageCount,
@@ -618,9 +722,24 @@ export default function readPdfExtension(pi: ExtensionAPI) {
               : undefined,
           },
         };
-      } finally {
-        if (cleanupDir) await rm(cleanupDir, { recursive: true, force: true });
+      }).pipe(Effect.scoped);
+
+      const exit = await getRuntime().runPromiseExit(
+        program,
+        signal ? { signal } : undefined,
+      );
+      if (Exit.isSuccess(exit)) return exit.value;
+      if (signal?.aborted || Cause.hasInterruptsOnly(exit.cause)) {
+        throw new Error("PDF extraction cancelled.");
       }
+      const [first] = Cause.prettyErrors(exit.cause);
+      throw new Error(first?.message ?? Cause.pretty(exit.cause));
     },
+  });
+
+  pi.on("session_shutdown", async () => {
+    const closing = runtime;
+    runtime = undefined;
+    await closing?.dispose();
   });
 }
