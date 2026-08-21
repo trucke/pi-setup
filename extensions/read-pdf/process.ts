@@ -1,7 +1,8 @@
-import { Data, Effect, Stream } from "effect";
+import { Data, Effect, Result, Stream } from "effect";
 import { ChildProcess } from "effect/unstable/process";
 
 const MAX_STDERR_BYTES = 64 * 1024;
+const DEFAULT_FORCE_KILL_AFTER_MS = 5_000;
 
 export class PdfProcessError extends Data.TaggedError("PdfProcessError")<{
   readonly message: string;
@@ -78,6 +79,8 @@ export interface PdfCommandOptions {
   readonly args: readonly string[];
   readonly maxStdoutBytes: number;
   readonly timeoutMs: number;
+  /** Internal/test override for scoped SIGTERM-to-SIGKILL escalation. */
+  readonly forceKillAfterMs?: number;
 }
 
 /** Runs one bounded Poppler process whose lifetime follows the surrounding fiber. */
@@ -87,8 +90,26 @@ export function runPdfCommand(options: PdfCommandOptions) {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
-      forceKillAfter: "5 seconds",
     });
+    yield* Effect.addFinalizer(() =>
+      process.isRunning.pipe(
+        Effect.flatMap((running) => {
+          if (!running) return Effect.void;
+          return process.kill({ killSignal: "SIGTERM" }).pipe(
+            Effect.timeout(
+              options.forceKillAfterMs ?? DEFAULT_FORCE_KILL_AFTER_MS,
+            ),
+            Effect.result,
+            Effect.flatMap((exit) =>
+              Result.isFailure(exit)
+                ? process.kill({ killSignal: "SIGKILL" }).pipe(Effect.ignore)
+                : Effect.void,
+            ),
+          );
+        }),
+        Effect.ignore,
+      ),
+    );
     const result = yield* Effect.all(
       {
         stdout: collectBounded(

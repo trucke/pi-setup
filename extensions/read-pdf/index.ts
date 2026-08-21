@@ -432,7 +432,7 @@ function acquirePdfSource(
         ? Effect.tryPromise({
             try: () => rm(cleanupDir, { recursive: true, force: true }),
             catch: pdfError,
-          }).pipe(Effect.orDie)
+          }).pipe(Effect.ignore)
         : Effect.void,
   );
 }

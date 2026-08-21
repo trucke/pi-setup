@@ -129,6 +129,10 @@ test("accepts only credential-free HTTP(S) URLs with public literal hosts", () =
     /not public/,
   );
   assert.throws(() => parseRemotePdfUrl("http://[::1]/a.pdf"), /not public/);
+  assert.equal(isPublicIpAddress("2002:7f00:1::"), false);
+  assert.equal(isPublicIpAddress("64:ff9b::a00:1"), false);
+  assert.equal(isPublicIpAddress("2002:808:808::"), true);
+  assert.equal(isPublicIpAddress("64:ff9b::808:808"), true);
 });
 
 test("runs Poppler-style child processes through the Effect runtime", async () => {
@@ -149,9 +153,13 @@ test("bounds child processes with a typed timeout", async () => {
     Effect.flip(
       runPdfCommand({
         command: process.execPath,
-        args: ["-e", "setInterval(() => undefined, 1_000)"],
+        args: [
+          "-e",
+          'process.on("SIGTERM", () => {}); setInterval(() => undefined, 1_000)',
+        ],
         maxStdoutBytes: 1_024,
         timeoutMs: 25,
+        forceKillAfterMs: 25,
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );

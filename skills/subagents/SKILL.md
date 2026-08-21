@@ -5,65 +5,84 @@ description: invoke this skill when the user asks you to use subagents
 
 # Subagents
 
-Each subagent is headless, has its own context window, cannot see the parent conversation, cannot ask the user or spawn more subagents. Give every child a self-contained prompt with paths, constraints, and the expected report.
+Each subagent is headless, has its own context window, cannot see the parent conversation, and cannot ask the user. Give every child a self-contained prompt with paths, constraints, and the expected report.
 
-## Pi Harness
+At most four runs can be active. The cap is fail-fast; there is no hidden queue. Results return automatically, so continue useful parent work instead of immediately waiting.
 
-**Harness:** `pi`
-**Prompt nicknames:** “pi”, “pi agent”, “pi subagent”
-**Best default:** Use when the user does not request another harness. It inherits the parent model and thinking level when `model` or `reasoning_effort` is omitted.
+## Profiles
 
-Do not use models from the Anthropic provider even if one appears in the model list.
+Prefer a profile when its role fits:
 
-Pi can use any model shown by `pi --list-models`. Prefer `provider/model-id`; a bare model id only works when unambiguous. Common picks in this environment:
+| Profile    | Purpose                                        | Candidate order                                                                                    |
+| ---------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `scout`    | Inspect and map a repository without edits     | Pi · GPT-5.6 Luna · xhigh; Pi · DeepSeek V4 Pro · high                                             |
+| `worker`   | Implement focused changes                      | Claude Code · Fable 5 · medium; Pi · Kimi K3 · max; Pi · GPT-5.6 Sol · high                        |
+| `reviewer` | Review changes without modifying or commenting | Codex · GPT-5.6 Sol · high · native review; Claude Code · Fable 5 · high · direct read-only review |
+| `oracle`   | Deep technical analysis and recommendations    | Claude Code · Fable 5 · high; Pi · GPT-5.6 Sol · high                                              |
 
-| Model                            | Recommended effort |
-| -------------------------------- | ------------------ |
-| inherited parent model (default) | inherited          |
-| `openai-codex/gpt-5.6-sol`       | `high`             |
-| `openai-codex/gpt-5.6-terra`     | `high`             |
-| `opencode/claude-fable-5`        | `medium`           |
+Profile fallbacks are explicit and occur only before meaningful model or tool activity. Typed asynchronous startup rejection can advance to the next candidate under the same run id; every attempt is recorded. Fallback never launches a second writer after a workspace may have been mutated.
 
-**Thinking budgets:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. These map directly to pi thinking levels.
+Scout and reviewer inspect-only behavior is prompt guidance, not a sandbox boundary. Every profile still has the harness's normal host permissions, so use only trusted working directories. Codex refuses targets Pi marks untrusted; Pi and Claude suppress project-scoped configuration through their native trust controls.
 
-## Claude Code Harness
+Example:
 
-**Harness:** `claude`
-**Prompt nicknames:** “claude”, “Claude Code”, “claude agent”, “claude subagent”, "cc"
-**Best default:** use the latest fable model on high reasoning. Do not default to anything else, if the user does not specify, use fable.
+```text
+subagent-spawn({
+  prompt: "Inspect the parser and identify the likely race. Report paths and evidence.",
+  name: "parser race scout",
+  profile: "scout",
+  workingDir: "/trusted/repo"
+})
+```
 
-| Model hint | Model               | Recommended effort |
-| ---------- | ------------------- | ------------------ |
-| `fable`    | latest Claude Fable | `high`             |
+## Direct execution
 
-**Thinking budgets:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. The extension maps these to Claude thinking-token budgets: 0, 1,024, 4,096, 10,000, 16,000, 32,000, and 63,999 tokens respectively.
+Use direct execution only when a specific harness/model is required. `profile` is mutually exclusive with `harness`, `model`, and `reasoningEffort`.
 
-Requires Claude Code to be installed and authenticated.
+```text
+subagent-spawn({
+  prompt: "Implement the prepared change and run focused tests.",
+  name: "implementation",
+  harness: "pi",
+  model: "openai-codex/gpt-5.6-sol",
+  reasoningEffort: "high",
+  workingDir: "/trusted/repo"
+})
+```
 
-## Codex Harness
+Harnesses:
 
-**Harness:** `codex`
-**Prompt nicknames:** “codex”, “Codex CLI”, “codex agent”, “codex subagent”
-**Best default:** `gpt-5.6-sol` with `high` effort for coding work. Do not use anything other than sol unless the user specifically asks for it.
+- `pi`: in-process Pi session; omitted model/effort inherit the parent in direct mode
+- `claude`: Claude Code; requires the installed CLI to be authenticated
+- `codex`: Codex app-server; requires `codex login`
 
-| Model           | Recommended effort |
-| --------------- | ------------------ |
-| `gpt-5.6-sol`   | `high`             |
-| `gpt-5.6-terra` | `high`             |
-| `gpt-5.6-luna`  | `high`             |
+Reasoning efforts follow:
 
-**Thinking budgets accepted by the extension:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Codex maps these to the nearest effort supported by the selected model; `off`/`minimal` become `minimal`, while `max` becomes the highest extension-supported Codex effort.
+```text
+off < minimal < low < medium < high < xhigh < max
+```
 
-Requires the Codex CLI to be installed and authenticated.
+## Reviewer targets
 
-## Spawn and Manage
+The reviewer defaults to uncommitted changes. Other targets are explicit:
 
-Call `subagent-spawn` with a complete `prompt`, short `name`, chosen `harness`, and optional `working_dir`, `model`, and `reasoning_effort`. At most four subagents run concurrently.
+```text
+reviewTarget: { type: "baseBranch", branch: "main" }
+reviewTarget: { type: "commit", sha: "<sha>" }
+reviewTarget: { type: "pullRequest", number: 123 }
+```
 
-- `subagent-check({ id })`: peek without blocking.
-- `subagent-list()`: list all runs.
-- `subagent-wait({ ids })`: block only when results are required to proceed.
-- `subagent-cancel({ ids })`: stop runs while preserving partial transcripts.
-- `/subagents`: inspect or take over a run interactively.
+Reviews do not post comments or apply fixes by default.
 
-Results return automatically. After spawning, continue useful parent work instead of immediately waiting.
+## Manage runs
+
+- `subagent-check({ id })`: factual liveness, current tools, usage, recovery, and recent output
+- `subagent-list()`: tracked/recovered runs and backend readiness
+- `subagent-send({ id, message })`: steer or continue; returns `delivered`, `queued`, or `unsupported`
+- `subagent-wait({ ids, mode: "all" | "any", timeoutMs? })`: wait without cancelling work on timeout or abort
+- `subagent-cancel({ ids })`: cancel while preserving partial output and artifacts
+- `subagent-resume({ id, prompt, mode? })`: explicitly resume a recovered run; use `mode: "continuation"` to bypass a stale native session id; recovery is never automatic
+- `/subagents`: inspect or take over a run interactively
+- `/btw`: ask a one-off side question outside model-facing tooling
+
+Durable receipts, snapshots, normalized JSONL transcripts, and Markdown output are stored in Pi-managed user state and rediscovered only for the same parent Pi session.

@@ -31,7 +31,8 @@ function statusGlyph(snap: SubagentSnapshot, theme: Theme): string {
       return theme.fg("warning", "■");
     case "done":
       return theme.fg("success", "■");
-    case "error":
+    case "failed":
+    case "cancelled":
       return theme.fg("error", "■");
   }
 }
@@ -42,8 +43,10 @@ function statusWord(snap: SubagentSnapshot, theme: Theme): string {
       return theme.fg("warning", "running");
     case "done":
       return theme.fg("success", "done");
-    case "error":
+    case "failed":
       return theme.fg("error", "failed");
+    case "cancelled":
+      return theme.fg("error", "cancelled");
   }
 }
 

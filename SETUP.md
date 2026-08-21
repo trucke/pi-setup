@@ -86,6 +86,21 @@ Firecrawl-backed retrieval is credit-aware:
 Exa-backed calls (the default for `web-search` and `web-fetch`) never reserve
 or consume Firecrawl credits.
 
+## Subagents
+
+The subagent extension supports direct Pi, Claude Code, and Codex runs plus
+release-pinned `scout`, `worker`, `reviewer`, and `oracle` profiles. Claude and
+Codex candidates require their CLIs on `PATH` and authenticated with
+`claude auth` and `codex login` respectively. Profiles may advance to their
+next declared candidate after a typed startup rejection, but only before any
+assistant or tool activity; the logical run id and attempt history are preserved.
+
+Runs are capped at four concurrently. Receipts, bounded snapshots, normalized
+JSONL transcripts, and Markdown output are stored under
+`~/.pi/agent/state/subagents/<run-id>/`. They are restored only for the same
+parent Pi session and are never resumed automatically; use `subagent-resume`
+explicitly. The newest 64 settled artifacts are retained; active-run artifacts are never pruned.
+
 ## Theme
 
 The package provides `github-dark-default`. Activate it in

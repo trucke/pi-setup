@@ -6,8 +6,9 @@ Personal [Pi](https://pi.dev/) package based on
 It packages the selected dashboard, Herdr-aware ask-user,
 background-terminal, file-search, PDF reader, consolidated web
 tools (Codex research plus Exa/Firecrawl search, fetch, and crawl with
-session credit tracking), and subagent extensions together with their
-companion skills and GitHub Dark theme. The dashboard's VCS status and
+session credit tracking), and profile-driven Pi/Claude/Codex subagents with
+durable recovery artifacts, together with their companion skills and GitHub
+Dark theme. The dashboard's VCS status and
 changed-files views prefer JJ repositories and fall back to Git.
 
 See [SETUP.md](./SETUP.md) for installation and service configuration.

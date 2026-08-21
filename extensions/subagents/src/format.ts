@@ -4,7 +4,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 
 export interface ContextUtilization {
   /** Current conversation context occupancy; undefined while unknown. */
-  tokens?: number | null;
+  contextTokens?: number | null;
   /** Capacity of the model currently serving the conversation. */
   contextWindow?: number | null;
 }
@@ -22,7 +22,7 @@ function usableCapacity(value: number | null | undefined) {
 }
 
 export function contextPercent(usage: ContextUtilization) {
-  const tokens = usableTokens(usage.tokens);
+  const tokens = usableTokens(usage.contextTokens);
   const capacity = usableCapacity(usage.contextWindow);
   if (tokens === undefined || capacity === undefined) return undefined;
   return Math.round(Math.min(100, Math.max(0, (tokens / capacity) * 100)));

@@ -6,7 +6,14 @@
  * ManagedRuntime.
  */
 
-import { Cause, Exit, Layer, ManagedRuntime, type Effect } from "effect";
+import {
+  Cause,
+  Exit,
+  Layer,
+  ManagedRuntime,
+  Result,
+  type Effect,
+} from "effect";
 import { BackendRegistry, type SubagentBackend } from "./backend.ts";
 import { claudeBackend } from "./backends/claude.ts";
 import { codexBackend } from "./backends/codex.ts";
@@ -47,6 +54,12 @@ export async function runTool<A, E>(
   if (Exit.isSuccess(exit)) return exit.value;
   if (Cause.hasInterruptsOnly(exit.cause)) {
     throw new Error(options.interruptMessage ?? "Operation was aborted.");
+  }
+  const typedFailure = Cause.findError(exit.cause);
+  if (Result.isSuccess(typedFailure)) {
+    const error = typedFailure.success;
+    if (error instanceof Error) throw error;
+    throw new Error(String(error));
   }
   const [first] = Cause.prettyErrors(exit.cause);
   throw new Error(first?.message ?? Cause.pretty(exit.cause));

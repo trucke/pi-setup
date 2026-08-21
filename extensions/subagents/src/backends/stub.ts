@@ -7,7 +7,7 @@
  *   seconds so streaming UI, wait, and the footer counters are observable;
  * - supports send() while running (queued-steer rendering) and while idle
  *   (fresh run);
- * - supports interrupt (RunSettled Interrupted -> status "error", matching v1);
+ * - supports interrupt (RunSettled Interrupted -> status "cancelled");
  * - fails the run when the prompt starts with "FAIL:" (error-path testing);
  * - appends every event to a JSONL "session file" in tmpdir so the
  *   "full transcript in session file" pointers resolve.
@@ -39,6 +39,11 @@ export interface StubProfile {
 
 const STUB_DIR = path.join(os.tmpdir(), "subagents-stub");
 let sessionCounter = 0;
+const activeStubSessions = new Set<string>();
+
+export function activeStubSessionCount() {
+  return activeStubSessions.size;
+}
 
 export function makeStubBackend(profile: StubProfile): SubagentBackend {
   return {
@@ -47,10 +52,28 @@ export function makeStubBackend(profile: StubProfile): SubagentBackend {
       steering: true,
       modelSelection: true,
       reasoningEffort: true,
+      nativeResume: false,
+      review: false,
     },
-    // Real impls probe binary-on-PATH / SDK import / credentials here.
-    available: Effect.succeed(true),
-    spawn: (task) => makeStubSession(profile, task),
+    readiness: Effect.succeed({
+      backend: profile.backend,
+      ready: true,
+      detail: "stub backend ready",
+    }),
+    spawn: (task) => {
+      if (task.prompt.includes(`DELAY_RETURN:${profile.backend}`)) {
+        return makeStubSession(profile, task).pipe(
+          Effect.flatMap((session) =>
+            Effect.sleep(Duration.millis(150)).pipe(Effect.as(session)),
+          ),
+        );
+      }
+      return task.prompt.includes(`DELAY_SPAWN:${profile.backend}`)
+        ? Effect.sleep(Duration.millis(150)).pipe(
+            Effect.andThen(makeStubSession(profile, task)),
+          )
+        : makeStubSession(profile, task);
+    },
   };
 }
 
@@ -91,6 +114,7 @@ const makeStubSession = (
       closed: false,
       /** True between the driver dequeuing a prompt and registering its turn fiber. */
       dispatching: false,
+      startupRejected: false,
     };
 
     const events = yield* Queue.make<SubagentEvent, Cause.Done>();
@@ -117,11 +141,36 @@ const makeStubSession = (
     const runTurn = (userText: string, turn: number) =>
       Effect.gen(function* () {
         yield* emit({ _tag: "RunStarted" });
+        const first = firstLine(userText);
         const failing = userText.trimStart().startsWith("FAIL:");
+        const markers = new Set(first.split(/\s+/));
+        const rejectBeforeActivity = markers.has(`REJECT:${profile.backend}`);
+        const rejectRace = markers.has(`REJECT_RACE:${profile.backend}`);
+        const rejectAfterActivity = markers.has(
+          `REJECT_AFTER_ACTIVITY:${profile.backend}`,
+        );
+        if (rejectBeforeActivity || rejectRace) {
+          state.startupRejected = true;
+          if (rejectRace) yield* pause;
+          yield* emit({
+            _tag: "RunRejected",
+            reason: "model_not_found",
+            message: `${profile.backend} rejected the requested model`,
+          });
+          return;
+        }
 
         const thinking = "Looking at the task and planning an approach...";
-        for (const delta of chunked(thinking, 16)) {
+        for (const [index, delta] of chunked(thinking, 16).entries()) {
           yield* emit({ _tag: "AssistantDelta", kind: "thinking", delta });
+          if (rejectAfterActivity && index === 0) {
+            yield* emit({
+              _tag: "RunRejected",
+              reason: "model_not_found",
+              message: `${profile.backend} rejected after activity`,
+            });
+            return;
+          }
           yield* pause;
         }
 
@@ -160,8 +209,12 @@ const makeStubSession = (
         });
         yield* emit({
           _tag: "UsageChanged",
-          tokens: Math.min(profile.contextWindow, 2400 * (turn + 1)),
-          contextWindow: profile.contextWindow,
+          usage: {
+            contextTokens: Math.min(profile.contextWindow, 2400 * (turn + 1)),
+            contextWindow: profile.contextWindow,
+            inputTokens: 2000 * (turn + 1),
+            outputTokens: 400 * (turn + 1),
+          },
         });
 
         if (failing) {
@@ -190,8 +243,15 @@ const makeStubSession = (
         });
         yield* emit({
           _tag: "UsageChanged",
-          tokens: Math.min(profile.contextWindow, 2400 * (turn + 1) + 900),
-          contextWindow: profile.contextWindow,
+          usage: {
+            contextTokens: Math.min(
+              profile.contextWindow,
+              2400 * (turn + 1) + 900,
+            ),
+            contextWindow: profile.contextWindow,
+            inputTokens: 2000 * (turn + 1),
+            outputTokens: 900 * (turn + 1),
+          },
         });
         yield* emit({
           _tag: "RunSettled",
@@ -233,10 +293,12 @@ const makeStubSession = (
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
         state.closed = true;
+        activeStubSessions.delete(sessionId);
         yield* Queue.end(inbox).pipe(Effect.ignore);
         yield* Queue.end(events).pipe(Effect.ignore);
       }),
     );
+    activeStubSessions.add(sessionId);
 
     const submit = (text: string) =>
       Effect.gen(function* () {
@@ -252,6 +314,9 @@ const makeStubSession = (
           yield* emit({ _tag: "QueueChanged", queued: queuedView() });
         }
         yield* Queue.offer(inbox, text);
+        return busy && profile.backend === "codex"
+          ? ("queued" as const)
+          : ("delivered" as const);
       });
 
     // Announce metadata, then kick off the initial run.
@@ -267,6 +332,9 @@ const makeStubSession = (
       events: Stream.fromQueue(events),
       send: submit,
       interrupt: Effect.gen(function* () {
+        // Real backends report startup rejection instead of a second terminal
+        // event. This marker reproduces cancel arriving just before that event.
+        if (state.startupRejected) return;
         // Drop queued prompts so interrupting cannot immediately start
         // another turn, then stop the active turn. A prompt may be mid-flight
         // between the driver dequeuing it and registering its fiber, so wait
@@ -276,15 +344,20 @@ const makeStubSession = (
         );
         state.pending = [];
         yield* emit({ _tag: "QueueChanged", queued: [] });
-        while (true) {
+        for (let attempt = 0; attempt < 50; attempt++) {
           const fiber = yield* Ref.get(activeTurn);
           if (fiber) {
-            yield* Fiber.interrupt(fiber);
+            // This backend is test-only. Signal cancellation without waiting
+            // for the scripted fiber's cleanup so manager race tests cannot
+            // deadlock on a cooperative interrupt acknowledgement.
+            yield* Effect.forkDetach(Fiber.interrupt(fiber));
+            yield* emit({
+              _tag: "RunSettled",
+              outcome: { _tag: "Interrupted" },
+            });
             return;
           }
           if (!state.dispatching) {
-            // No turn ever started. If we cancelled queued prompts, the run
-            // still needs a terminal event or it would look running forever.
             if (cleared.length > 0) {
               yield* emit({
                 _tag: "RunSettled",
@@ -295,6 +368,12 @@ const makeStubSession = (
           }
           yield* Effect.sleep(Duration.millis(5));
         }
+        // A test driver stuck in the dequeue/register window must still honor
+        // cancellation and terminate the manager wait deterministically.
+        yield* emit({
+          _tag: "RunSettled",
+          outcome: { _tag: "Interrupted" },
+        });
       }),
     } satisfies SubagentSession;
   });
