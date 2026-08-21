@@ -73,10 +73,24 @@ export function isPublicIpAddress(address: string) {
     fourth === 0 &&
     fifth === 0 &&
     sixth === 0xffff;
+  const embeddedIpv4 = (high: number, low: number) =>
+    `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
   if (isIpv4Mapped) {
-    return isPublicIpAddress(
-      `${parts[6] >> 8}.${parts[6] & 255}.${parts[7] >> 8}.${parts[7] & 255}`,
-    );
+    return isPublicIpAddress(embeddedIpv4(parts[6], parts[7]));
+  }
+  // 6to4 and the well-known NAT64 prefix can tunnel otherwise private IPv4.
+  if (first === 0x2002) {
+    return isPublicIpAddress(embeddedIpv4(second, third));
+  }
+  if (
+    first === 0x0064 &&
+    second === 0xff9b &&
+    third === 0 &&
+    fourth === 0 &&
+    fifth === 0 &&
+    sixth === 0
+  ) {
+    return isPublicIpAddress(embeddedIpv4(parts[6], parts[7]));
   }
 
   return !(

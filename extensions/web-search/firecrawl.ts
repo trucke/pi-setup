@@ -121,6 +121,14 @@ function pollCrawl(
           Effect.flatMap(() => Effect.suspend(() => pollCrawl(client, jobId))),
         );
       }
+      if (job.status !== "completed") {
+        return Effect.fail(
+          new FirecrawlError({
+            message: `Crawl job ${jobId} ended with status ${job.status}.`,
+            cause: job,
+          }),
+        );
+      }
       return job.next
         ? firecrawlRequest(() => client.getCrawlStatus(jobId))
         : Effect.succeed(job);

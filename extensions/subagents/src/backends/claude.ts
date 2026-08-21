@@ -9,6 +9,7 @@
  * and the normalized view consumed by the manager.
  */
 
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -40,7 +41,7 @@ const PREVIEW_MAX_LENGTH = 4_096;
 
 // --- Binary resolution --------------------------------------------------------
 
-let cachedClaudeBinary: string | null | undefined;
+let cachedClaudeBinary: string | undefined;
 
 function executable(file: string) {
   try {
@@ -52,12 +53,15 @@ function executable(file: string) {
 }
 
 /**
- * Resolve the Claude Code CLI once from PATH. The SDK can also run without
+ * Resolve the Claude Code CLI from PATH, reusing a still-executable positive match. The SDK can also run without
  * this (it bundles a CLI), but pointing it at the user's installed binary
  * keeps versions, settings, and login state consistent with their terminal.
  */
 function resolveClaudeBinary() {
-  if (cachedClaudeBinary !== undefined) return cachedClaudeBinary ?? undefined;
+  if (cachedClaudeBinary && executable(cachedClaudeBinary)) {
+    return cachedClaudeBinary;
+  }
+  cachedClaudeBinary = undefined;
   const names =
     process.platform === "win32"
       ? ["claude.exe", "claude.cmd", "claude"]
@@ -72,8 +76,49 @@ function resolveClaudeBinary() {
       }
     }
   }
-  cachedClaudeBinary = null;
   return undefined;
+}
+
+let readinessCache:
+  | {
+      readonly binary: string;
+      readonly expiresAt: number;
+      readonly value: boolean;
+    }
+  | undefined;
+
+function claudeAuthenticated(binary: string) {
+  if (
+    readinessCache &&
+    readinessCache.binary === binary &&
+    readinessCache.expiresAt > Date.now()
+  ) {
+    return Promise.resolve(readinessCache.value);
+  }
+  return new Promise<boolean>((resolve) => {
+    execFile(
+      binary,
+      ["auth", "status", "--json"],
+      { timeout: 5_000, maxBuffer: 64 * 1024 },
+      (error, stdout) => {
+        let ready = false;
+        if (!error) {
+          try {
+            ready =
+              (JSON.parse(stdout) as { loggedIn?: unknown }).loggedIn === true;
+          } catch {
+            ready = false;
+          }
+        }
+        readinessCache = {
+          binary,
+          expiresAt: Date.now() + 30_000,
+          value: ready,
+        };
+        resolve(ready);
+      },
+    );
+  });
 }
 
 // --- Streaming input ---------------------------------------------------------
@@ -137,21 +182,55 @@ class ClaudeInput implements AsyncIterable<SDKUserMessage> {
 
 // --- Model, effort, and transcript helpers ----------------------------------
 
-/**
- * Claude's deprecated-but-supported maxThinkingTokens is the closest match to
- * the shared numeric scale requested by this extension. Zero explicitly
- * disables extended thinking in the current SDK; an omitted effort leaves the
- * CLI default untouched.
- */
-const THINKING_BUDGETS = {
-  off: 0,
-  minimal: 1_024,
-  low: 4_096,
-  medium: 10_000,
-  high: 16_000,
-  xhigh: 32_000,
-  max: 63_999,
-} satisfies Record<ReasoningEffort, number>;
+/** Map the shared effort scale to the slugs accepted by the Agent SDK. */
+const CLAUDE_EFFORTS = {
+  off: "low",
+  minimal: "low",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
+  max: "max",
+} as const satisfies Record<
+  ReasoningEffort,
+  "low" | "medium" | "high" | "xhigh" | "max"
+>;
+
+export function claudeStartupRejection(
+  error: SDKAssistantMessage["error"],
+  contentBlockCount: number,
+) {
+  if (!error) return undefined;
+  // model_not_found is a request-level rejection even when the CLI renders a
+  // synthetic explanatory text block. Other errors with content may carry a
+  // partial model response, which the manager must treat as meaningful.
+  if (contentBlockCount > 0 && error !== "model_not_found") return undefined;
+  return {
+    _tag: "RunRejected" as const,
+    reason: error,
+    message: `Claude rejected the model request (${error}).`,
+  };
+}
+
+export function claudeCodeReviewPrompt(task: SpawnTask) {
+  const target = task.reviewTarget ?? { type: "uncommittedChanges" as const };
+  const targetInstructions =
+    target.type === "uncommittedChanges"
+      ? "Review only the current uncommitted and staged changes. Inspect `git diff` and `git diff --cached`."
+      : target.type === "baseBranch"
+        ? `Review the current branch relative to base branch ${JSON.stringify(target.branch)}. Inspect the merge-base diff (for example, \`git diff ${target.branch}...HEAD\`).`
+        : target.type === "commit"
+          ? `Review commit ${JSON.stringify(target.sha)}. Inspect that commit and its parent diff (for example, \`git show --format=fuller ${target.sha}\`).`
+          : `Review pull request #${target.number}. You may inspect it with read-only \`gh pr view ${target.number}\` and \`gh pr diff ${target.number}\` commands.`;
+  return [
+    "Perform a read-only code review. Do not modify files, create commits, push, or post remote comments.",
+    targetInstructions,
+    task.prompt.trim(),
+    "Report only actionable findings ordered by severity with precise file and line references. If there are none, say so explicitly.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 function boundedError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).slice(
@@ -317,8 +396,8 @@ const makeClaudeSession = (
       } satisfies SubagentMeta as SubagentMeta,
     };
 
-    const thinkingBudget = task.reasoningEffort
-      ? THINKING_BUDGETS[task.reasoningEffort]
+    const effort = task.reasoningEffort
+      ? CLAUDE_EFFORTS[task.reasoningEffort]
       : undefined;
     const claudeBinary = resolveClaudeBinary();
     const nativeQuery = yield* Effect.try({
@@ -332,8 +411,9 @@ const makeClaudeSession = (
             // its tools without interactive permission checks.
             permissionMode: "bypassPermissions",
             allowDangerouslySkipPermissions: true,
-            // Keep child orchestration inside this extension's global manager
-            // and concurrency cap rather than Claude Code's native subagents.
+            // Outer orchestration owns concurrency. Reviewer mode uses a
+            // direct read-only prompt rather than Claude's PR-commenting
+            // /code-review command, so nested fanout remains disabled.
             disallowedTools: ["Agent", "Task"],
             // For cwds pi marked untrusted, restrict to user-level settings so
             // an untrusted project's config cannot reconfigure the child.
@@ -346,8 +426,12 @@ const makeClaudeSession = (
               ? { pathToClaudeCodeExecutable: claudeBinary }
               : {}),
             ...(task.model ? { model: task.model } : {}),
-            ...(thinkingBudget !== undefined
-              ? { maxThinkingTokens: thinkingBudget }
+            ...(effort ? { effort } : {}),
+            ...(task.reasoningEffort === "off"
+              ? { thinking: { type: "disabled" as const } }
+              : {}),
+            ...(task.resume?.mode === "native" && task.resume.nativeSessionId
+              ? { resume: task.resume.nativeSessionId }
               : {}),
           },
         }),
@@ -372,6 +456,16 @@ const makeClaudeSession = (
     const settle = (outcome: RunOutcome) => {
       if (!state.activeRun) return;
       emit({ _tag: "RunSettled", outcome });
+      state.activeRun = false;
+      state.lastSettledVersion = state.runVersion;
+      state.interruptRequested = false;
+      state.liveText = "";
+      notifySettled();
+    };
+
+    const rejectRun = (reason: string, message: string) => {
+      if (!state.activeRun) return;
+      emit({ _tag: "RunRejected", reason, message });
       state.activeRun = false;
       state.lastSettledVersion = state.runVersion;
       state.interruptRequested = false;
@@ -411,8 +505,10 @@ const makeClaudeSession = (
       // Top-level messages only: subagent (sidechain) requests have their own
       // context and must not overwrite this conversation's occupancy.
       if (message.parent_tool_use_id == null) {
-        const tokens = contextOccupancyTokens(message.message.usage);
-        if (tokens !== undefined) emit({ _tag: "UsageChanged", tokens });
+        const contextTokens = contextOccupancyTokens(message.message.usage);
+        if (contextTokens !== undefined) {
+          emit({ _tag: "UsageChanged", usage: { contextTokens } });
+        }
       }
 
       const text = message.message.content
@@ -420,10 +516,13 @@ const makeClaudeSession = (
         .map((block) => block.text)
         .join("\n")
         .trim();
-      if (text) state.currentText = text;
+      const topLevel = message.parent_tool_use_id == null;
+      if (text && topLevel) {
+        state.currentText = text;
+      }
       state.liveText = "";
 
-      if (message.message.model !== state.meta.modelLabel) {
+      if (topLevel && message.message.model !== state.meta.modelLabel) {
         updateMeta({ modelLabel: message.message.model });
       }
       for (const block of message.message.content) {
@@ -457,22 +556,7 @@ const makeClaudeSession = (
       // here prevents a future CLI echo from duplicating the transcript row.
     };
 
-    const handleResult = (result: SDKResultMessage) => {
-      // result.usage is a whole-run aggregate, not occupancy (see
-      // contextOccupancyTokens); only the capacity is trustworthy here. The
-      // occupancy itself was already emitted by the last assistant message.
-      const contextWindow = resultContextWindow(result);
-      emit({
-        _tag: "UsageChanged",
-        contextWindow: contextWindow ?? state.meta.contextWindow,
-      });
-      if (
-        contextWindow !== undefined &&
-        contextWindow !== state.meta.contextWindow
-      ) {
-        updateMeta({ contextWindow });
-      }
-
+    const settleFromResult = (result: SDKResultMessage) => {
       if (state.interruptRequested) {
         settle({ _tag: "Interrupted", partialText: partialText() });
       } else if (result.subtype === "success") {
@@ -491,6 +575,32 @@ const makeClaudeSession = (
           partialText: partialText(),
         });
       }
+    };
+
+    const handleResult = (result: SDKResultMessage) => {
+      // result.usage is a whole-run aggregate, not occupancy (see
+      // contextOccupancyTokens); only the capacity is trustworthy here. The
+      // occupancy itself was already emitted by the last assistant message.
+      const contextWindow = resultContextWindow(result);
+      emit({
+        _tag: "UsageChanged",
+        usage: {
+          contextWindow: contextWindow ?? state.meta.contextWindow,
+          inputTokens: result.usage.input_tokens,
+          outputTokens: result.usage.output_tokens,
+          cacheReadTokens: result.usage.cache_read_input_tokens,
+          cacheWriteTokens: result.usage.cache_creation_input_tokens,
+          costUsd: result.total_cost_usd,
+        },
+      });
+      if (
+        contextWindow !== undefined &&
+        contextWindow !== state.meta.contextWindow
+      ) {
+        updateMeta({ contextWindow });
+      }
+
+      settleFromResult(result);
     };
 
     const handleMessage = (message: SDKMessage) => {
@@ -533,8 +643,17 @@ const makeClaudeSession = (
           }
         }
       } else if (message.type === "assistant") {
-        handleAssistant(message);
+        const rejection = claudeStartupRejection(
+          message.error,
+          message.message.content.length,
+        );
+        if (rejection) {
+          rejectRun(rejection.reason, rejection.message);
+        } else {
+          handleAssistant(message);
+        }
       } else if (message.type === "user") {
+        if ("isReplay" in message && message.isReplay) return;
         handleUser(message);
       } else if (message.type === "result") {
         handleResult(message);
@@ -632,20 +751,32 @@ const makeClaudeSession = (
     };
 
     emit({ _tag: "MetaChanged", meta: state.meta });
-    submit(task.prompt);
+    submit(
+      task.runMode === "code-review"
+        ? claudeCodeReviewPrompt(task)
+        : task.prompt,
+    );
 
     return {
       meta: Effect.sync(() => state.meta),
       events: Stream.fromQueue(events),
       send: (text) =>
-        Effect.suspend((): Effect.Effect<void, SendError> => {
-          if (state.closed) {
-            return new SendError({ message: "Subagent session is closed." });
-          }
-          return submit(text)
-            ? Effect.void
-            : new SendError({ message: "Subagent session is closed." });
-        }),
+        Effect.suspend(
+          (): Effect.Effect<
+            "delivered" | "queued" | "unsupported",
+            SendError
+          > => {
+            if (state.closed) {
+              return new SendError({ message: "Subagent session is closed." });
+            }
+            const wasActive = state.activeRun;
+            return submit(text)
+              ? Effect.succeed(
+                  wasActive ? ("queued" as const) : ("delivered" as const),
+                )
+              : new SendError({ message: "Subagent session is closed." });
+          },
+        ),
       interrupt: Effect.promise(async () => {
         if (state.closed || !state.activeRun) return;
         const version = state.runVersion;
@@ -695,7 +826,30 @@ const makeClaudeSession = (
 
 export const claudeBackend: SubagentBackend = {
   name: "claude",
-  capabilities: { steering: true, modelSelection: true, reasoningEffort: true },
-  available: Effect.sync(() => resolveClaudeBinary() !== undefined),
+  capabilities: {
+    steering: true,
+    modelSelection: true,
+    reasoningEffort: true,
+    nativeResume: true,
+    review: true,
+  },
+  readiness: Effect.promise(async () => {
+    const binary = resolveClaudeBinary();
+    if (!binary) {
+      return {
+        backend: "claude" as const,
+        ready: false,
+        detail: "claude executable not found on PATH",
+      };
+    }
+    const authenticated = await claudeAuthenticated(binary);
+    return {
+      backend: "claude" as const,
+      ready: authenticated,
+      detail: authenticated
+        ? "Claude Code installed and authenticated"
+        : "Claude Code is not authenticated",
+    };
+  }),
   spawn: makeClaudeSession,
 };

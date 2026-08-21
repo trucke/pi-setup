@@ -9,7 +9,11 @@
  * never leave the manager stuck in "running".
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  execFile,
+  spawn,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Cause, Scope } from "effect";
@@ -48,7 +52,7 @@ interface ToolState {
 
 // --- Binary + protocol helpers -----------------------------------------------
 
-let cachedCodexBinary: string | null | undefined;
+let cachedCodexBinary: string | undefined;
 
 function executable(file: string) {
   try {
@@ -59,9 +63,12 @@ function executable(file: string) {
   }
 }
 
-/** Resolve once on first use; availability checks after that are allocation-only. */
+/** Reuse a valid positive match, but re-probe PATH after misses/removals. */
 function resolveCodexBinary() {
-  if (cachedCodexBinary !== undefined) return cachedCodexBinary ?? undefined;
+  if (cachedCodexBinary && executable(cachedCodexBinary)) {
+    return cachedCodexBinary;
+  }
+  cachedCodexBinary = undefined;
   const names =
     process.platform === "win32" ? ["codex.exe", "codex.cmd"] : ["codex"];
   for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
@@ -74,8 +81,41 @@ function resolveCodexBinary() {
       }
     }
   }
-  cachedCodexBinary = null;
   return undefined;
+}
+
+let readinessCache:
+  | {
+      readonly binary: string;
+      readonly expiresAt: number;
+      readonly value: boolean;
+    }
+  | undefined;
+
+function codexAuthenticated(binary: string) {
+  if (
+    readinessCache &&
+    readinessCache.binary === binary &&
+    readinessCache.expiresAt > Date.now()
+  ) {
+    return Promise.resolve(readinessCache.value);
+  }
+  return new Promise<boolean>((resolve) => {
+    execFile(
+      binary,
+      ["login", "status"],
+      { timeout: 5_000, maxBuffer: 64 * 1024 },
+      (error) => {
+        const ready = !error;
+        readinessCache = {
+          binary,
+          expiresAt: Date.now() + 30_000,
+          value: ready,
+        };
+        resolve(ready);
+      },
+    );
+  });
 }
 
 function record(value: unknown): JsonRecord | undefined {
@@ -211,9 +251,57 @@ function textInput(text: string) {
 export function parseThreadTokenUsage(params: unknown) {
   const usage = record(record(params)?.tokenUsage);
   const last = record(usage?.last);
+  const total = record(usage?.total);
   return {
-    tokens: numberValue(last?.totalTokens),
+    contextTokens: numberValue(last?.totalTokens),
     contextWindow: numberValue(usage?.modelContextWindow),
+    inputTokens: numberValue(total?.inputTokens),
+    outputTokens: numberValue(total?.outputTokens),
+    cacheReadTokens: numberValue(total?.cachedInputTokens),
+    cacheWriteTokens: numberValue(total?.cacheWriteInputTokens),
+  };
+}
+
+export function codexItemIsMeaningful(item: unknown) {
+  return stringValue(record(item)?.type) !== "userMessage";
+}
+
+export function codexStartupFailure(options: {
+  readonly meaningfulActivity: boolean;
+  readonly reason: string;
+  readonly message: string;
+  readonly partialText?: string;
+}): Extract<SubagentEvent, { _tag: "RunRejected" | "RunSettled" }> {
+  return options.meaningfulActivity
+    ? {
+        _tag: "RunSettled",
+        outcome: {
+          _tag: "Failed",
+          errorText: options.message,
+          partialText: options.partialText,
+        },
+      }
+    : {
+        _tag: "RunRejected",
+        reason: options.reason,
+        message: options.message,
+      };
+}
+
+export function codexReviewTarget(task: SpawnTask): JsonRecord {
+  const focus = task.prompt.trim();
+  const target = task.reviewTarget ?? { type: "uncommittedChanges" as const };
+  const targetText =
+    target.type === "uncommittedChanges"
+      ? "the uncommitted changes"
+      : target.type === "baseBranch"
+        ? `the changes against base branch ${target.branch}`
+        : target.type === "commit"
+          ? `commit ${target.sha}`
+          : `pull request #${target.number}`;
+  return {
+    type: "custom",
+    instructions: `Review ${targetText}. ${focus}`.trim(),
   };
 }
 
@@ -305,6 +393,12 @@ const makeCodexSession = (
   task: SpawnTask,
 ): Effect.Effect<SubagentSession, SpawnError, Scope.Scope> =>
   Effect.gen(function* () {
+    if (!task.parent.projectTrusted) {
+      return yield* new SpawnError({
+        message:
+          "Codex refuses to run in an untrusted project because app-server project configuration cannot be safely disabled.",
+      });
+    }
     const binary = resolveCodexBinary();
     if (!binary) {
       return yield* new SpawnError({
@@ -340,9 +434,12 @@ const makeCodexSession = (
       dispatching: false,
       interruptRequested: false,
       effort: preferredCodexEffort(task.reasoningEffort),
+      nextRunIsReview: task.runMode === "review" && !task.resume,
       runSerial: 0,
       activeTurnId: undefined as string | undefined,
       runError: undefined as string | undefined,
+      runErrorReason: undefined as string | undefined,
+      meaningfulActivity: false,
       finalText: "",
       lastAssistantText: "",
       pendingPrompts: [] as string[],
@@ -407,7 +504,7 @@ const makeCodexSession = (
       const next = state.pendingPrompts.shift();
       if (next === undefined) return;
       emit({ _tag: "QueueChanged", queued: queuedView() });
-      startRun(next);
+      void startRun(next).catch(() => undefined);
     };
 
     const settleRun = (outcome: RunOutcome, serial = state.runSerial) => {
@@ -424,6 +521,21 @@ const makeCodexSession = (
       tools.clear();
       emit({ _tag: "RunSettled", outcome });
       queueMicrotask(startNextQueued);
+    };
+
+    const rejectRun = (reason: string, message: string, serial: number) => {
+      if (!state.activeRun || serial !== state.runSerial) return;
+      if (state.interruptTimer) clearTimeout(state.interruptTimer);
+      state.interruptTimer = undefined;
+      state.activeRun = false;
+      state.dispatching = false;
+      if (state.activeTurnId) ignoredTurnIds.add(state.activeTurnId);
+      state.activeTurnId = undefined;
+      state.interruptRequested = false;
+      state.pendingPrompts = [];
+      tools.clear();
+      emit({ _tag: "QueueChanged", queued: [] });
+      emit({ _tag: "RunRejected", reason, message });
     };
 
     const sendInterrupt = (serial: number) => {
@@ -447,27 +559,38 @@ const makeCodexSession = (
       });
     };
 
-    function startRun(text: string) {
-      if (state.closed || state.activeRun) return;
+    function startRun(text: string): Promise<void> {
+      if (state.closed || state.activeRun) return Promise.resolve();
       const threadId = state.meta.nativeSessionId;
-      if (!threadId) return;
+      if (!threadId)
+        return Promise.reject(new Error("Codex thread is not initialized."));
       const serial = ++state.runSerial;
       state.activeRun = true;
       state.dispatching = true;
       state.interruptRequested = false;
       state.activeTurnId = undefined;
       state.runError = undefined;
+      state.runErrorReason = undefined;
+      state.meaningfulActivity = false;
       state.finalText = "";
       state.lastAssistantText = "";
       emit({ _tag: "UserMessage", text });
       emit({ _tag: "RunStarted" });
 
-      const params: JsonRecord = {
-        threadId,
-        input: [textInput(text)],
-        ...(state.effort ? { effort: state.effort } : {}),
-      };
-      void request("turn/start", params).then(
+      const isReview = state.nextRunIsReview;
+      state.nextRunIsReview = false;
+      const params: JsonRecord = isReview
+        ? {
+            threadId,
+            target: codexReviewTarget({ ...task, prompt: text }),
+            delivery: "inline",
+          }
+        : {
+            threadId,
+            input: [textInput(text)],
+            ...(state.effort ? { effort: state.effort } : {}),
+          };
+      return request(isReview ? "review/start" : "turn/start", params).then(
         (result) => {
           const turn = record(result.turn);
           const turnId = stringValue(turn?.id);
@@ -512,6 +635,7 @@ const makeCodexSession = (
           if (errorText.includes("timed out")) {
             void terminateChild(child, () => state.exited);
           }
+          throw error;
         },
       );
     }
@@ -650,23 +774,39 @@ const makeCodexSession = (
         }
         case "item/agentMessage/delta": {
           const delta = stringValue(params.delta);
-          if (delta) emit({ _tag: "AssistantDelta", kind: "text", delta });
+          if (delta) {
+            state.meaningfulActivity = true;
+            emit({ _tag: "AssistantDelta", kind: "text", delta });
+          }
           break;
         }
         case "item/reasoning/summaryTextDelta":
         case "item/reasoning/textDelta": {
           const delta = stringValue(params.delta);
-          if (delta) emit({ _tag: "AssistantDelta", kind: "thinking", delta });
+          if (delta) {
+            state.meaningfulActivity = true;
+            emit({ _tag: "AssistantDelta", kind: "thinking", delta });
+          }
           break;
         }
         case "item/started": {
           const item = record(params.item);
-          if (item) emitToolStart(item);
+          if (item) {
+            if (codexItemIsMeaningful(item)) {
+              state.meaningfulActivity = true;
+            }
+            emitToolStart(item);
+          }
           break;
         }
         case "item/completed": {
           const item = record(params.item);
-          if (item) handleItemCompleted(item);
+          if (item) {
+            if (codexItemIsMeaningful(item)) {
+              state.meaningfulActivity = true;
+            }
+            handleItemCompleted(item);
+          }
           break;
         }
         case "item/commandExecution/outputDelta":
@@ -707,12 +847,15 @@ const makeCodexSession = (
           break;
         }
         case "thread/tokenUsage/updated": {
-          const { tokens, contextWindow } = parseThreadTokenUsage(params);
-          if (contextWindow !== undefined) {
-            state.meta = { ...state.meta, contextWindow };
-            emit({ _tag: "MetaChanged", meta: { contextWindow } });
+          const usage = parseThreadTokenUsage(params);
+          if (usage.contextWindow !== undefined) {
+            state.meta = { ...state.meta, contextWindow: usage.contextWindow };
+            emit({
+              _tag: "MetaChanged",
+              meta: { contextWindow: usage.contextWindow },
+            });
           }
-          emit({ _tag: "UsageChanged", tokens, contextWindow });
+          emit({ _tag: "UsageChanged", usage });
           break;
         }
         case "error": {
@@ -720,7 +863,13 @@ const makeCodexSession = (
           const messageText = boundedError(
             stringValue(error?.message) ?? "Codex run failed",
           );
-          if (params.willRetry !== true) state.runError = messageText;
+          if (params.willRetry !== true) {
+            state.runError = messageText;
+            state.runErrorReason =
+              stringValue(error?.code) ??
+              stringValue(error?.type) ??
+              "codex_startup_rejected";
+          }
           emit({ _tag: "BackendError", message: messageText });
           break;
         }
@@ -733,15 +882,26 @@ const makeCodexSession = (
           if (state.interruptRequested || status === "interrupted") {
             settleRun({ _tag: "Interrupted", partialText });
           } else if (status === "failed") {
-            settleRun({
-              _tag: "Failed",
-              errorText: boundedError(
-                state.runError ??
-                  stringValue(error?.message) ??
-                  "Codex run failed",
-              ),
+            const errorText = boundedError(
+              state.runError ??
+                stringValue(error?.message) ??
+                "Codex run failed",
+            );
+            const failure = codexStartupFailure({
+              meaningfulActivity: state.meaningfulActivity,
+              reason:
+                state.runErrorReason ??
+                stringValue(error?.code) ??
+                stringValue(error?.type) ??
+                "codex_startup_rejected",
+              message: errorText,
               partialText,
             });
+            if (failure._tag === "RunRejected") {
+              rejectRun(failure.reason, failure.message, state.runSerial);
+            } else {
+              settleRun(failure.outcome);
+            }
           } else {
             settleRun({
               _tag: "Completed",
@@ -889,12 +1049,24 @@ const makeCodexSession = (
         // Headless children cannot answer approval prompts. The caller
         // already chose to launch an autonomous subagent, so give the thread
         // full workspace access without interactive approval requests.
-        return request("thread/start", {
+        const threadOptions = {
           cwd: task.cwd,
           approvalPolicy: "never",
           sandbox: "danger-full-access",
-          ephemeral: false,
           ...(task.model ? { model: task.model } : {}),
+          ...(state.effort
+            ? { config: { model_reasoning_effort: state.effort } }
+            : {}),
+        };
+        if (task.resume?.mode === "native" && task.resume.nativeSessionId) {
+          return request("thread/resume", {
+            threadId: task.resume.nativeSessionId,
+            ...threadOptions,
+          });
+        }
+        return request("thread/start", {
+          ...threadOptions,
+          ephemeral: false,
         });
       },
       catch: (error) => new SpawnError({ message: boundedError(error) }),
@@ -927,23 +1099,34 @@ const makeCodexSession = (
       );
     }
     emit({ _tag: "MetaChanged", meta: state.meta });
-    startRun(task.prompt);
+    yield* Effect.tryPromise({
+      try: () => startRun(task.prompt),
+      catch: (error) => new SpawnError({ message: boundedError(error) }),
+    });
 
     return {
       meta: Effect.sync(() => state.meta),
       events: Stream.fromQueue(events),
       send: (text) =>
-        Effect.suspend((): Effect.Effect<void, SendError> => {
-          if (state.closed) {
-            return new SendError({ message: "Subagent session is closed." });
-          }
-          if (state.activeRun) {
-            state.pendingPrompts.push(text);
-            emit({ _tag: "QueueChanged", queued: queuedView() });
-            return Effect.void;
-          }
-          return Effect.sync(() => startRun(text));
-        }),
+        Effect.suspend(
+          (): Effect.Effect<
+            "delivered" | "queued" | "unsupported",
+            SendError
+          > => {
+            if (state.closed) {
+              return new SendError({ message: "Subagent session is closed." });
+            }
+            if (state.activeRun) {
+              state.pendingPrompts.push(text);
+              emit({ _tag: "QueueChanged", queued: queuedView() });
+              return Effect.succeed("queued" as const);
+            }
+            return Effect.sync(() => {
+              void startRun(text).catch(() => undefined);
+              return "delivered" as const;
+            });
+          },
+        ),
       interrupt: Effect.promise(async () => {
         if (state.closed || !state.activeRun) return;
         const serial = state.runSerial;
@@ -1022,27 +1205,48 @@ function killTree(
   }
 }
 
-/** SIGTERM is normally enough; the second deadline covers a wedged Rust process. */
-function terminateChild(
+/** A detached POSIX child owns a process group that can outlive its leader. */
+function processTreeAlive(
+  child: ChildProcessWithoutNullStreams,
+  leaderExited: () => boolean,
+) {
+  if (process.platform === "win32" || !child.pid) return !leaderExited();
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** SIGTERM is normally enough; keep escalation armed until the whole group exits. */
+export function terminateChild(
   child: ChildProcessWithoutNullStreams,
   exited: () => boolean,
 ) {
-  if (exited()) return Promise.resolve();
+  if (!processTreeAlive(child, exited)) return Promise.resolve();
   return new Promise<void>((resolve) => {
     let done = false;
     let forceTimer: ReturnType<typeof setTimeout> | undefined;
     let lastTimer: ReturnType<typeof setTimeout> | undefined;
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
     const finish = () => {
       if (done) return;
       done = true;
       if (forceTimer) clearTimeout(forceTimer);
       if (lastTimer) clearTimeout(lastTimer);
+      if (pollTimer) clearInterval(pollTimer);
       resolve();
     };
-    child.once("exit", finish);
+    const finishIfGone = () => {
+      if (!processTreeAlive(child, exited)) finish();
+    };
+    child.once("exit", finishIfGone);
     killTree(child, "SIGTERM");
+    pollTimer = setInterval(finishIfGone, 50);
+    pollTimer.unref?.();
     forceTimer = setTimeout(() => {
-      if (!exited()) killTree(child, "SIGKILL");
+      if (processTreeAlive(child, exited)) killTree(child, "SIGKILL");
     }, FORCE_KILL_AFTER_MS);
     lastTimer = setTimeout(finish, FORCE_KILL_AFTER_MS + 500);
   });
@@ -1054,7 +1258,26 @@ export const codexBackend: SubagentBackend = {
     steering: false,
     modelSelection: true,
     reasoningEffort: true,
+    nativeResume: true,
+    review: true,
   },
-  available: Effect.sync(() => resolveCodexBinary() !== undefined),
+  readiness: Effect.promise(async () => {
+    const binary = resolveCodexBinary();
+    if (!binary) {
+      return {
+        backend: "codex" as const,
+        ready: false,
+        detail: "codex executable not found on PATH",
+      };
+    }
+    const authenticated = await codexAuthenticated(binary);
+    return {
+      backend: "codex" as const,
+      ready: authenticated,
+      detail: authenticated
+        ? "Codex CLI installed and authenticated"
+        : "Codex CLI is not authenticated",
+    };
+  }),
   spawn: makeCodexSession,
 };

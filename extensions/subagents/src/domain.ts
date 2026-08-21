@@ -1,27 +1,14 @@
-/**
- * Domain model for subagents.
- *
- * Everything downstream of a backend (manager, tools, UI) speaks only these
- * types. Backends translate their native streams (pi session events, Claude
- * Agent SDK messages, Codex app-server JSON-RPC notifications) into the
- * normalized `SubagentEvent` union.
- */
-
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Data } from "effect";
 
 export const BACKEND_NAMES = ["pi", "claude", "codex"] as const;
 export type BackendName = (typeof BACKEND_NAMES)[number];
 
-/** Who initiated the session. User asides stay out of model-facing tooling. */
+export const PROFILE_NAMES = ["scout", "worker", "reviewer", "oracle"] as const;
+export type ProfileName = (typeof PROFILE_NAMES)[number];
+
 export type SubagentOrigin = "model" | "btw";
 
-/**
- * Shared reasoning-effort scale (pi's thinking levels). Each backend maps a
- * value to its nearest native equivalent: pi uses it directly, codex
- * translates to its reasoning-effort slugs, claude translates to thinking
- * budgets. Omitted = backend default (pi inherits the parent level).
- */
 export const REASONING_EFFORTS = [
   "off",
   "minimal",
@@ -33,49 +20,100 @@ export const REASONING_EFFORTS = [
 ] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
-export type SubagentStatus = "running" | "done" | "error";
+export type SubagentStatus = "running" | "done" | "failed" | "cancelled";
 
-/** Parent-session context resolved by the tool layer and passed opaquely. */
+export type RunMode = "agent" | "review" | "code-review";
+
+export type ReviewTarget =
+  | { readonly type: "uncommittedChanges" }
+  | { readonly type: "baseBranch"; readonly branch: string }
+  | { readonly type: "commit"; readonly sha: string }
+  | { readonly type: "pullRequest"; readonly number: number };
+
 export interface ParentContext {
   readonly parentCwd: string;
+  readonly parentSessionId?: string;
   readonly projectTrusted: boolean;
-  /** Parent pi model, for the pi backend's "inherit" default. */
   readonly inheritedModel?: { readonly provider: string; readonly id: string };
   readonly inheritedThinkingLevel?: string;
-  /** Parent model registry; required by the pi backend to resolve models. */
   readonly modelRegistry?: ModelRegistry;
 }
 
+export interface ExecutionCandidate {
+  readonly harness: BackendName;
+  readonly model?: string;
+  readonly reasoningEffort?: ReasoningEffort;
+  readonly runMode: RunMode;
+}
+
+export interface CandidateAttempt extends ExecutionCandidate {
+  readonly outcome: "selected" | "unavailable";
+  readonly reason?: string;
+}
+
+export interface ExecutionSelection {
+  readonly requested:
+    | { readonly type: "profile"; readonly profile: ProfileName }
+    | { readonly type: "direct" };
+  readonly selected: ExecutionCandidate;
+  readonly attempts: ReadonlyArray<CandidateAttempt>;
+}
+
+export interface ResumeSource {
+  readonly mode: "native" | "continuation";
+  readonly nativeSessionId?: string;
+  readonly sessionFilePath?: string;
+  readonly previousOutput?: string;
+}
+
 export interface SpawnTask {
-  /** Omitted for normal tool-driven spawns. */
   readonly origin?: SubagentOrigin;
   readonly prompt: string;
   readonly title: string;
   readonly cwd: string;
-  /**
-   * Generic model hint, interpreted per backend:
-   * pi: "provider/model-id" or bare model id; claude: model alias;
-   * codex: model slug. Omitted = backend default / inherit.
-   */
   readonly model?: string;
-  /** Shared effort scale; each backend maps it to its native equivalent. */
   readonly reasoningEffort?: ReasoningEffort;
+  readonly runMode?: RunMode;
+  readonly reviewTarget?: ReviewTarget;
+  readonly execution?: ExecutionSelection;
+  /** Remaining declared profile candidates available for pre-activity fallback. */
+  readonly fallbackCandidates?: ReadonlyArray<ExecutionCandidate>;
+  readonly resume?: ResumeSource;
   readonly parent: ParentContext;
 }
 
 export interface SubagentMeta {
   readonly backend: BackendName;
-  /** Display label, e.g. "anthropic/claude-opus-4-5" or "gpt-5-codex". */
   readonly modelLabel?: string;
-  /** Context window capacity for utilization display, when known. */
   readonly contextWindow?: number;
-  /** pi session file / Claude projects JSONL / Codex rollout path. */
   readonly sessionFilePath?: string;
-  /** Claude session id / Codex conversation id. */
   readonly nativeSessionId?: string;
 }
 
-// --- Transcript ------------------------------------------------------------
+export interface SubagentUsage {
+  /** Current context occupancy, not cumulative input spend. */
+  readonly contextTokens?: number;
+  readonly contextWindow?: number;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly costUsd?: number;
+}
+
+export interface ArtifactPaths {
+  readonly directory: string;
+  readonly receipt: string;
+  readonly snapshot: string;
+  readonly transcript: string;
+  readonly output: string;
+}
+
+export interface RecoveryState {
+  readonly available: boolean;
+  readonly mode?: "native" | "continuation";
+  readonly reason?: string;
+}
 
 export type TranscriptPart =
   | { readonly type: "text"; readonly text: string }
@@ -119,8 +157,6 @@ export interface QueuedMessage {
   readonly kind: "steer" | "follow-up";
 }
 
-// --- Events ------------------------------------------------------------------
-
 export type RunOutcome =
   | { readonly _tag: "Completed"; readonly finalText: string }
   | {
@@ -130,17 +166,15 @@ export type RunOutcome =
     }
   | { readonly _tag: "Interrupted"; readonly partialText?: string };
 
-/**
- * Normalized activity stream. Previews (`argsPreview`, `outputPreview`) are
- * pre-flattened single-line strings because the UI only ever renders one
- * sanitized line, which keeps three different native tool-result shapes out
- * of the interface.
- */
 export type SubagentEvent =
-  // lifecycle (a session can run multiple turns via send())
   | { readonly _tag: "RunStarted" }
+  | {
+      /** Typed backend rejection before a model response or tool execution. */
+      readonly _tag: "RunRejected";
+      readonly reason: string;
+      readonly message: string;
+    }
   | { readonly _tag: "RunSettled"; readonly outcome: RunOutcome }
-  // transcript building blocks
   | { readonly _tag: "UserMessage"; readonly text: string }
   | {
       readonly _tag: "AssistantDelta";
@@ -169,26 +203,14 @@ export type SubagentEvent =
       readonly isError: boolean;
       readonly outputPreview?: string;
     }
-  // bookkeeping
   | {
       readonly _tag: "QueueChanged";
       readonly queued: ReadonlyArray<QueuedMessage>;
     }
-  | {
-      readonly _tag: "UsageChanged";
-      readonly tokens?: number;
-      readonly contextWindow?: number;
-    }
+  | { readonly _tag: "UsageChanged"; readonly usage: Partial<SubagentUsage> }
   | { readonly _tag: "MetaChanged"; readonly meta: Partial<SubagentMeta> }
-  /** Non-fatal diagnostics. Fatal failures arrive as a RunSettled outcome. */
   | { readonly _tag: "BackendError"; readonly message: string };
 
-// --- Snapshot ---------------------------------------------------------------
-
-/**
- * The manager folds `SubagentEvent`s into one snapshot per subagent. This is
- * everything the tools, footer status, and both TUI views read.
- */
 export interface SubagentSnapshot {
   readonly id: string;
   readonly origin: SubagentOrigin;
@@ -196,33 +218,59 @@ export interface SubagentSnapshot {
   readonly title: string;
   readonly prompt: string;
   readonly cwd: string;
+  readonly parentCwd: string;
+  readonly parentSessionId?: string;
   readonly status: SubagentStatus;
-  readonly createdAt: number;
+  readonly startedAt: number;
+  readonly lastActivityAt: number;
+  readonly lastEvent: SubagentEvent["_tag"] | "Recovered";
   readonly settledAt?: number;
   readonly errorText?: string;
   readonly meta: SubagentMeta;
-  readonly usage: { readonly tokens?: number; readonly contextWindow?: number };
+  readonly usage: SubagentUsage;
+  readonly execution: ExecutionSelection;
+  readonly reviewTarget?: ReviewTarget;
   readonly transcript: ReadonlyArray<TranscriptItem>;
-  /** Streaming assistant buffers, cleared when the finalized message lands. */
   readonly liveAssistant?: { readonly text: string; readonly thinking: string };
   readonly liveTools: ReadonlyArray<LiveToolState>;
+  readonly currentTools: ReadonlyArray<string>;
   readonly queued: ReadonlyArray<QueuedMessage>;
-  /** Final text of the most recent completed run (v1 `finalOutput`). */
   readonly finalText: string;
-  /** Count of finalized assistant messages (for subagent-check). */
   readonly turns: number;
+  readonly artifacts: ArtifactPaths;
+  readonly recovery: RecoveryState;
 }
 
-/** Final text, or the live streaming buffer while a run is active (v1 `latestOutput`). */
+export interface SendReceipt {
+  readonly id: string;
+  readonly disposition: "delivered" | "queued" | "unsupported";
+  readonly receiptAt: number;
+  readonly message: string;
+}
+
 export function latestText(snap: SubagentSnapshot) {
   const live = snap.liveAssistant?.text.trim();
   if (live) return live;
-  return snap.finalText;
+  if (snap.finalText.trim()) return snap.finalText;
+  for (let index = snap.transcript.length - 1; index >= 0; index--) {
+    const item = snap.transcript[index];
+    if (item?.kind !== "assistant") continue;
+    const text = item.parts
+      .filter(
+        (part): part is Extract<TranscriptPart, { type: "text" }> =>
+          part.type === "text",
+      )
+      .map((part) => part.text)
+      .join("\n")
+      .trim();
+    if (text) return text;
+  }
+  return "";
 }
 
 export function formatElapsed(snap: SubagentSnapshot) {
   const end = snap.settledAt ?? Date.now();
-  const totalSeconds = Math.max(0, Math.round((end - snap.createdAt) / 1000));
+  const totalSeconds = Math.max(0, Math.round((end - snap.startedAt) / 1000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return minutes > 0
@@ -230,10 +278,10 @@ export function formatElapsed(snap: SubagentSnapshot) {
     : `${seconds}s`;
 }
 
-// --- Errors -------------------------------------------------------------------
-
 export class SpawnError extends Data.TaggedError("SpawnError")<{
   readonly message: string;
+  /** False only for manager lifecycle failures that another backend cannot fix. */
+  readonly fallbackAllowed?: boolean;
 }> {}
 
 export class BackendUnavailableError extends Data.TaggedError(
@@ -249,5 +297,9 @@ export class ConcurrencyLimitError extends Data.TaggedError(
 }> {}
 
 export class SendError extends Data.TaggedError("SendError")<{
+  readonly message: string;
+}> {}
+
+export class ResumeError extends Data.TaggedError("ResumeError")<{
   readonly message: string;
 }> {}

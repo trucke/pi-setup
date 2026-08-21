@@ -38,8 +38,6 @@ there against the pinned toolchain):
 
 ```
 extensions/background-terminals/
-├── package.json              # exact pins, see §3
-├── tsconfig.json             # extends ../../tsconfig.json + effect LS plugin
 ├── index.ts                  # extension edge: tools, command, widget, events (plain TS + runTool)
 ├── docs/
 │   └── implementation-guide.md   (this file)
@@ -875,8 +873,8 @@ tricks; they exist on any machine running pi)
 
 ## 16. Acceptance checklist
 
-- [ ] `npm install && npm run check` green in `extensions/background-terminals` (TS7 + Effect LS).
-- [ ] `npm test` green (manager, output, result-delivery, ps selection).
+- [ ] Root `npm run check` green (TS7 + Effect LS).
+- [ ] Root `npm test` green (manager, output, result-delivery, ps selection).
 - [ ] Tools registered: `bg-start`, `bg-status`, `bg-list`, `bg-kill`; descriptions document
       no-stdin, session-scoped lifetime, and truncation limits; no stdin/steer surface exists.
 - [ ] stdout and stderr captured separately and completely (in-memory tail + spill file);

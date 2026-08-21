@@ -219,6 +219,32 @@ test("Firecrawl cancellation cleans up its request timeout", async () => {
   assert.equal(timeoutCount(), before);
 });
 
+test("failed remote crawl status fails the effect and triggers cleanup", async () => {
+  const cancelledJobs: string[] = [];
+  const client: CrawlClient = {
+    startCrawl: async (url) => ({ id: "crawl-failed", url }),
+    getCrawlStatus: async () => ({
+      id: "crawl-failed",
+      status: "failed",
+      completed: 0,
+      total: 1,
+      creditsUsed: 0,
+      expiresAt: new Date().toISOString(),
+      data: [],
+    }),
+    cancelCrawl: async (jobId) => {
+      cancelledJobs.push(jobId);
+      return true;
+    },
+  };
+
+  await assert.rejects(
+    Effect.runPromise(crawlEffect(client, "https://example.com", {})),
+    /ended with status failed/,
+  );
+  assert.deepEqual(cancelledJobs, ["crawl-failed"]);
+});
+
 test("cancels the remote crawl when polling is interrupted", async () => {
   let pollingStarted!: () => void;
   const startedPolling = new Promise<void>((resolve) => {

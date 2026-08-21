@@ -47,6 +47,8 @@ const CHILD_EXCLUDED_TOOL_NAMES = [
   "subagent-cancel",
   "subagent-check",
   "subagent-list",
+  "subagent-send",
+  "subagent-resume",
   "ask-user",
 ] as const;
 
@@ -276,6 +278,12 @@ const makePiSession = (
         resolvePiModel(registry, task.model, task.parent.inheritedModel),
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });
+    if (model && !registry.hasConfiguredAuth(model)) {
+      return yield* new SpawnError({
+        message: `No configured authentication for model "${model.provider}/${model.id}".`,
+      });
+    }
+
     // pi's thinking levels ARE the shared reasoning-effort scale.
     const thinkingLevel = (task.reasoningEffort ??
       task.parent.inheritedThinkingLevel) as ThinkingLevel | undefined;
@@ -286,9 +294,17 @@ const makePiSession = (
           task.cwd,
           task.parent.projectTrusted,
         );
+        const sessionManager =
+          task.resume?.mode === "native" && task.resume.sessionFilePath
+            ? SessionManager.open(
+                task.resume.sessionFilePath,
+                undefined,
+                task.cwd,
+              )
+            : SessionManager.create(task.cwd);
         const { session } = await createAgentSession({
           cwd: task.cwd,
-          sessionManager: SessionManager.create(task.cwd),
+          sessionManager,
           settingsManager,
           resourceLoader: loader,
           model,
@@ -357,11 +373,19 @@ const makePiSession = (
     };
 
     const emitUsage = () => {
-      const usage = session.getContextUsage();
+      const context = session.getContextUsage();
+      const stats = session.getSessionStats();
       emit({
         _tag: "UsageChanged",
-        tokens: usage?.tokens ?? undefined,
-        contextWindow: activeModel()?.contextWindow ?? usage?.contextWindow,
+        usage: {
+          contextTokens: context?.tokens ?? undefined,
+          contextWindow: activeModel()?.contextWindow ?? context?.contextWindow,
+          inputTokens: stats.tokens.input,
+          outputTokens: stats.tokens.output,
+          cacheReadTokens: stats.tokens.cacheRead,
+          cacheWriteTokens: stats.tokens.cacheWrite,
+          costUsd: stats.cost,
+        },
       });
     };
 
@@ -529,21 +553,30 @@ const makePiSession = (
       meta: Effect.sync(currentMeta),
       events: Stream.fromQueue(events),
       send: (text) =>
-        Effect.suspend((): Effect.Effect<void, SendError> => {
-          if (state.closed) {
-            return new SendError({ message: "Subagent session is closed." });
-          }
-          if (session.isStreaming) {
-            // Steer the active run via the SDK's queue; queue_update events
-            // render it, message_end(user) lands it in the transcript. A
-            // rejected steer is a real send failure, not a diagnostic.
-            return Effect.tryPromise({
-              try: () => session.steer(text),
-              catch: (error) => new SendError({ message: boundedError(error) }),
-            }).pipe(Effect.asVoid);
-          }
-          return Effect.sync(() => startRun(text));
-        }),
+        Effect.suspend(
+          (): Effect.Effect<
+            "delivered" | "queued" | "unsupported",
+            SendError
+          > => {
+            if (state.closed) {
+              return new SendError({ message: "Subagent session is closed." });
+            }
+            if (session.isStreaming) {
+              // Steer the active run via the SDK's queue; queue_update events
+              // render it, message_end(user) lands it in the transcript. A
+              // rejected steer is a real send failure, not a diagnostic.
+              return Effect.tryPromise({
+                try: () => session.steer(text),
+                catch: (error) =>
+                  new SendError({ message: boundedError(error) }),
+              }).pipe(Effect.as("queued" as const));
+            }
+            return Effect.sync(() => {
+              startRun(text);
+              return "delivered" as const;
+            });
+          },
+        ),
       interrupt: Effect.promise(async () => {
         if (state.closed) return;
         try {
@@ -571,8 +604,17 @@ const makePiSession = (
 
 export const piBackend: SubagentBackend = {
   name: "pi",
-  capabilities: { steering: true, modelSelection: true, reasoningEffort: true },
-  // In-process SDK: always available.
-  available: Effect.succeed(true),
+  capabilities: {
+    steering: true,
+    modelSelection: true,
+    reasoningEffort: true,
+    nativeResume: true,
+    review: false,
+  },
+  readiness: Effect.succeed({
+    backend: "pi",
+    ready: true,
+    detail: "in-process SDK ready; model authentication is checked at spawn",
+  }),
   spawn: makePiSession,
 };
