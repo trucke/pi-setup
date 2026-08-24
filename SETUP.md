@@ -22,6 +22,14 @@ The `fd`, `rg`, and `fuzzy-find` tools require system executables on `PATH`:
 for `--scheme`). Nothing is downloaded at runtime; install the tools with the
 system package manager and restart Pi.
 
+## Conversation undo
+
+`/undo` rewinds the latest user turn and restores its text to the editor. It
+uses Pi's session tree, so the abandoned branch remains available through
+`/tree`. The command changes conversation history only: it does not restore
+files, image attachments, processes, or other side effects, and it refuses to
+run while the agent is active.
+
 ## Web tools
 
 The package registers four consolidated web tools: `web-research`,
