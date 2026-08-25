@@ -30,8 +30,8 @@ import { registerUsageTracking } from "./usage.ts";
 
 export default function webSearch(pi: ExtensionAPI) {
   const scrapeCache: ScrapeCache = new Map();
-  const getFirecrawl = createFirecrawlProvider(pi);
-  const getExaKey = createExaKeyProvider(pi);
+  const getFirecrawl = createFirecrawlProvider();
+  const getExaKey = createExaKeyProvider();
 
   registerScrapeCacheRestoration(pi, scrapeCache);
   registerUsageTracking(pi);

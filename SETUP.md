@@ -66,8 +66,7 @@ to 5 pages.
 The tools resolve `EXA_API_KEY` and `FIRECRAWL_API_KEY` in this order:
 
 1. Process environment
-2. Infisical project configured at `~/.pi/agent`
-3. `~/.pi/agent/.env`
+2. `~/.pi/agent/.env`
 
 For the file fallback, copy `.env.example` to `~/.pi/agent/.env` and replace the
 placeholders. Never commit the resulting file. Credentials are resolved lazily

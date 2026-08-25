@@ -8,7 +8,6 @@ import {
   MissingApiKeyError,
   resolveApiKey,
   type ApiKeyOptions,
-  type CommandExecutor,
 } from "./env.ts";
 import { boundedOutput, errorMessage } from "./output.ts";
 
@@ -53,15 +52,14 @@ function withUnrefTimeout<A, E, R>(
 export type FirecrawlProvider = (signal?: AbortSignal) => Promise<Firecrawl>;
 
 export function createFirecrawlProvider(
-  pi: CommandExecutor,
   options: ApiKeyOptions = {},
 ): FirecrawlProvider {
   let client: Firecrawl | undefined;
   let pending: Promise<Firecrawl> | undefined;
 
-  return async (signal) => {
+  return async () => {
     if (client) return client;
-    pending ??= resolveApiKey("FIRECRAWL_API_KEY", pi, signal, options).then(
+    pending ??= resolveApiKey("FIRECRAWL_API_KEY", options).then(
       async (apiKey) => {
         // Firecrawl pulls in Axios/follow-redirects, which can intermittently
         // fail during extension loading under Bun. Keep it off Pi's startup

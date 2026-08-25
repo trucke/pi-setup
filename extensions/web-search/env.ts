@@ -50,39 +50,15 @@ function readEnvFileValue(
   return undefined;
 }
 
-/**
- * Resolves an API key with the shared policy: process environment, then the
- * Infisical project configured at ~/.pi/agent, then ~/.pi/agent/.env.
- */
-export async function resolveApiKey(
-  name: string,
-  pi: CommandExecutor,
-  signal?: AbortSignal,
-  options: ApiKeyOptions = {},
-) {
+/** Resolves an API key from the process environment or ~/.pi/agent/.env. */
+export async function resolveApiKey(name: string, options: ApiKeyOptions = {}) {
   const processApiKey = (options.env ?? process.env)[name]?.trim();
   if (processApiKey) return processApiKey;
-
-  try {
-    const result = await pi.exec(
-      "infisical",
-      ["secrets", "get", name, "--plain", "--silent"],
-      {
-        cwd: join(homedir(), ".pi", "agent"),
-        signal,
-        timeout: 15_000,
-      },
-    );
-    const infisicalApiKey = result.code === 0 ? result.stdout.trim() : "";
-    if (infisicalApiKey) return infisicalApiKey;
-  } catch (error) {
-    if (signal?.aborted) throw error;
-  }
 
   const fileApiKey = readEnvFileValue(name, options.envPath);
   if (fileApiKey) return fileApiKey;
 
   throw new MissingApiKeyError({
-    message: `Missing ${name} in the process environment, Infisical, or ~/.pi/agent/.env`,
+    message: `Missing ${name} in the process environment or ~/.pi/agent/.env`,
   });
 }

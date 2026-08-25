@@ -333,30 +333,19 @@ test("reports cancellation distinctly from failures", async () => {
 
 test("memoizes the API key and appends the retry hint when it is missing", async () => {
   let lookups = 0;
-  const getKey = createExaKeyProvider(
-    {
-      exec: async () => {
-        lookups += 1;
-        return {
-          stdout: "infisical-exa\n",
-          stderr: "",
-          code: 0,
-          killed: false,
-        };
-      },
+  const env: NodeJS.ProcessEnv = {};
+  Object.defineProperty(env, "EXA_API_KEY", {
+    get: () => {
+      lookups += 1;
+      return "exa-key";
     },
-    { env: {}, envPath: "/not-used" },
-  );
-  assert.equal(await getKey(), "infisical-exa");
-  assert.equal(await getKey(), "infisical-exa");
+  });
+  const getKey = createExaKeyProvider({ env, envPath: "/not-used" });
+  assert.equal(await getKey(), "exa-key");
+  assert.equal(await getKey(), "exa-key");
   assert.equal(lookups, 1);
 
-  const missing = createExaKeyProvider(
-    {
-      exec: async () => ({ stdout: "", stderr: "", code: 1, killed: false }),
-    },
-    { env: {}, envPath: "/not-used" },
-  );
+  const missing = createExaKeyProvider({ env: {}, envPath: "/not-used" });
   await assert.rejects(
     exaSearch(missing, { query: "q", limit: 5 }, RETRY_HINT),
     /Missing EXA_API_KEY.*Retry with backend: "firecrawl"\./,

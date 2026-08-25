@@ -3,7 +3,6 @@ import {
   MissingApiKeyError,
   resolveApiKey,
   type ApiKeyOptions,
-  type CommandExecutor,
 } from "./env.ts";
 import { errorMessage } from "./output.ts";
 import { sanitizeLine, sanitizeText } from "./sanitize.ts";
@@ -144,15 +143,14 @@ export type ExaKeyProvider = (signal?: AbortSignal) => Promise<string>;
  * so a missing key cannot break extension loading.
  */
 export function createExaKeyProvider(
-  pi: CommandExecutor,
   options: ApiKeyOptions = {},
 ): ExaKeyProvider {
   let apiKey: string | undefined;
   let pending: Promise<string> | undefined;
 
-  return async (signal) => {
+  return async () => {
     if (apiKey) return apiKey;
-    pending ??= resolveApiKey("EXA_API_KEY", pi, signal, options);
+    pending ??= resolveApiKey("EXA_API_KEY", options);
 
     try {
       apiKey = await pending;
