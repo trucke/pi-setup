@@ -49,10 +49,7 @@
       "./extensions/ui/index.ts"
     ],
     "skills": [
-      "./skills/babysit-pr",
       "./skills/background-terminals",
-      "./skills/file-pr",
-      "./skills/handoff",
       "./skills/subagents"
     ],
     "themes": [
