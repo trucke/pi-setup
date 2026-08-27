@@ -50,13 +50,22 @@ function readEnvFileValue(
   return undefined;
 }
 
-/** Resolves an API key from the process environment or ~/.pi/agent/.env. */
-export async function resolveApiKey(name: string, options: ApiKeyOptions = {}) {
+/** Resolves an optional API key from the process environment or ~/.pi/agent/.env. */
+export function resolveOptionalApiKey(
+  name: string,
+  options: ApiKeyOptions = {},
+) {
   const processApiKey = (options.env ?? process.env)[name]?.trim();
   if (processApiKey) return processApiKey;
 
   const fileApiKey = readEnvFileValue(name, options.envPath);
-  if (fileApiKey) return fileApiKey;
+  return fileApiKey || undefined;
+}
+
+/** Resolves a required API key from the process environment or ~/.pi/agent/.env. */
+export async function resolveApiKey(name: string, options: ApiKeyOptions = {}) {
+  const apiKey = resolveOptionalApiKey(name, options);
+  if (apiKey) return apiKey;
 
   throw new MissingApiKeyError({
     message: `Missing ${name} in the process environment or ~/.pi/agent/.env`,

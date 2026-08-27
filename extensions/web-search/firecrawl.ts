@@ -7,6 +7,7 @@ import type { CrawlJob, CrawlOptions, Firecrawl } from "firecrawl";
 import {
   MissingApiKeyError,
   resolveApiKey,
+  resolveOptionalApiKey,
   type ApiKeyOptions,
 } from "./env.ts";
 import { boundedOutput, errorMessage } from "./output.ts";
@@ -51,23 +52,31 @@ function withUnrefTimeout<A, E, R>(
 
 export type FirecrawlProvider = (signal?: AbortSignal) => Promise<Firecrawl>;
 
+export interface FirecrawlProviderOptions extends ApiKeyOptions {
+  /** Require authentication for operations unavailable on the keyless tier. */
+  requireApiKey?: boolean;
+}
+
 export function createFirecrawlProvider(
-  options: ApiKeyOptions = {},
+  options: FirecrawlProviderOptions = {},
 ): FirecrawlProvider {
   let client: Firecrawl | undefined;
   let pending: Promise<Firecrawl> | undefined;
 
   return async () => {
     if (client) return client;
-    pending ??= resolveApiKey("FIRECRAWL_API_KEY", options).then(
-      async (apiKey) => {
-        // Firecrawl pulls in Axios/follow-redirects, which can intermittently
-        // fail during extension loading under Bun. Keep it off Pi's startup
-        // path.
-        const { Firecrawl } = await import("firecrawl");
-        return new Firecrawl({ apiKey });
-      },
-    );
+    pending ??= (async () => {
+      const apiKey = options.requireApiKey
+        ? await resolveApiKey("FIRECRAWL_API_KEY", options)
+        : resolveOptionalApiKey("FIRECRAWL_API_KEY", options);
+
+      // Firecrawl pulls in Axios/follow-redirects, which can intermittently
+      // fail during extension loading under Bun. Keep it off Pi's startup
+      // path. An empty key makes the SDK omit Authorization and use Firecrawl's
+      // keyless search/scrape tier.
+      const { Firecrawl } = await import("firecrawl");
+      return new Firecrawl({ apiKey: apiKey ?? "" });
+    })();
 
     try {
       client = await pending;

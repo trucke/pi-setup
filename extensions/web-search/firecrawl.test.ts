@@ -54,6 +54,28 @@ test("names all credential sources when the key is missing", async () => {
   );
 });
 
+test("creates a keyless Firecrawl client when no key is configured", async () => {
+  const getClient = createFirecrawlProvider({
+    env: {},
+    envPath: "/not-used",
+  });
+
+  assert.ok(await getClient());
+});
+
+test("requires a Firecrawl key for keyed-only operations", async () => {
+  const getClient = createFirecrawlProvider({
+    env: {},
+    envPath: "/not-used",
+    requireApiKey: true,
+  });
+
+  await assert.rejects(
+    getClient(),
+    /Missing FIRECRAWL_API_KEY in the process environment or ~\/\.pi\/agent\/\.env/,
+  );
+});
+
 test("reuses one Firecrawl client and credential lookup", async () => {
   let lookups = 0;
   const env: NodeJS.ProcessEnv = {};

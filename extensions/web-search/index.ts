@@ -12,10 +12,12 @@
  *
  * Backends never fall back to each other silently; errors name the explicit
  * retry. Provider initialization is lazy so a missing credential for one
- * backend cannot break extension loading. Firecrawl calls are credit-budgeted
- * per session and surfaced on the dashboard; Exa-backed defaults never
- * reserve Firecrawl credits. Firecrawl scrapes are reused across reloads and
- * resumes, including results persisted under the legacy tool names
+ * backend cannot break extension loading. Firecrawl search and scrape use its
+ * keyless tier when no key is configured; crawling requires a key. Firecrawl
+ * calls are credit-budgeted per session and surfaced on the dashboard;
+ * Exa-backed defaults never reserve Firecrawl credits. Firecrawl scrapes are
+ * reused across reloads and resumes, including results persisted under the
+ * legacy tool names
  * codex_research/firecrawl_search/firecrawl_scrape/firecrawl_crawl.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -31,6 +33,7 @@ import { registerUsageTracking } from "./usage.ts";
 export default function webSearch(pi: ExtensionAPI) {
   const scrapeCache: ScrapeCache = new Map();
   const getFirecrawl = createFirecrawlProvider();
+  const getKeyedFirecrawl = createFirecrawlProvider({ requireApiKey: true });
   const getExaKey = createExaKeyProvider();
 
   registerScrapeCacheRestoration(pi, scrapeCache);
@@ -39,5 +42,5 @@ export default function webSearch(pi: ExtensionAPI) {
   registerResearchTool(pi);
   registerSearchTool(pi, { getFirecrawl, getExaKey });
   registerFetchTool(pi, { getFirecrawl, getExaKey, scrapeCache });
-  registerCrawlTool(pi, { getFirecrawl });
+  registerCrawlTool(pi, { getFirecrawl: getKeyedFirecrawl });
 }

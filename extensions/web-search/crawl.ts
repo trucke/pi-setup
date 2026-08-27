@@ -30,7 +30,7 @@ import { sanitizeLine } from "./sanitize.ts";
 const DEFAULT_CRAWL_LIMIT = 5;
 
 const CRAWL_RETRY_HINT =
-  "Retry web-crawl with a smaller scope, or use web-fetch for single pages.";
+  "Ensure FIRECRAWL_API_KEY is configured, then retry web-crawl with a smaller scope, or use web-fetch for single pages.";
 
 export interface CrawlToolDependencies {
   getFirecrawl: FirecrawlProvider;
