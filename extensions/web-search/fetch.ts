@@ -50,7 +50,7 @@ import { sanitizeLine } from "./sanitize.ts";
 const EXA_RETRY_HINT =
   'Retry web-fetch, or escalate explicitly with backend: "firecrawl".';
 const FIRECRAWL_RETRY_HINT =
-  'Retry web-fetch with backend: "firecrawl", or use the default exa backend.';
+  'Retry web-fetch with backend: "firecrawl", configure FIRECRAWL_API_KEY for higher limits, or use the default exa backend.';
 
 /** Firecrawl-only scrape options that must not be silently ignored on exa. */
 const FIRECRAWL_ONLY_PARAMETERS = [

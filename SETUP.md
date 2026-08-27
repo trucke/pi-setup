@@ -63,14 +63,21 @@ to 5 pages.
 
 ## Credentials
 
-The tools resolve `EXA_API_KEY` and `FIRECRAWL_API_KEY` in this order:
+The tools resolve `EXA_API_KEY` and the optional `FIRECRAWL_API_KEY` in this
+order:
 
 1. Process environment
 2. `~/.pi/agent/.env`
 
-For the file fallback, copy `.env.example` to `~/.pi/agent/.env` and replace the
-placeholders. Never commit the resulting file. Credentials are resolved lazily
-on first use, so a missing key for one backend does not affect the others.
+For the file fallback, copy `.env.example` to `~/.pi/agent/.env`, replace the
+Exa placeholder, and optionally uncomment the Firecrawl entry. Never commit the
+resulting file. Credentials are resolved lazily on first use, so a missing key
+for one backend does not affect the others.
+
+Firecrawl search and single-page scraping use Firecrawl's rate-limited keyless
+tier when `FIRECRAWL_API_KEY` is absent. A configured key is used automatically
+for higher limits. `web-crawl` is not available on the keyless tier and requires
+a key.
 
 ## Firecrawl credit budgeting
 

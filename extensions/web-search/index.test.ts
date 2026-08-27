@@ -101,6 +101,7 @@ test("exposes backend routing with exa as the default in the schemas", () => {
   assert.deepEqual(fetchBackend.enum, ["exa", "firecrawl"]);
 
   const crawl = tools.find((tool) => tool.name === "web-crawl");
+  assert.match(crawl?.description ?? "", /Requires FIRECRAWL_API_KEY/);
   assert.match(crawl?.description ?? "", /Defaults to 5 pages/);
   assert.match(crawl?.description ?? "", /Firecrawl credit/);
 

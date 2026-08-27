@@ -12,7 +12,7 @@ export const WEB_ROUTING_GUIDELINES = [
   "Prefer web-research for current information and general research questions; it synthesizes a cited answer with live web search and consumes no search-API credits.",
   'Use web-search when structured search-result listings are needed or web-research fails. The default exa backend is cheap; request backend "firecrawl" only when its structured web/news/image sources are specifically needed.',
   'Use web-fetch to read the full content of one known URL instead of searching for it. The default exa backend is cheap; backend "firecrawl" is the explicit escalation for JavaScript-heavy pages or when Exa extraction is insufficient.',
-  "Use web-crawl only when content from multiple pages of the same website is needed; it always consumes Firecrawl credits.",
+  "Use web-crawl only when content from multiple pages of the same website is needed; it requires FIRECRAWL_API_KEY and consumes Firecrawl credits.",
   "Web tools never fall back between the exa and firecrawl backends on their own; when a backend fails, the error names the retry to make.",
   "After web-search, answer from the returned excerpts when they suffice; use web-fetch only for the selected pages whose full content is needed.",
   "Consolidate related discovery questions into one query before issuing narrower follow-up searches.",
@@ -115,7 +115,7 @@ export const FETCH_PARAMETER_DESCRIPTIONS = {
 
 /** Describes multi-page Firecrawl crawling and its page and output limits. */
 export const CRAWL_TOOL_DESCRIPTION =
-  "Crawl multiple pages of a website with Firecrawl and return markdown documents. Defaults to 5 pages and never accepts a limit above 100; each page consumes a Firecrawl credit. Output is limited to 50KB or 2000 lines; complete truncated output is saved to a temporary file.";
+  "Crawl multiple pages of a website with Firecrawl and return markdown documents. Requires FIRECRAWL_API_KEY. Defaults to 5 pages and never accepts a limit above 100; each page consumes a Firecrawl credit. Output is limited to 50KB or 2000 lines; complete truncated output is saved to a temporary file.";
 
 /** Adds the multi-page crawl capability to the model's tool prompt. */
 export const CRAWL_PROMPT_SNIPPET =

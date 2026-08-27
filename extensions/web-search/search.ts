@@ -40,7 +40,7 @@ const DEFAULT_SEARCH_LIMIT = 5;
 const EXA_RETRY_HINT =
   'Retry web-search, or escalate explicitly with backend: "firecrawl".';
 const FIRECRAWL_RETRY_HINT =
-  'Retry web-search with backend: "firecrawl", or use the default exa backend.';
+  'Retry web-search with backend: "firecrawl", configure FIRECRAWL_API_KEY for higher limits, or use the default exa backend.';
 
 /** Maps the friendly recency filter to Firecrawl's Google-style `tbs` values. */
 const RECENCY_TBS: Record<RecencyFilter, string> = {
