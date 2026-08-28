@@ -6,7 +6,7 @@
 > This file is the deeper Effect API reference it points back to.
 
 > **Verified against:** `effect@4.0.0-beta.98` and `@effect/platform-node@4.0.0-beta.98`
-> (npm dist-tag `beta`, checked 2026-07-13). Every snippet in this doc was type-checked
+> (registry tag `beta`, checked 2026-07-13). Every snippet in this doc was type-checked
 > with `tsc --strict` against these packages, and the process-spawning / runtime snippets
 > were executed with Node 24. v4 source lives in the **`Effect-TS/effect-smol`** repo
 > (not `Effect-TS/effect`); the official migration guide is
@@ -17,7 +17,7 @@
 ## Install
 
 ```bash
-npm install effect@beta @effect/platform-node@beta
+pnpm add effect@beta @effect/platform-node@beta
 ```
 
 Big structural facts:

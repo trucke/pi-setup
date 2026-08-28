@@ -388,7 +388,7 @@ test("cleans up the session directory when the tool call is cancelled", async ()
 });
 
 // Consumes ChatGPT subscription quota; run explicitly with
-// npm run test:live:research
+// pnpm test:live:research
 test(
   "live codex research",
   { skip: !process.env.CODEX_RESEARCH_LIVE },

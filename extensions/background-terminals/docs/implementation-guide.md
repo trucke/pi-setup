@@ -33,7 +33,7 @@ the key simplification vs. subagents' `send()`).
 
 ## 2. Directory / file architecture
 
-Mirror the subagents layout exactly (it is the known-green reference; `npm run check` passes
+Mirror the subagents layout exactly (it is the known-green reference; `pnpm check` passes
 there against the pinned toolchain):
 
 ```
@@ -58,14 +58,14 @@ extensions/background-terminals/
 ```
 
 Tests live beside the extension entry point and use plain
-`node --test --experimental-strip-types`. The repository-root `npm test` script picks them
+`node --test --experimental-strip-types`. The repository-root `pnpm test` script picks them
 up automatically; dependency versions and package scripts are managed only at the root.
 
 ## 3. Toolchain
 
 The repository root owns dependencies, scripts, and TypeScript configuration. Keep Effect
 and its platform packages on the same exact beta and do not add extension-local manifests
-or lockfiles. Validate with the root `npm run check` and `npm test` scripts.
+or lockfiles. Validate with the root `pnpm check` and `pnpm test` scripts.
 
 This extension does not need `@effect/platform-node`. Subagents' Codex backend uses raw
 `node:child_process` `spawn` inside Effect and that is the right model here too (§6).
@@ -290,7 +290,7 @@ Decisions and rationale:
   tool description must say so — interactive commands will exit or hang, and `bg-kill` is the
   remedy).
 - **`detached: true` on POSIX** gives the child its own process group, so kill can signal
-  `-pid` and take down the whole tree (grandchildren from `npm run dev` etc.). `killTree`
+  `-pid` and take down the whole tree (grandchildren from `pnpm dev` etc.). `killTree`
   keeps the direct-signal fallback when the group is gone; Windows uses `taskkill /T` and
   adds `/F` for the force-kill phase. `terminateChild` uses Effect
   callbacks/timeouts: SIGTERM now, SIGKILL after 2s if needed, then a final 500ms bound.
@@ -690,7 +690,7 @@ Copy `TakeoverView` (takeover.ts lines 350–563) **minus the Input line** (read
 ```
 ────────────────────────────────────────────────────────────
 ■ bt-3 · dev server · running · 4m12s · pid 12345 · ~/project
-$ npm run dev
+$ pnpm dev
 ────────────────────────────────────────────────────────────
 [ tab: stdout (1.2MB) | stderr (4KB) ]        ← `t` toggles streams
   ...scrollable output lines (sanitized, wrapped, tail-pinned)...
@@ -824,14 +824,14 @@ tricks; they exist on any machine running pi)
 **Manual validation (must actually run pi):**
 - `pi` → ask the model to `bg-start` a dev-server-like command → widget appears above editor
   with correct count/pluralization → `/ps` list → enter detail → live tail scrolls, `t`
-  toggles stderr, ANSI-heavy output (e.g. `npm run dev`) renders without smearing → back →
+  toggles stderr, ANSI-heavy output (e.g. `pnpm dev`) renders without smearing → back →
   `x` kills → widget disappears when last settles → completion message arrives exactly once,
   rendered collapsed, expands with ctrl+o.
 - Race check: start a 2s `sleep`-then-echo while the model is mid-long-turn → result arrives
   as follow-up after the turn, not mid-stream, and only once.
 - `/new` and `/reload` with a running process → process is dead afterwards (`ps aux | grep`),
   no orphan, widget cleared.
-- `npm run check` green; `npm test` green; repo-root `npm run format:check` clean for the new
+- `pnpm check` green; `pnpm test` green; repo-root `pnpm format:check` clean for the new
   files (prettier covers `extensions/**/*.ts`).
 
 ## 15. Pitfalls (each burned someone in the reference code)
@@ -846,7 +846,7 @@ tricks; they exist on any machine running pi)
 5. **Overlay components are disposed on close** — never cache and re-show; re-invoke
    `ctx.ui.custom` (tui.md Overlay Lifecycle). Make `cleanup()` idempotent with a `closed`
    flag and clear every timer in it.
-6. **`detached` + group kill or you orphan grandchildren** — `sh -c "npm run dev"` without
+6. **`detached` + group kill or you orphan grandchildren** — `sh -c "pnpm dev"` without
    process-group SIGTERM leaves node servers running after pi exits (codex.ts `killTree`
    comment).
 7. **Settle must be idempotent and single-sourced** — kill vs exit vs error events race;
@@ -873,8 +873,8 @@ tricks; they exist on any machine running pi)
 
 ## 16. Acceptance checklist
 
-- [ ] Root `npm run check` green (TS7 + Effect LS).
-- [ ] Root `npm test` green (manager, output, result-delivery, ps selection).
+- [ ] Root `pnpm check` green (TS7 + Effect LS).
+- [ ] Root `pnpm test` green (manager, output, result-delivery, ps selection).
 - [ ] Tools registered: `bg-start`, `bg-status`, `bg-list`, `bg-kill`; descriptions document
       no-stdin, session-scoped lifetime, and truncation limits; no stdin/steer surface exists.
 - [ ] stdout and stderr captured separately and completely (in-memory tail + spill file);

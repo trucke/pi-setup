@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DOTFILES="${DOTFILES:-${HOME}/.dotfiles}"
+PIN_PATH="share/bin/install-pi-packages"
+PIN_SOURCE="git:github.com/trucke/pi-setup"
+
+release_published=0
+dotfiles_pin_commit=""
+dotfiles_main_moved=0
+
+die() {
+	echo "release: $*" >&2
+	exit 1
+}
+
+repo_value() {
+	local repo="$1"
+	local revision="$2"
+	local template="$3"
+	jj -R "${repo}" log -r "${revision}" --no-graph -T "${template}"
+}
+
+require_command() {
+	command -v "$1" >/dev/null 2>&1 || die "$1 is required"
+}
+
+confirm() {
+	[ -t 0 ] || die "an interactive terminal is required"
+	printf 'Release and publish %s, then update dotfiles? [y/N] ' "$1"
+	read -r reply
+	case "${reply}" in
+		y | Y | yes) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+on_error() {
+	local status=$?
+	if [ "${release_published}" = "1" ]; then
+		echo "release: pi-setup was published successfully; do not recreate or move its tag" >&2
+		if [ "${dotfiles_main_moved}" = "1" ]; then
+			echo "release: retry the dotfiles push with: jj -R '${DOTFILES}' git push --bookmark main" >&2
+		elif [ -n "${dotfiles_pin_commit}" ]; then
+			echo "release: the dotfiles pin commit is ${dotfiles_pin_commit}" >&2
+			echo "release: validate it, move main to that commit, and push only main" >&2
+		else
+			echo "release: update ${DOTFILES}/${PIN_PATH} to the published tag and publish that pin" >&2
+		fi
+	fi
+	exit "${status}"
+}
+trap on_error ERR
+
+[ $# -eq 1 ] || die "usage: ./scripts/release vX.Y.Z"
+tag="$1"
+[[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version must have the form vX.Y.Z"
+version="${tag#v}"
+
+for command in jj node pnpm; do
+	require_command "${command}"
+done
+
+[ -d "${DOTFILES}/.jj" ] || die "dotfiles repository not found at ${DOTFILES}"
+[ -x "${DOTFILES}/share/agents/skills/dotfiles/doctor.sh" ] || die "dotfiles doctor is missing"
+
+cd "${ROOT}"
+
+echo "--- fetching repositories"
+jj git fetch --remote origin
+jj -R "${DOTFILES}" git fetch --remote origin
+
+main_id="$(repo_value "${ROOT}" main 'commit_id')"
+origin_id="$(repo_value "${ROOT}" 'main@origin' 'commit_id')"
+parent_id="$(repo_value "${ROOT}" '@-' 'commit_id')"
+at_empty="$(repo_value "${ROOT}" @ 'if(empty, "1", "0")')"
+[ "${main_id}" = "${origin_id}" ] || die "pi-setup main differs from main@origin"
+[ "${parent_id}" = "${main_id}" ] || die "pi-setup @ must be based directly on main"
+[ "${at_empty}" = "1" ] || die "pi-setup @ must be empty"
+
+if [ -n "$(jj tag list --all-remotes "exact:${tag}")" ]; then
+	die "tag ${tag} already exists"
+fi
+
+current_version="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')"
+[ "${current_version}" != "${version}" ] || die "package.json is already at ${version}"
+node - "${current_version}" "${version}" <<'NODE'
+const [, , current, next] = process.argv;
+const parts = (value) => value.split(".").map(Number);
+const [currentMajor, currentMinor, currentPatch] = parts(current);
+const [nextMajor, nextMinor, nextPatch] = parts(next);
+const isNewer =
+  nextMajor > currentMajor ||
+  (nextMajor === currentMajor && nextMinor > currentMinor) ||
+  (nextMajor === currentMajor && nextMinor === currentMinor && nextPatch > currentPatch);
+if (!isNewer) {
+  console.error(`release: ${next} must be newer than ${current}`);
+  process.exit(1);
+}
+NODE
+
+package_manager="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager')"
+[[ "${package_manager}" == pnpm@* ]] || die "package.json must pin pnpm in packageManager"
+
+pin_file="${DOTFILES}/${PIN_PATH}"
+[ -f "${pin_file}" ] || die "dotfiles pin file is missing: ${pin_file}"
+[ -z "$(jj -R "${DOTFILES}" diff --from main --to @ --summary "root:${PIN_PATH}")" ] || \
+	die "${PIN_PATH} already has unrelated dotfiles changes"
+[ -n "$(repo_value "${DOTFILES}" 'main & ::@' 'commit_id')" ] || \
+	die "dotfiles working copy is not descended from main"
+
+dot_main_id="$(repo_value "${DOTFILES}" main 'commit_id')"
+dot_origin_id="$(repo_value "${DOTFILES}" 'main@origin' 'commit_id')"
+[ "${dot_main_id}" = "${dot_origin_id}" ] || die "dotfiles main differs from main@origin"
+
+pin_count="$(grep -cE '^package="git:github\.com/trucke/pi-setup@v[0-9]+\.[0-9]+\.[0-9]+"$' "${pin_file}" || true)"
+[ "${pin_count}" = "1" ] || die "expected exactly one pi-setup pin in ${pin_file}"
+
+echo "--- validating dotfiles before release"
+bash "${DOTFILES}/share/agents/skills/dotfiles/doctor.sh" validate "${DOTFILES}"
+
+echo "--- validating pi-setup"
+pnpm install --frozen-lockfile
+pnpm test
+pnpm check
+pnpm format:check
+pnpm pack --dry-run
+
+pnpm version "${version}" --no-git-tag-version --no-git-checks >/dev/null
+
+echo "--- release change"
+jj diff --stat
+jj diff package.json
+if ! confirm "${tag}"; then
+	jj restore package.json
+	die "aborted"
+fi
+
+jj describe -m "chore: release ${tag}"
+jj bookmark move main --to @
+jj tag set "${tag}" -r @
+jj git push --bookmark main --tag "${tag}"
+release_published=1
+jj new main
+
+echo "--- updating dotfiles pin"
+node - "${pin_file}" "${PIN_SOURCE}" "${tag}" <<'NODE'
+const fs = require("node:fs");
+const [, , path, source, tag] = process.argv;
+const input = fs.readFileSync(path, "utf8");
+const pattern = /^package="git:github\.com\/trucke\/pi-setup@v\d+\.\d+\.\d+"$/m;
+const matches = input.match(new RegExp(pattern.source, "gm"));
+if (matches?.length !== 1) {
+  console.error(`release: expected exactly one pi-setup pin in ${path}`);
+  process.exit(1);
+}
+fs.writeFileSync(path, input.replace(pattern, `package="${source}@${tag}"`));
+NODE
+
+pin_message="chore(agents): update pi-setup to ${tag}"
+jj -R "${DOTFILES}" split \
+	--insert-after main \
+	-m "${pin_message}" \
+	"root:${PIN_PATH}"
+
+dotfiles_pin_commit="$(repo_value "${DOTFILES}" 'children(main) & ancestors(@)' 'commit_id')"
+[[ "${dotfiles_pin_commit}" =~ ^[0-9a-f]{40}$ ]] || die "could not identify the dotfiles pin commit"
+
+bash "${DOTFILES}/share/agents/skills/dotfiles/doctor.sh" validate "${DOTFILES}"
+jj -R "${DOTFILES}" bookmark move main --to "${dotfiles_pin_commit}"
+dotfiles_main_moved=1
+jj -R "${DOTFILES}" git push --bookmark main
+
+echo "released ${tag}; other machines converge with: dot sync"

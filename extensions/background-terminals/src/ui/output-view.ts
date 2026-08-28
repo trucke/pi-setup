@@ -40,7 +40,7 @@ export function buildOutputLines(text: string, width: number) {
   const safeWidth = Math.max(10, width);
   const out: string[] = [];
   for (const raw of text.split("\n")) {
-    // Carriage-return progress lines (npm, cargo): keep only the final state.
+    // Carriage-return progress lines from package managers and cargo: keep only the final state.
     const segments = raw.split("\r");
     const finalSegment = segments.at(-1) ?? "";
     const lastSegment =

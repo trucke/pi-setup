@@ -6,7 +6,7 @@
 > draw the line between "wrap in Effect" and "leave as plain TS".
 >
 > **Verified against** `effect@4.0.0-beta.98`, `@effect/platform-node@4.0.0-beta.98`,
-> and `typescript@7.0.2`. The root `npm run check` passes clean — use it as the
+> and `typescript@7.0.2`. The root `pnpm check` passes clean — use it as the
 > reference implementation.
 >
 > Audience: the agents maintaining `web-search`, `ask-user`, and `ui`.
@@ -47,7 +47,7 @@ The root `tsconfig.json` sets strict NodeNext compilation, TypeScript-extension 
 the Node types. Keep local imports written **with the `.ts` extension**
 (`./src/manager.ts`), matching the house style.
 
-`npm run check` is the ground-truth type check. `npm test` runs the ordinary offline suite;
+`pnpm check` is the ground-truth type check. `pnpm test` runs the ordinary offline suite;
 live backend tests have an explicit root script so routine validation never consumes model
 quota.
 
@@ -268,9 +268,9 @@ Dependencies and tooling are managed by the repository root so development and s
 runtime code resolve the same versions:
 
 ```bash
-npm install
-npm run check
-npm test
+pnpm install
+pnpm check
+pnpm test
 ```
 
 For a focused test, invoke its root-relative file directly with `node --test

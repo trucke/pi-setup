@@ -12,15 +12,19 @@ This repository packages the selected Pi extensions, skills, themes, and their r
 - Keep package resources explicit in the `pi` manifest in `package.json`.
 - Do not modify installed package checkouts under `~/.pi/agent`; change this source repository and deploy a reviewed release.
 
+## Package manager
+
+Use pnpm exclusively. Keep `pnpm-lock.yaml` committed and do not introduce npm or another package manager's lockfile.
+
 ## Validation
 
 Run the focused tests for the changed area and, before release:
 
 ```sh
-npm test
-npm run check
-npm run format:check
-npm pack --dry-run
+pnpm test
+pnpm check
+pnpm format:check
+pnpm pack --dry-run
 ```
 
 ## Version control
@@ -29,7 +33,12 @@ This is a colocated Jujutsu/Git repository. Keep each logical change reviewable 
 
 ## Releases
 
-- Update the version in both `package.json` and `package-lock.json` in a dedicated `chore: release vX.Y.Z` commit.
-- Move `main` to the reviewed release commit and push it.
-- Publish a matching lightweight `vX.Y.Z` tag.
-- Installed Git packages are pinned. Deploy a release explicitly with `pi install git:github.com/trucke/pi-setup@vX.Y.Z`.
+Release from an empty working-copy change directly on synchronized `main`:
+
+```sh
+./scripts/release vX.Y.Z
+```
+
+The command validates both repositories, bumps `package.json`, creates the dedicated `chore: release vX.Y.Z` change, and pushes `main` with a matching lightweight tag. It then updates the pinned package in `~/.dotfiles`, inserts that change directly after dotfiles `main`, rebases existing live dotfiles work on top, validates it, and pushes only the pin change. It never replaces the live dotfiles checkout or publishes unrelated work.
+
+If `pi-setup` is published but the dotfiles update fails, keep the published tag immutable and follow the recovery instructions printed by the command.
