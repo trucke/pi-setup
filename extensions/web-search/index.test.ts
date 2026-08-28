@@ -38,13 +38,19 @@ const LEGACY_NAMES = [
   "firecrawl_crawl",
 ];
 
-test("registers exactly the four kebab-case web tools without legacy aliases", () => {
+test("registers exactly the five kebab-case web tools without legacy aliases", () => {
   const tools: RegisteredTool[] = [];
   webSearch(makePi(tools));
 
   assert.deepEqual(
     tools.map((tool) => tool.name),
-    ["web-research", "web-search", "web-fetch", "web-crawl"],
+    [
+      "web-research",
+      "web-search",
+      "developer-search",
+      "web-fetch",
+      "web-crawl",
+    ],
   );
   for (const tool of tools) {
     assert.match(tool.name, /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/);
@@ -81,6 +87,55 @@ test("exposes backend routing with exa as the default in the schemas", () => {
   assert.equal(
     (search.parameters?.properties?.limit as { maximum?: number }).maximum,
     10,
+  );
+
+  const developer = tools.find((tool) => tool.name === "developer-search");
+  assert.ok(developer);
+  // Narrow initial scope: no language/topic/license/star/archive/fork filters.
+  assert.deepEqual(Object.keys(developer.parameters?.properties ?? {}), [
+    "query",
+    "limit",
+    "types",
+    "repos",
+    "sources",
+    "passages",
+  ]);
+  assert.equal(
+    (developer.parameters?.properties?.query as { minLength?: number })
+      .minLength,
+    1,
+  );
+  const developerLimit = developer.parameters?.properties?.limit as {
+    type?: string;
+    minimum?: number;
+    maximum?: number;
+  };
+  assert.equal(developerLimit.type, "integer");
+  assert.equal(developerLimit.minimum, 1);
+  assert.equal(developerLimit.maximum, 20);
+  assert.equal(
+    (developer.parameters?.properties?.passages as { type?: string }).type,
+    "integer",
+  );
+  const developerRepos = developer.parameters?.properties?.repos as {
+    maxItems?: number;
+    items?: { minLength?: number; maxLength?: number };
+  };
+  assert.equal(developerRepos.maxItems, 20);
+  assert.equal(developerRepos.items?.minLength, 1);
+  assert.equal(developerRepos.items?.maxLength, 512);
+  const developerTypes = developer.parameters?.properties?.types as {
+    items?: { enum?: string[] };
+  };
+  assert.deepEqual(developerTypes.items?.enum, [
+    "doc",
+    "issue",
+    "pull_request",
+    "readme",
+  ]);
+  assert.match(developer.description, /Developer Index/);
+  assert.ok(
+    developer.promptGuidelines?.some((line) => line.includes("untrusted")),
   );
 
   const fetch = tools.find((tool) => tool.name === "web-fetch");

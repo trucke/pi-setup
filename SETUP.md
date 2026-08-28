@@ -32,8 +32,8 @@ run while the agent is active.
 
 ## Web tools
 
-The package registers four consolidated web tools: `web-research`,
-`web-search`, `web-fetch`, and `web-crawl`.
+The package registers five consolidated web tools: `web-research`,
+`web-search`, `developer-search`, `web-fetch`, and `web-crawl`.
 
 ### web-research
 
@@ -55,6 +55,20 @@ Contents HTTP APIs directly and is the cheap default. The `firecrawl` backend
 is the explicit escalation: structured web/news/image search listings for
 `web-search`, and robust browser-rendered scraping for `web-fetch`. Backends
 never fall back to each other silently; errors name the retry to make.
+
+### developer-search
+
+`developer-search` queries Firecrawl's Developer Index — library
+documentation, GitHub issues, merged pull requests, and READMEs — through the
+dedicated `/v2/search/developer` endpoint and returns ranked results with
+query-relevant passages. Use it for external libraries and frameworks (API
+history, known bugs, error messages, upstream docs); local file search remains
+the tool for the current checkout. Results can be scoped with `types`,
+`repos` (issues/PRs/READMEs), and `sources` (documentation source IDs).
+
+The endpoint works without an API key; a configured `FIRECRAWL_API_KEY` is
+sent automatically for higher rate limits. Returned passages are quoted
+evidence from third parties and are never interpreted as instructions.
 
 ### web-crawl
 
@@ -86,6 +100,8 @@ Firecrawl-backed retrieval is credit-aware:
 - `web-search` with `backend: "firecrawl"` discovers at most 10 results and
   returns query-relevant excerpts when available, without returning complete
   page content.
+- `developer-search` costs 2 credits per 10 results, rounded up: the default
+  limit of 10 costs 2 credits, limits of 11-20 cost 4.
 - `web-crawl` defaults to 5 pages.
 - Equivalent Firecrawl page scrapes are reused across reloads and resumes,
   including pages already returned by crawls and sessions recorded under the

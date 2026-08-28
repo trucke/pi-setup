@@ -12,6 +12,7 @@ import { withHerdrBlocked } from "../shared/herdr.ts";
 
 const FIRECRAWL_BUDGET_ENTRY = "firecrawl-budget";
 const DEFAULT_SEARCH_LIMIT = 5;
+const DEFAULT_DEVELOPER_SEARCH_LIMIT = 10;
 const DEFAULT_CRAWL_LIMIT = 5;
 const ALLOW_SESSION_OPTION = "Allow all Firecrawl requests for this session";
 const DECLINE_OPTION = "Decline this request";
@@ -26,13 +27,16 @@ function record(value: unknown): Record<string, unknown> | undefined {
  * Maps a tool call to the Firecrawl operation it spends credits on, or
  * undefined for calls that never touch Firecrawl. web-search and web-fetch
  * default to Exa and only spend (and reserve) credits when the model
- * explicitly requests backend "firecrawl"; web-crawl is always Firecrawl.
- * Legacy persisted names remain recognized for session restoration.
+ * explicitly requests backend "firecrawl"; web-crawl and developer-search are
+ * always Firecrawl. Legacy persisted names remain recognized for session
+ * restoration.
  */
 export function firecrawlOperation(toolName: string, input: unknown) {
   switch (toolName) {
     case "firecrawl_search":
       return "search";
+    case "developer-search":
+      return "developer-search";
     case "firecrawl_scrape":
       return "scrape";
     case "web-crawl":
@@ -66,6 +70,12 @@ export function estimatedCreditsForCall(toolName: string, input: unknown) {
     return record(input)?.scrapeResults === true
       ? searchCredits + limit
       : searchCredits;
+  }
+  if (operation === "developer-search") {
+    // Developer Index pricing: 2 credits per 10 results, rounded up.
+    return (
+      Math.ceil(limitValue(input, DEFAULT_DEVELOPER_SEARCH_LIMIT) / 10) * 2
+    );
   }
   if (operation === "scrape") return 1;
   if (operation === "crawl") {
@@ -128,6 +138,10 @@ export function creditsForFirecrawlResult(
 
   if (operation === "search") {
     return searchCredits(details, input);
+  }
+  if (operation === "developer-search") {
+    // The endpoint reports no creditsUsed; charge the limit-based estimate.
+    return estimatedCreditsForCall(toolName, input);
   }
   if (operation === "crawl") {
     return (
