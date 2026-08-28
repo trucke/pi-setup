@@ -15,10 +15,10 @@ Prefer a profile when its role fits:
 
 | Profile    | Purpose                                        | Candidate order                                                                                    |
 | ---------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `scout`    | Inspect and map a repository without edits     | Pi · GPT-5.6 Luna · xhigh; Pi · DeepSeek V4 Pro · high                                             |
-| `worker`   | Implement focused changes                      | Claude Code · Fable 5 · medium; Pi · Kimi K3 · max; Pi · GPT-5.6 Sol · high                        |
+| `scout`    | Inspect and map a repository without edits     | Pi · GLM 5.3 Flash · high; Pi · GPT-5.6 Luna · xhigh                                               |
+| `worker`   | Implement focused changes                      | Claude Code · Fable 5 · medium; Pi · GPT-5.6 Sol · high; Pi · GLM 5.3 Flash · high                 |
 | `reviewer` | Review changes without modifying or commenting | Codex · GPT-5.6 Sol · high · native review; Claude Code · Fable 5 · high · direct read-only review |
-| `oracle`   | Deep technical analysis and recommendations    | Claude Code · Fable 5 · high; Pi · GPT-5.6 Sol · high                                              |
+| `oracle`   | Deep technical analysis and recommendations    | Pi · GPT-5.6 Sol · xhigh; Pi · GLM 5.3 Flash · high                                                |
 
 Profile fallbacks are explicit and occur only before meaningful model or tool activity. Typed asynchronous startup rejection can advance to the next candidate under the same run id; every attempt is recorded. Fallback never launches a second writer after a workspace may have been mutated.
 

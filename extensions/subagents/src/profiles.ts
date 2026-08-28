@@ -18,14 +18,14 @@ export const EXECUTION_PROFILES = {
     candidates: [
       {
         harness: "pi",
-        model: "openai-codex/gpt-5.6-luna",
-        reasoningEffort: "xhigh",
+        model: "opencode-go/glm-5.3-flash",
+        reasoningEffort: "high",
         runMode: "agent",
       },
       {
         harness: "pi",
-        model: "opencode-go/deepseek-v4-pro",
-        reasoningEffort: "high",
+        model: "openai-codex/gpt-5.6-luna",
+        reasoningEffort: "xhigh",
         runMode: "agent",
       },
     ],
@@ -43,13 +43,13 @@ export const EXECUTION_PROFILES = {
       },
       {
         harness: "pi",
-        model: "opencode-go/kimi-k3",
-        reasoningEffort: "max",
+        model: "openai-codex/gpt-5.6-sol",
+        reasoningEffort: "high",
         runMode: "agent",
       },
       {
         harness: "pi",
-        model: "openai-codex/gpt-5.6-sol",
+        model: "opencode-go/glm-5.3-flash",
         reasoningEffort: "high",
         runMode: "agent",
       },
@@ -80,14 +80,14 @@ export const EXECUTION_PROFILES = {
       "Act as a technical oracle. Inspect the available evidence, reason deeply about the question, identify trade-offs and uncertainty, and recommend a concrete course of action. Do not modify files unless the task explicitly requests implementation.",
     candidates: [
       {
-        harness: "claude",
-        model: "claude-fable-5",
-        reasoningEffort: "high",
+        harness: "pi",
+        model: "openai-codex/gpt-5.6-sol",
+        reasoningEffort: "xhigh",
         runMode: "agent",
       },
       {
         harness: "pi",
-        model: "openai-codex/gpt-5.6-sol",
+        model: "opencode-go/glm-5.3-flash",
         reasoningEffort: "high",
         runMode: "agent",
       },

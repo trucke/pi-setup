@@ -26,10 +26,10 @@ Profiles are typed, source-controlled configuration in `src/profiles.ts`.
 
 | Profile    | Candidate order                                                                                       |
 | ---------- | ----------------------------------------------------------------------------------------------------- |
-| `scout`    | Pi · `openai-codex/gpt-5.6-luna` · xhigh; Pi · `opencode-go/deepseek-v4-pro` · high                   |
-| `worker`   | Claude · Fable 5 · medium; Pi · Kimi K3 · max; Pi · GPT-5.6 Sol · high                                |
+| `scout`    | Pi · `opencode-go/glm-5.3-flash` · high; Pi · `openai-codex/gpt-5.6-luna` · xhigh                    |
+| `worker`   | Claude · Fable 5 · medium; Pi · GPT-5.6 Sol · high; Pi · GLM 5.3 Flash · high                         |
 | `reviewer` | Codex · GPT-5.6 Sol · high · native `review/start`; Claude · Fable 5 · high · direct read-only review |
-| `oracle`   | Claude · Fable 5 · high; Pi · GPT-5.6 Sol · high                                                      |
+| `oracle`   | Pi · GPT-5.6 Sol · xhigh; Pi · GLM 5.3 Flash · high                                                  |
 
 A profile fallback is attempted when backend readiness/session creation fails or when a backend emits a typed startup rejection before meaningful activity. Asynchronous fallback keeps the same run id, closes the rejected candidate first, and records every attempt. The first assistant delta/message or tool event locks the selected candidate; later failures are terminal and never launch a second writer.
 

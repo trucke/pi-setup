@@ -6,14 +6,14 @@ test("execution profiles keep the reviewed candidate order", () => {
   assert.deepEqual(EXECUTION_PROFILES.scout.candidates, [
     {
       harness: "pi",
-      model: "openai-codex/gpt-5.6-luna",
-      reasoningEffort: "xhigh",
+      model: "opencode-go/glm-5.3-flash",
+      reasoningEffort: "high",
       runMode: "agent",
     },
     {
       harness: "pi",
-      model: "opencode-go/deepseek-v4-pro",
-      reasoningEffort: "high",
+      model: "openai-codex/gpt-5.6-luna",
+      reasoningEffort: "xhigh",
       runMode: "agent",
     },
   ]);
@@ -58,22 +58,28 @@ test("worker and oracle profiles retain explicit safe fallbacks", () => {
       },
       {
         harness: "pi",
-        model: "opencode-go/kimi-k3",
-        reasoningEffort: "max",
+        model: "openai-codex/gpt-5.6-sol",
+        reasoningEffort: "high",
       },
       {
         harness: "pi",
-        model: "openai-codex/gpt-5.6-sol",
+        model: "opencode-go/glm-5.3-flash",
         reasoningEffort: "high",
       },
     ],
   );
-  assert.equal(
-    EXECUTION_PROFILES.oracle.candidates[0]?.model,
-    "claude-fable-5",
-  );
-  assert.equal(
-    EXECUTION_PROFILES.oracle.candidates[1]?.model,
-    "openai-codex/gpt-5.6-sol",
-  );
+  assert.deepEqual(EXECUTION_PROFILES.oracle.candidates, [
+    {
+      harness: "pi",
+      model: "openai-codex/gpt-5.6-sol",
+      reasoningEffort: "xhigh",
+      runMode: "agent",
+    },
+    {
+      harness: "pi",
+      model: "opencode-go/glm-5.3-flash",
+      reasoningEffort: "high",
+      runMode: "agent",
+    },
+  ]);
 });
