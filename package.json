@@ -33,7 +33,7 @@
     "typebox": "*"
   },
   "name": "@trucke/pi-setup",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "keywords": [
     "pi-package"
   ],
