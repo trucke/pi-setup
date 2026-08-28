@@ -106,6 +106,12 @@ test("only explicit firecrawl backends reserve credits for the new tools", () =>
   assert.equal(estimatedCreditsForCall("web-crawl", { limit: 12 }), 12);
   assert.equal(estimatedCreditsForCall("web-crawl", {}), 5);
 
+  // developer-search is always Firecrawl: 2 credits per 10 results.
+  assert.equal(estimatedCreditsForCall("developer-search", { query: "q" }), 2);
+  assert.equal(estimatedCreditsForCall("developer-search", { limit: 10 }), 2);
+  assert.equal(estimatedCreditsForCall("developer-search", { limit: 11 }), 4);
+  assert.equal(estimatedCreditsForCall("developer-search", { limit: 20 }), 4);
+
   assert.equal(
     creditsForFirecrawlResult(
       "web-search",
@@ -121,6 +127,35 @@ test("only explicit firecrawl backends reserve credits for the new tools", () =>
       { backend: "firecrawl", url: "u" },
     ),
     1,
+  );
+
+  // developer-search reports no creditsUsed: charge the limit-based estimate,
+  // including on failures, and treat budget-blocked calls as free.
+  assert.equal(
+    creditsForFirecrawlResult(
+      "developer-search",
+      { backend: "firecrawl", results: [] },
+      { query: "q", limit: 15 },
+    ),
+    4,
+  );
+  assert.equal(
+    creditsForFirecrawlResult(
+      "developer-search",
+      undefined,
+      { query: "q" },
+      true,
+    ),
+    2,
+  );
+  assert.equal(
+    creditsForFirecrawlResult(
+      "developer-search",
+      { localBudgetBlocked: true },
+      { query: "q" },
+      true,
+    ),
+    0,
   );
 });
 
@@ -603,10 +638,16 @@ test("restores mixed legacy and current tool names from one session", () => {
       name: "web-search",
       details: { backend: "exa", results: [] },
     }),
+    toolCallEntry("dev-1", "developer-search", { query: "q", limit: 20 }),
+    toolResultEntry({
+      id: "dev-1",
+      name: "developer-search",
+      details: { backend: "firecrawl", results: [] },
+    }),
   ]);
 
-  assert.equal(usage.creditsUsed, 5);
-  assert.deepEqual(usage.toolCallIds, new Set(["legacy-1", "new-1"]));
+  assert.equal(usage.creditsUsed, 9);
+  assert.deepEqual(usage.toolCallIds, new Set(["legacy-1", "new-1", "dev-1"]));
 });
 
 test("never gates or reserves exa-backed search and fetch calls", async () => {
@@ -638,4 +679,12 @@ test("never gates or reserves exa-backed search and fetch calls", async () => {
     undefined,
   );
   assert.deepEqual(selections, []);
+
+  // developer-search is always Firecrawl-backed, so it is budget-gated.
+  await emit("tool_call", {
+    toolCallId: "dev-1",
+    toolName: "developer-search",
+    input: { query: "q" },
+  });
+  assert.equal(selections.length, 1);
 });

@@ -6,6 +6,9 @@
  *   concise, cited Markdown answer.
  * - web-search: discovery search. Default backend exa (direct Exa Search
  *   API, cheap); backend "firecrawl" for structured web/news/image results.
+ * - developer-search: Firecrawl Developer Index search over library docs,
+ *   GitHub issues, merged pull requests, and READMEs; keyless with optional
+ *   FIRECRAWL_API_KEY for higher limits.
  * - web-fetch: read one known URL. Default backend exa (direct Exa Contents
  *   API); backend "firecrawl" for robust browser-rendered scraping.
  * - web-crawl: multi-page Firecrawl crawl of one website.
@@ -23,6 +26,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerScrapeCacheRestoration, type ScrapeCache } from "./cache.ts";
 import { registerCrawlTool } from "./crawl.ts";
+import {
+  createOptionalFirecrawlKeyProvider,
+  registerDeveloperSearchTool,
+} from "./developer.ts";
 import { createExaKeyProvider } from "./exa.ts";
 import { registerFetchTool } from "./fetch.ts";
 import { createFirecrawlProvider } from "./firecrawl.ts";
@@ -41,6 +48,9 @@ export default function webSearch(pi: ExtensionAPI) {
 
   registerResearchTool(pi);
   registerSearchTool(pi, { getFirecrawl, getExaKey });
+  registerDeveloperSearchTool(pi, {
+    getApiKey: createOptionalFirecrawlKeyProvider(),
+  });
   registerFetchTool(pi, { getFirecrawl, getExaKey, scrapeCache });
   registerCrawlTool(pi, { getFirecrawl: getKeyedFirecrawl });
 }
