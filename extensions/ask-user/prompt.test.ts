@@ -8,6 +8,7 @@ import {
 
 test("describes batched single-select questions to the model", () => {
   assert.match(ASK_USER_TOOL_DESCRIPTION, /batch of up to 4 questions/);
+  assert.match(ASK_USER_TOOL_DESCRIPTION, /questions array/);
   assert.match(ASK_USER_TOOL_DESCRIPTION, /accepts one answer/);
   assert.ok(
     ASK_USER_PROMPT_GUIDELINES.some((guideline) =>

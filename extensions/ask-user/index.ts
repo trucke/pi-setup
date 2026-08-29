@@ -61,18 +61,7 @@ const QuestionSchema = Type.Object({
   }),
 });
 
-const SingleQuestionParams = Type.Object({
-  question: Type.String({
-    description: ASK_USER_PARAMETER_DESCRIPTIONS.question,
-  }),
-  options: Type.Array(OptionSchema, {
-    minItems: MIN_OPTIONS,
-    maxItems: MAX_OPTIONS,
-    description: ASK_USER_PARAMETER_DESCRIPTIONS.options,
-  }),
-});
-
-const BatchQuestionParams = Type.Object({
+const AskUserParams = Type.Object({
   questions: Type.Array(QuestionSchema, {
     minItems: MIN_QUESTIONS,
     maxItems: MAX_QUESTIONS,
@@ -80,11 +69,10 @@ const BatchQuestionParams = Type.Object({
   }),
 });
 
-const AskUserParams = Type.Union([SingleQuestionParams, BatchQuestionParams]);
-
 export type AskUserInput = Static<typeof AskUserParams>;
 type QuestionInput = Static<typeof QuestionSchema>;
 type OptionInput = Static<typeof OptionSchema>;
+type LegacySingleQuestionInput = Pick<QuestionInput, "question" | "options">;
 
 interface NormalizedQuestion {
   label: string;
@@ -131,21 +119,40 @@ interface DisplayOption {
 }
 
 export function normalizeQuestions(params: AskUserInput) {
-  if ("questions" in params) {
-    return params.questions.map((question, index) => ({
-      label: question.label?.trim() || `Q${index + 1}`,
-      question: question.question,
-      options: question.options,
-    }));
+  const singleQuestion = params.questions.length === 1;
+  return params.questions.map((question, index) => ({
+    label:
+      question.label?.trim() || (singleQuestion ? "Question" : `Q${index + 1}`),
+    question: question.question,
+    options: question.options,
+  }));
+}
+
+function prepareAskUserArguments(args: unknown): AskUserInput {
+  // Pi validates this compatibility hook's result against AskUserParams next.
+  if (!args || typeof args !== "object") return args as AskUserInput;
+
+  const input = args as {
+    questions?: unknown;
+    question?: unknown;
+    options?: unknown;
+  };
+  if (
+    input.questions !== undefined ||
+    typeof input.question !== "string" ||
+    !Array.isArray(input.options)
+  ) {
+    return args as AskUserInput;
   }
 
-  return [
-    {
-      label: "Question",
-      question: params.question,
-      options: params.options,
-    },
-  ];
+  return {
+    questions: [
+      {
+        question: input.question,
+        options: input.options as OptionInput[],
+      },
+    ],
+  };
 }
 
 function validateQuestions(questions: NormalizedQuestion[]) {
@@ -197,6 +204,7 @@ export default function askUser(pi: ExtensionAPI) {
     promptSnippet: ASK_USER_PROMPT_SNIPPET,
     promptGuidelines: ASK_USER_PROMPT_GUIDELINES,
     parameters: AskUserParams,
+    prepareArguments: prepareAskUserArguments,
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const questions = normalizeQuestions(params);
@@ -640,34 +648,35 @@ export default function askUser(pi: ExtensionAPI) {
     },
 
     renderCall(args, theme, _context) {
-      if ("questions" in args) {
-        const count = args.questions.length;
-        const labels = args.questions
-          .map(
-            (question: QuestionInput, index: number) =>
-              question.label?.trim() || `Q${index + 1}`,
-          )
-          .join(", ");
+      const renderSingle = (question: LegacySingleQuestionInput) => {
         let text = theme.fg("toolTitle", theme.bold("ask-user "));
-        text += theme.fg("muted", `${count} question${count === 1 ? "" : "s"}`);
-        if (labels) text += theme.fg("dim", ` (${labels})`);
+        text += theme.fg("muted", question.question);
+        if (question.options.length > 0) {
+          const numbered = question.options.map(
+            (option, index) => `${index + 1}. ${option.label}`,
+          );
+          text += `\n${theme.fg("dim", `  ${numbered.join("  ")}`)}`;
+        }
         return new Text(text, 0, 0);
+      };
+
+      const input = args as AskUserInput | LegacySingleQuestionInput;
+      if (!("questions" in input)) return renderSingle(input);
+
+      const [singleQuestion] = input.questions;
+      if (input.questions.length === 1 && singleQuestion) {
+        return renderSingle(singleQuestion);
       }
 
+      const labels = input.questions
+        .map(
+          (question: QuestionInput, index: number) =>
+            question.label?.trim() || `Q${index + 1}`,
+        )
+        .join(", ");
       let text = theme.fg("toolTitle", theme.bold("ask-user "));
-      text += theme.fg(
-        "muted",
-        typeof args.question === "string" ? args.question : "",
-      );
-      const options = Array.isArray(args.options)
-        ? (args.options as DisplayOption[])
-        : [];
-      if (options.length > 0) {
-        const numbered = options.map(
-          (option, index) => `${index + 1}. ${option.label}`,
-        );
-        text += `\n${theme.fg("dim", `  ${numbered.join("  ")}`)}`;
-      }
+      text += theme.fg("muted", `${input.questions.length} questions`);
+      if (labels) text += theme.fg("dim", ` (${labels})`);
       return new Text(text, 0, 0);
     },
 

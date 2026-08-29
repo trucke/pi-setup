@@ -38,6 +38,12 @@ type TestContext = {
 };
 
 type TestTool = {
+  parameters: {
+    type?: string;
+    properties?: Record<string, unknown>;
+    anyOf?: unknown;
+  };
+  prepareArguments?(args: unknown): unknown;
   execute(
     toolCallId: string,
     params: AskUserInput,
@@ -65,11 +71,23 @@ function registeredTool(emitted: Array<{ name: string; value: unknown }> = []) {
   return tool;
 }
 
-test("normalizes legacy single-question input", () => {
+test("exposes a root object schema for GLM-compatible tool calling", () => {
+  const tool = registeredTool();
+
+  assert.equal(tool.parameters.type, "object");
+  assert.ok(tool.parameters.properties?.questions);
+  assert.equal(tool.parameters.anyOf, undefined);
+});
+
+test("normalizes a single question from the canonical questions array", () => {
   assert.deepEqual(
     normalizeQuestions({
-      question: "Choose one",
-      options: [{ label: "A" }, { label: "B" }],
+      questions: [
+        {
+          question: "Choose one",
+          options: [{ label: "A" }, { label: "B" }],
+        },
+      ],
     }),
     [
       {
@@ -78,6 +96,25 @@ test("normalizes legacy single-question input", () => {
         options: [{ label: "A" }, { label: "B" }],
       },
     ],
+  );
+});
+
+test("prepares legacy single-question calls for resumed sessions", () => {
+  const tool = registeredTool();
+
+  assert.deepEqual(
+    tool.prepareArguments?.({
+      question: "Choose one",
+      options: [{ label: "A" }, { label: "B" }],
+    }),
+    {
+      questions: [
+        {
+          question: "Choose one",
+          options: [{ label: "A" }, { label: "B" }],
+        },
+      ],
+    },
   );
 });
 
@@ -158,8 +195,12 @@ test("reports the interactive wait to Herdr", async () => {
   await registeredTool(emitted).execute(
     "ask-1",
     {
-      question: "Choose one",
-      options: [{ label: "A" }, { label: "B" }],
+      questions: [
+        {
+          question: "Choose one",
+          options: [{ label: "A" }, { label: "B" }],
+        },
+      ],
     },
     undefined,
     undefined,
@@ -272,10 +313,14 @@ test("wraps option descriptions instead of truncating them", async () => {
   await registeredTool().execute(
     "ask-1",
     {
-      question: "What should the displayed value represent?",
-      options: [
-        { label: "Session credits", description },
-        { label: "Account credits" },
+      questions: [
+        {
+          question: "What should the displayed value represent?",
+          options: [
+            { label: "Session credits", description },
+            { label: "Account credits" },
+          ],
+        },
       ],
     },
     undefined,
@@ -324,8 +369,12 @@ test("supports k/up and j/down option navigation", async () => {
     registeredTool().execute(
       "ask-1",
       {
-        question: "Choose one",
-        options: [{ label: "A" }, { label: "B" }],
+        questions: [
+          {
+            question: "Choose one",
+            options: [{ label: "A" }, { label: "B" }],
+          },
+        ],
       },
       undefined,
       undefined,

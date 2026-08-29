@@ -6,14 +6,14 @@ export const ASK_USER_PARAMETER_DESCRIPTIONS = {
   questionLabel:
     "Optional short contextual label for this question, such as 'Scope' or 'Priority'",
   questions:
-    "Between 1 and 4 questions to ask together. Each question is single-select.",
+    "Between 1 and 4 questions. Use one array item when asking a single question. Each question is single-select.",
   options:
     "Between 2 and 5 answer options. A free-form 'write my own answer' option is always appended automatically - never include one yourself.",
 };
 
 /** Describes ask-user's single and batched single-select question shapes. */
 export const ASK_USER_TOOL_DESCRIPTION =
-  "Ask the user one multiple-choice question or a batch of up to 4 questions. Each question has 2-5 options and accepts one answer. A free-form 'write my own answer' option is always added automatically, and the user may dismiss the questionnaire without answering. Use the single question/options fields for one question or questions for a batch.";
+  "Ask the user one multiple-choice question or a batch of up to 4 questions. Pass every question in the questions array, including when asking only one. Each question has 2-5 options and accepts one answer. A free-form 'write my own answer' option is always added automatically, and the user may dismiss the questionnaire without answering.";
 
 /** Adds ask-user's single and batched multiple-choice capability to the model prompt. */
 export const ASK_USER_PROMPT_SNIPPET =
