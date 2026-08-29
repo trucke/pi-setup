@@ -4,6 +4,10 @@ import test from "node:test";
 import { terminateChild } from "./src/backends/codex.ts";
 
 const READINESS_TIMEOUT_MS = 2_000;
+const CHILD_PID_MARKER = "child-pid:";
+const CHILD_PID_PATTERN = new RegExp(
+  `(?:^|\\n)${CHILD_PID_MARKER}(\\d+)\\r?\\n`,
+);
 
 const processExists = (pid: number) => {
   try {
@@ -36,11 +40,8 @@ const waitForChildPid = (
     };
     const onData = (chunk: string) => {
       output += chunk;
-      const newline = output.indexOf("\n");
-      if (newline < 0) return;
-      const pid = Number.parseInt(output.slice(0, newline).trim(), 10);
-      if (Number.isInteger(pid)) finish({ pid });
-      else finish({ error: new Error(`Invalid child PID: ${output.trim()}`) });
+      const match = output.match(CHILD_PID_PATTERN);
+      if (match?.[1]) finish({ pid: Number(match[1]) });
     };
     const onError = (error: Error) => finish({ error });
     const onClose = (code: number | null, signal: NodeJS.Signals | null) =>
@@ -74,7 +75,7 @@ test(
     const leaderProgram = [
       'const { spawn } = require("node:child_process");',
       `const child = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildProgram)}], { stdio: ["ignore", "pipe", "ignore"] });`,
-      'child.stdout.once("data", () => console.log(child.pid));',
+      `child.stdout.once("data", () => console.log("${CHILD_PID_MARKER}" + child.pid));`,
       'process.on("SIGTERM", () => process.exit(0));',
       "setInterval(() => {}, 1000);",
     ].join(" ");
