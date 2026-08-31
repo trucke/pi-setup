@@ -45,6 +45,7 @@
       "./extensions/file-search/index.ts",
       "./extensions/web-search/index.ts",
       "./extensions/read-pdf/index.ts",
+      "./extensions/run-timer/index.ts",
       "./extensions/subagents/index.ts",
       "./extensions/undo/index.ts",
       "./extensions/ui/index.ts"
