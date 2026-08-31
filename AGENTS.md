@@ -33,12 +33,12 @@ This is a colocated Jujutsu/Git repository. Keep each logical change reviewable 
 
 ## Releases
 
-Release from an empty working-copy change directly on synchronized `main`:
+Release from the described, non-empty working-copy feature change directly on synchronized `main`:
 
 ```sh
 ./scripts/release vX.Y.Z
 ```
 
-The command validates both repositories, bumps `package.json`, creates the dedicated `chore: release vX.Y.Z` change, and pushes `main` with a matching lightweight tag. It then updates the pinned package in `~/.dotfiles`, inserts that change directly after dotfiles `main`, rebases existing live dotfiles work on top, validates it, and pushes only the pin change. It never replaces the live dotfiles checkout or publishes unrelated work.
+The command validates both repositories, folds the `package.json` version bump into the current feature change without changing its description, and pushes `main` with a matching lightweight tag. It rejects empty and release-only changes. It then updates the pinned package in `~/.dotfiles`, inserts that change directly after dotfiles `main`, rebases existing live dotfiles work on top, validates it, and pushes only the pin change. It never replaces the live dotfiles checkout or publishes unrelated work.
 
 If `pi-setup` is published but the dotfiles update fails, keep the published tag immutable and follow the recovery instructions printed by the command.

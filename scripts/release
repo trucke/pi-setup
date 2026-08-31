@@ -8,6 +8,9 @@ PIN_PATH="share/bin/install-pi-packages"
 PIN_SOURCE="git:github.com/trucke/pi-setup"
 
 release_published=0
+publish_started=0
+version_bumped=0
+version_backup=""
 dotfiles_pin_commit=""
 dotfiles_main_moved=0
 
@@ -37,6 +40,13 @@ confirm() {
 	esac
 }
 
+restore_version() {
+	if [ "${version_bumped}" = "1" ] && [ -n "${version_backup}" ]; then
+		cp "${version_backup}" package.json
+		version_bumped=0
+	fi
+}
+
 on_error() {
 	local status=$?
 	if [ "${release_published}" = "1" ]; then
@@ -49,10 +59,23 @@ on_error() {
 		else
 			echo "release: update ${DOTFILES}/${PIN_PATH} to the published tag and publish that pin" >&2
 		fi
+	elif [ "${publish_started}" = "1" ]; then
+		echo "release: publication started but did not complete; inspect local main and ${tag} before retrying" >&2
+	else
+		restore_version
 	fi
 	exit "${status}"
 }
+
+cleanup() {
+	if [ "${release_published}" = "0" ] && [ "${publish_started}" = "0" ]; then
+		restore_version
+	fi
+	[ -z "${version_backup}" ] || rm -f "${version_backup}"
+}
+
 trap on_error ERR
+trap cleanup EXIT
 
 [ $# -eq 1 ] || die "usage: ./scripts/release vX.Y.Z"
 tag="$1"
@@ -76,9 +99,14 @@ main_id="$(repo_value "${ROOT}" main 'commit_id')"
 origin_id="$(repo_value "${ROOT}" 'main@origin' 'commit_id')"
 parent_id="$(repo_value "${ROOT}" '@-' 'commit_id')"
 at_empty="$(repo_value "${ROOT}" @ 'if(empty, "1", "0")')"
+feature_description="$(repo_value "${ROOT}" @ 'description.first_line()')"
 [ "${main_id}" = "${origin_id}" ] || die "pi-setup main differs from main@origin"
 [ "${parent_id}" = "${main_id}" ] || die "pi-setup @ must be based directly on main"
-[ "${at_empty}" = "1" ] || die "pi-setup @ must be empty"
+[ "${at_empty}" = "0" ] || die "pi-setup @ must contain the feature being released"
+[[ "${feature_description}" =~ [^[:space:]] ]] || die "pi-setup @ must have a feature description"
+case "${feature_description}" in
+	"chore: release" | "chore: release "*) die "release-only changes are not allowed" ;;
+esac
 
 if [ -n "$(jj tag list --all-remotes "exact:${tag}")" ]; then
 	die "tag ${tag} already exists"
@@ -121,6 +149,11 @@ pin_count="$(grep -cE '^package="git:github\.com/trucke/pi-setup@v[0-9]+\.[0-9]+
 echo "--- validating dotfiles before release"
 bash "${DOTFILES}/share/agents/skills/dotfiles/doctor.sh" validate "${DOTFILES}"
 
+version_backup="$(mktemp)"
+cp package.json "${version_backup}"
+version_bumped=1
+pnpm version "${version}" --no-git-tag-version --no-git-checks >/dev/null
+
 echo "--- validating pi-setup"
 pnpm install --frozen-lockfile
 pnpm test
@@ -128,17 +161,15 @@ pnpm check
 pnpm format:check
 pnpm pack --dry-run
 
-pnpm version "${version}" --no-git-tag-version --no-git-checks >/dev/null
-
-echo "--- release change"
+echo "--- feature release"
 jj diff --stat
 jj diff package.json
 if ! confirm "${tag}"; then
-	jj restore package.json
+	restore_version
 	die "aborted"
 fi
 
-jj describe -m "chore: release ${tag}"
+publish_started=1
 jj bookmark move main --to @
 jj tag set "${tag}" -r @
 jj git push --bookmark main --tag "${tag}"
