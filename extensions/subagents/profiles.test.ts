@@ -33,7 +33,7 @@ test("execution profiles keep the reviewed candidate order", () => {
       },
       {
         harness: "claude",
-        model: "claude-fable-5",
+        model: "claude-fable-5-1",
         reasoningEffort: "high",
         runMode: "code-review",
       },
@@ -53,7 +53,7 @@ test("worker and oracle profiles retain explicit safe fallbacks", () => {
     [
       {
         harness: "claude",
-        model: "claude-fable-5",
+        model: "claude-fable-5-1",
         reasoningEffort: "medium",
       },
       {

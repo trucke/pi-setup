@@ -37,7 +37,7 @@ export const EXECUTION_PROFILES = {
     candidates: [
       {
         harness: "claude",
-        model: "claude-fable-5",
+        model: "claude-fable-5-1",
         reasoningEffort: "medium",
         runMode: "agent",
       },
@@ -68,7 +68,7 @@ export const EXECUTION_PROFILES = {
       },
       {
         harness: "claude",
-        model: "claude-fable-5",
+        model: "claude-fable-5-1",
         reasoningEffort: "high",
         runMode: "code-review",
       },
