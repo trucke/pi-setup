@@ -33,7 +33,7 @@
     "typebox": "*"
   },
   "name": "@trucke/pi-setup",
-  "version": "0.1.30",
+  "version": "0.1.31",
   "packageManager": "pnpm@11.24.0",
   "keywords": [
     "pi-package"
@@ -43,6 +43,7 @@
       "./extensions/ask-user/index.ts",
       "./extensions/background-terminals/index.ts",
       "./extensions/file-search/index.ts",
+      "./extensions/openai-fast-mode/index.ts",
       "./extensions/web-search/index.ts",
       "./extensions/read-pdf/index.ts",
       "./extensions/run-timer/index.ts",

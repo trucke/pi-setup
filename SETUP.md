@@ -30,6 +30,25 @@ uses Pi's session tree, so the abandoned branch remains available through
 files, image attachments, processes, or other side effects, and it refuses to
 run while the agent is active.
 
+## OpenAI Fast mode
+
+`openai-fast-mode` provides `/fast on|off` for `openai-codex` models using
+`openai-codex-responses`. `/fast` shows the current setting. It defaults to off
+and resets on reload, session replacement, or restart; no configuration is read
+or written. The dashboard shows `fast` inline between reasoning and context,
+for example `openai-codex/gpt-6-astra · high · fast · ctx 0%`. This indicates
+requested priority, not backend confirmation. Switching to another provider
+hides the indicator and suspends its effect until a Codex model is selected again.
+
+Fast mode requests `service_tier: "priority"` and the matching Codex routing
+header. While on, it deliberately overrides existing tier/routing values so the
+two controls agree. Off leaves the provider's values untouched. Changing modes
+resets the current session's cached connection and is only allowed while idle.
+Reasoning effort is never changed: select it normally in Pi.
+
+Priority uses more credits. Model/account support and actual speedup depend on
+the backend; requesting priority does not guarantee faster serving.
+
 ## Web tools
 
 The package registers five consolidated web tools: `web-research`,
