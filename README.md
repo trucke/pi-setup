@@ -12,4 +12,7 @@ durable recovery artifacts, together with their companion skills and GitHub
 Dark theme. The dashboard's VCS status and
 changed-files views prefer JJ repositories and fall back to Git.
 
+The `/recap` prompt gives a plain-text catch-up on the current task in at most
+40 words, covering the objective, progress, and next step or blocker.
+
 See [SETUP.md](./SETUP.md) for installation and service configuration.

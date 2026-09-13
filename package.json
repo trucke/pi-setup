@@ -33,7 +33,7 @@
     "typebox": "*"
   },
   "name": "@trucke/pi-setup",
-  "version": "0.1.31",
+  "version": "0.1.32",
   "packageManager": "pnpm@11.24.0",
   "keywords": [
     "pi-package"
@@ -54,6 +54,9 @@
     "skills": [
       "./skills/background-terminals",
       "./skills/subagents"
+    ],
+    "prompts": [
+      "./prompts/recap.md"
     ],
     "themes": [
       "./themes/github-dark-default.json"
