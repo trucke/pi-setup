@@ -1,14 +1,20 @@
 /** Model-facing strings for the subagent tools. */
+import { EXECUTION_PROFILES } from "./profiles.ts";
 
-export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
-  "Spawn a background subagent using either a release-pinned execution profile or explicit harness/model settings. Profiles: scout (read-only repository exploration), worker (implementation), reviewer (native code review), and oracle (deep technical analysis). Profile and direct execution settings are mutually exclusive. Role prompts such as scout/reviewer inspect-only behavior are not sandbox boundaries; every child retains its harness's normal host permissions. Fire-and-forget: results arrive automatically or can be collected with subagent-wait. Children cannot see the parent conversation or ask the user. Max 4 runs can be active at once; profile fallbacks happen only before meaningful model or tool activity.";
+const profileDescriptions = Object.entries(EXECUTION_PROFILES)
+  .map(([name, profile]) => `${name} (${profile.description})`)
+  .join("; ");
+
+export const SUBAGENT_SPAWN_TOOL_DESCRIPTION = `Spawn a background subagent using a release-pinned profile or explicit harness/model settings. Profiles: ${profileDescriptions}. Profile and direct execution settings are mutually exclusive; direct execution does not inherit profile instructions. Each profile has one primary model with no automatic fallback. Role instructions are not sandbox boundaries; child tool access is unchanged. Results arrive automatically or through subagent-wait. Children cannot see the parent conversation or ask the user. Max 4 active runs.`;
 
 export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
   "Spawn a background subagent through a focused profile or explicit Pi, Claude Code, or Codex settings";
 
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
   "Use subagent-spawn for self-contained work that benefits from an independent context; include all required paths, constraints, and expected output.",
-  "Prefer a subagent-spawn profile when scout, worker, reviewer, or oracle semantics fit; use direct execution only when a specific harness or model is required.",
+  "Use subagent-spawn only when isolation, parallel work, sustained investigation or independent assessment justifies the handoff. Keep trivial work with the parent and prefer one child owning a coherent outcome over routine agent pipelines.",
+  "For subagent-spawn, prefer the profile whose scope matches the task, as described in the tool. Use direct execution for explicit harness/model settings without a profile contract.",
+  "With subagent-spawn profile review, describe the exact artifact in prompt or supply an explicit code reviewTarget. Omitting reviewTarget never implies Git changes. Failures and scope escalation return to the parent; do not silently launch a replacement writer.",
   "After subagent-spawn, continue useful work. Results arrive automatically; use subagent-wait only when progress depends on them.",
 ];
 
@@ -26,7 +32,7 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
   reasoningEffort:
     "Direct reasoning effort on the shared off/minimal/low/medium/high/xhigh/max scale",
   reviewTarget:
-    "Reviewer target. Defaults to uncommitted changes; commits and pull requests must be explicit.",
+    "Optional code-change target for profile review. Omit for a document, plan or interface described in prompt. Uncommitted changes must also be selected explicitly.",
 };
 
 export function buildSubagentSpawnResult(options: {
@@ -36,19 +42,14 @@ export function buildSubagentSpawnResult(options: {
   modelLabel: string;
   cwd: string;
   profile?: string;
-  attempts?: number;
   artifactPath?: string;
   artifactError?: string;
 }) {
   const selection = options.profile
     ? `profile ${options.profile} → ${options.harness}: ${options.modelLabel}`
     : `${options.harness}: ${options.modelLabel}`;
-  const fallback =
-    options.attempts && options.attempts > 1
-      ? ` after ${options.attempts - 1} unavailable candidate(s)`
-      : "";
   return (
-    `Spawned subagent ${options.id} "${options.title}" (${selection}${fallback}, ${options.cwd}).\n` +
+    `Spawned subagent ${options.id} "${options.title}" (${selection}, ${options.cwd}).\n` +
     `It runs in the background. Use subagent-send to steer it, subagent-wait to collect it, or subagent-check to inspect it.` +
     (options.artifactPath
       ? `\nDurable artifacts: ${options.artifactPath}`

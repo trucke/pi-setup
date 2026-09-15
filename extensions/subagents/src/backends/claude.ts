@@ -34,6 +34,7 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
+import { buildReviewPrompt } from "../review.ts";
 
 const CLAUDE_CONTEXT_WINDOW = 200_000;
 const INTERRUPT_TIMEOUT_MS = 2_000;
@@ -213,23 +214,12 @@ export function claudeStartupRejection(
 }
 
 export function claudeCodeReviewPrompt(task: SpawnTask) {
-  const target = task.reviewTarget ?? { type: "uncommittedChanges" as const };
-  const targetInstructions =
-    target.type === "uncommittedChanges"
-      ? "Review only the current uncommitted and staged changes. Inspect `git diff` and `git diff --cached`."
-      : target.type === "baseBranch"
-        ? `Review the current branch relative to base branch ${JSON.stringify(target.branch)}. Inspect the merge-base diff (for example, \`git diff ${target.branch}...HEAD\`).`
-        : target.type === "commit"
-          ? `Review commit ${JSON.stringify(target.sha)}. Inspect that commit and its parent diff (for example, \`git show --format=fuller ${target.sha}\`).`
-          : `Review pull request #${target.number}. You may inspect it with read-only \`gh pr view ${target.number}\` and \`gh pr diff ${target.number}\` commands.`;
-  return [
-    "Perform a read-only code review. Do not modify files, create commits, push, or post remote comments.",
-    targetInstructions,
-    task.prompt.trim(),
-    "Report only actionable findings ordered by severity with precise file and line references. If there are none, say so explicitly.",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  // Legacy code-review mode is explicitly code-scoped. Generic profile
+  // reviews use agent mode and never acquire this default target.
+  return buildReviewPrompt(
+    `${task.prompt.trim()}\n\nReport only actionable findings ordered by severity with precise file and line references. If there are none, say so explicitly.`,
+    task.reviewTarget ?? { type: "uncommittedChanges" },
+  );
 }
 
 function boundedError(error: unknown) {

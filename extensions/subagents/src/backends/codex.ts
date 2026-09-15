@@ -28,6 +28,7 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
+import { buildReviewPrompt } from "../review.ts";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MODEL_LIST_TIMEOUT_MS = 5_000;
@@ -289,19 +290,14 @@ export function codexStartupFailure(options: {
 }
 
 export function codexReviewTarget(task: SpawnTask): JsonRecord {
-  const focus = task.prompt.trim();
-  const target = task.reviewTarget ?? { type: "uncommittedChanges" as const };
-  const targetText =
-    target.type === "uncommittedChanges"
-      ? "the uncommitted changes"
-      : target.type === "baseBranch"
-        ? `the changes against base branch ${target.branch}`
-        : target.type === "commit"
-          ? `commit ${target.sha}`
-          : `pull request #${target.number}`;
   return {
     type: "custom",
-    instructions: `Review ${targetText}. ${focus}`.trim(),
+    // Native code-review mode retains its legacy default. Generic profile
+    // reviews use agent mode with an explicit prompt-defined scope instead.
+    instructions: buildReviewPrompt(
+      task.prompt,
+      task.reviewTarget ?? { type: "uncommittedChanges" },
+    ),
   };
 }
 

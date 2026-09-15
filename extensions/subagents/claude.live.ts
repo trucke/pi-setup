@@ -81,7 +81,7 @@ test(
 );
 
 test(
-  "Claude model rejection safely falls back before activity",
+  "Claude model rejection is reported as a failed run",
   { timeout: 75_000 },
   async (t) => {
     if (!(await claudeAvailable())) {
@@ -92,48 +92,21 @@ test(
     const runtime = createSubagentRuntime();
     try {
       const manager = await runtime.runPromise(SubagentManager);
-      const selected = {
-        harness: "claude" as const,
-        model: "pi-subagents-intentionally-unavailable-model",
-        reasoningEffort: "off" as const,
-        runMode: "agent" as const,
-      };
-      const fallback = {
-        harness: "codex" as const,
-        model: "gpt-5.6-sol",
-        reasoningEffort: "high" as const,
-        runMode: "agent" as const,
-      };
       const started = await runTool(
         runtime,
         manager.spawn("claude", {
-          ...task("Reply with exactly: fallback worked"),
-          model: selected.model,
+          ...task("Reply with exactly: hello"),
+          model: "pi-subagents-intentionally-unavailable-model",
           parent: { ...parent, projectTrusted: true },
-          execution: {
-            requested: { type: "profile", profile: "worker" },
-            selected,
-            attempts: [{ ...selected, outcome: "selected" }],
-          },
-          fallbackCandidates: [fallback],
+          profile: "write",
         }),
       );
       await deadline(runTool(runtime, manager.waitFor([started.id])), 60_000);
 
       const done = manager.view.get(started.id);
-      assert.equal(done?.status, "done");
-      assert.equal(done?.backend, "codex");
-      assert.match(done?.finalText ?? "", /fallback worked/i);
-      assert.deepEqual(
-        done?.execution.attempts.map(({ harness, outcome }) => ({
-          harness,
-          outcome,
-        })),
-        [
-          { harness: "claude", outcome: "unavailable" },
-          { harness: "codex", outcome: "selected" },
-        ],
-      );
+      assert.equal(done?.status, "failed");
+      assert.equal(done?.backend, "claude");
+      assert.ok(done?.errorText);
     } finally {
       await runtime.dispose();
     }

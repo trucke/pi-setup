@@ -137,12 +137,18 @@ or consume Firecrawl credits.
 
 ## Subagents
 
-The subagent extension supports direct Pi, Claude Code, and Codex runs plus
-release-pinned `scout`, `worker`, `reviewer`, and `oracle` profiles. Claude and
-Codex candidates require their CLIs on `PATH` and authenticated with
-`claude auth` and `codex login` respectively. Profiles may advance to their
-next declared candidate after a typed startup rejection, but only before any
-assistant or tool activity; the logical run id and attempt history are preserved.
+The subagent extension supports direct Pi, Claude Code and Codex runs plus
+release-pinned `scout`, `lookup`, `code`, `build`, `ui`, `review`, `research` and
+`write` profiles. Each profile has one primary model and no automatic fallback.
+Claude and Codex require their CLIs on `PATH` and authenticated with
+`claude auth` and `codex login` respectively. Direct execution does not inherit
+profile instructions.
+
+For `review`, describe the artifact in the task or supply an explicit code-change
+`reviewTarget`; omitting it does not imply uncommitted changes. Profiles load
+applicable skills and author guidance. Existing harness tool access is unchanged.
+See [Subagents architecture](extensions/subagents/docs/design-plan.md) for models,
+guidance loading and recovery behavior.
 
 Runs are capped at four concurrently. Receipts, bounded snapshots, normalized
 JSONL transcripts, and Markdown output are stored under

@@ -73,17 +73,15 @@ test("Codex distinguishes pre-activity rejection from terminal failure", () => {
 });
 
 test("Codex review mode uses native custom review instructions", () => {
-  assert.deepEqual(
-    codexReviewTarget({
-      ...baseTask,
-      reviewTarget: { type: "baseBranch", branch: "main" },
-    }),
-    {
-      type: "custom",
-      instructions:
-        "Review the changes against base branch main. Focus on lifecycle races.",
-    },
-  );
+  const target = codexReviewTarget({
+    ...baseTask,
+    reviewTarget: { type: "baseBranch", branch: "main" },
+  });
+  assert.equal(target.type, "custom");
+  assert.match(String(target.instructions), /base branch "main"/);
+  assert.match(String(target.instructions), /git diff main\.\.\.HEAD/);
+  assert.match(String(target.instructions), /Focus on lifecycle races/);
+  assert.match(String(target.instructions), /Do not .*post remote comments/);
   assert.match(
     String(
       codexReviewTarget({

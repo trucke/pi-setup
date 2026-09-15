@@ -1,85 +1,53 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EXECUTION_PROFILES } from "./src/profiles.ts";
+import { PROFILE_NAMES } from "./src/domain.ts";
+import {
+  buildProfilePrompt,
+  EXECUTION_PROFILES,
+  SHARED_PROFILE_INSTRUCTIONS,
+} from "./src/profiles.ts";
+import { buildReviewPrompt } from "./src/review.ts";
+import { SUBAGENT_SPAWN_TOOL_DESCRIPTION } from "./src/prompt.ts";
 
-test("execution profiles keep the reviewed candidate order", () => {
-  assert.deepEqual(EXECUTION_PROFILES.scout.candidates, [
-    {
-      harness: "pi",
-      model: "opencode-go/glm-5.3-flash",
-      reasoningEffort: "high",
-      runMode: "agent",
-    },
-    {
-      harness: "pi",
-      model: "openai-codex/gpt-5.6-luna",
-      reasoningEffort: "xhigh",
-      runMode: "agent",
-    },
-  ]);
-  assert.deepEqual(
-    EXECUTION_PROFILES.reviewer.candidates.map((candidate) => ({
-      harness: candidate.harness,
-      model: candidate.model,
-      reasoningEffort: candidate.reasoningEffort,
-      runMode: candidate.runMode,
-    })),
-    [
-      {
-        harness: "codex",
-        model: "gpt-5.6-sol",
-        reasoningEffort: "high",
-        runMode: "review",
-      },
-      {
-        harness: "claude",
-        model: "claude-fable-5-1",
-        reasoningEffort: "high",
-        runMode: "code-review",
-      },
-    ],
-  );
+test("profiles compose shared instructions, the selected role and the complete task", () => {
+  for (const profile of PROFILE_NAMES) {
+    const prompt = buildProfilePrompt(
+      profile,
+      "  Task with specific acceptance criteria.  ",
+    );
+    assert.ok(prompt.startsWith(SHARED_PROFILE_INSTRUCTIONS));
+    assert.ok(prompt.includes(EXECUTION_PROFILES[profile].instructions));
+    assert.ok(
+      prompt.endsWith("Task:\nTask with specific acceptance criteria."),
+    );
+    assert.equal(EXECUTION_PROFILES[profile].execution.runMode, "agent");
+    assert.ok(
+      SUBAGENT_SPAWN_TOOL_DESCRIPTION.includes(
+        `${profile} (${EXECUTION_PROFILES[profile].description})`,
+      ),
+    );
+  }
 });
 
-test("worker and oracle profiles retain explicit safe fallbacks", () => {
-  assert.deepEqual(
-    EXECUTION_PROFILES.worker.candidates.map(
-      ({ harness, model, reasoningEffort }) => ({
-        harness,
-        model,
-        reasoningEffort,
-      }),
-    ),
-    [
-      {
-        harness: "claude",
-        model: "claude-fable-5-1",
-        reasoningEffort: "medium",
-      },
-      {
-        harness: "pi",
-        model: "openai-codex/gpt-5.6-sol",
-        reasoningEffort: "high",
-      },
-      {
-        harness: "pi",
-        model: "opencode-go/glm-5.3-flash",
-        reasoningEffort: "high",
-      },
-    ],
+test("generic review does not invent a code-change target", () => {
+  const prompt = buildProfilePrompt(
+    "review",
+    "Assess docs/plan.md for feasibility.",
   );
-  assert.deepEqual(EXECUTION_PROFILES.oracle.candidates, [
+  assert.equal(buildReviewPrompt(prompt), prompt);
+  assert.doesNotMatch(prompt, /git diff|uncommitted|staged changes/);
+  assert.match(prompt, /docs\/plan.md/);
+});
+
+test("explicit review targets reach ordinary agent prompts", () => {
+  const prompt = buildReviewPrompt(
+    buildProfilePrompt("review", "Assess correctness."),
     {
-      harness: "pi",
-      model: "openai-codex/gpt-5.6-sol",
-      reasoningEffort: "xhigh",
-      runMode: "agent",
+      type: "commit",
+      sha: "abc1234",
     },
-    {
-      harness: "pi",
-      model: "opencode-go/glm-5.3-flash",
-      reasoningEffort: "high",
-      runMode: "agent",
-    },
-  ]);
+  );
+  assert.match(prompt, /Review commit "abc1234"/);
+  assert.match(prompt, /Do not modify files/);
+  assert.match(prompt, /Assess correctness/);
 });

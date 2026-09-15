@@ -5,6 +5,7 @@ import * as path from "node:path";
 import test, { after } from "node:test";
 import {
   createArtifactPaths,
+  loadPersistedSnapshots,
   persistSnapshot,
   pruneArtifacts,
 } from "./src/artifacts.ts";
@@ -42,7 +43,6 @@ function snapshot(
     execution: {
       requested: { type: "direct" },
       selected,
-      attempts: [{ ...selected, outcome: "selected" }],
     },
     transcript: [],
     liveTools: [],
@@ -70,6 +70,34 @@ test("retention never removes unrelated or unvalidated directories", () => {
     "keep",
   );
   assert.ok(fs.existsSync(invalidRun));
+});
+
+test("restoration rejects malformed review scopes instead of inventing a target", () => {
+  const saved = snapshot("sa-00000010", "done", 10);
+  persistSnapshot(saved);
+  for (const reviewTarget of [
+    { type: "workingTree" },
+    { type: "baseBranch" },
+    { type: "baseBranch", branch: "main; touch x" },
+    { type: "commit", sha: "HEAD~1" },
+    { type: "pullRequest", number: -1 },
+    null,
+  ]) {
+    fs.writeFileSync(
+      saved.artifacts.snapshot,
+      JSON.stringify({ ...saved, reviewTarget }),
+    );
+    assert.ok(!loadPersistedSnapshots().some(({ id }) => id === saved.id));
+  }
+  persistSnapshot({
+    ...saved,
+    reviewTarget: { type: "commit", sha: "abc1234" },
+  });
+  assert.deepEqual(
+    loadPersistedSnapshots().find(({ id }) => id === saved.id)?.reviewTarget,
+    { type: "commit", sha: "abc1234" },
+  );
+  fs.rmSync(saved.artifacts.directory, { recursive: true, force: true });
 });
 
 test("retention never removes active run artifacts", () => {

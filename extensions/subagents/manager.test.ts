@@ -72,26 +72,12 @@ function task(prompt: string): SpawnTask {
 }
 
 function profileTask(prompt: string): SpawnTask {
-  const selected = {
-    harness: "claude" as const,
-    model: "unavailable-model",
-    reasoningEffort: "high" as const,
-    runMode: "agent" as const,
-  };
-  const fallback = {
-    harness: "codex" as const,
-    model: "fallback-model",
-    reasoningEffort: "high" as const,
-    runMode: "agent" as const,
-  };
   return {
     ...task(prompt),
-    execution: {
-      requested: { type: "profile", profile: "worker" },
-      selected,
-      attempts: [{ ...selected, outcome: "selected" }],
-    },
-    fallbackCandidates: [fallback],
+    profile: "code",
+    model: "unavailable-model",
+    reasoningEffort: "high",
+    runMode: "agent",
   };
 }
 
@@ -123,6 +109,8 @@ test("stub subagent completes and delivers a final result", async () => {
     );
     assert.equal(snap.status, "running");
     assert.equal(snap.backend, "claude");
+    assert.deepEqual(snap.execution.requested, { type: "direct" });
+    assert.equal(snap.execution.attempts, undefined);
     assert.ok(snap.meta.sessionFilePath);
 
     await runTool(runtime, manager.waitFor([snap.id]));
@@ -163,43 +151,41 @@ test("FAIL: prompts settle as errors; unconsumed settles are delivered", async (
   });
 });
 
-test("a typed pre-activity rejection advances the same run to its fallback", async () => {
+test("startup rejection reports failure and closes the rejected session", async () => {
   await withManager(async (manager, runtime) => {
     const started = await runTool(
       runtime,
-      manager.spawn("claude", profileTask("REJECT:claude use fallback")),
+      manager.spawn("claude", profileTask("REJECT:claude unavailable")),
     );
+    assert.deepEqual(started.execution, {
+      requested: { type: "profile", profile: "code" },
+      selected: {
+        harness: "claude",
+        model: "unavailable-model",
+        reasoningEffort: "high",
+        runMode: "agent",
+      },
+    });
     await runTool(runtime, manager.waitFor([started.id]));
-    const done = manager.view.get(started.id);
-    assert.equal(done?.status, "done");
-    assert.equal(done?.backend, "codex");
-    assert.equal(done?.execution.selected.harness, "codex");
-    assert.deepEqual(
-      done?.execution.attempts.map(({ harness, outcome, reason }) => ({
-        harness,
-        outcome,
-        hasReason: Boolean(reason),
-      })),
-      [
-        { harness: "claude", outcome: "unavailable", hasReason: true },
-        { harness: "codex", outcome: "selected", hasReason: false },
-      ],
-    );
-    assert.equal(
-      done?.transcript.filter((item) => item.kind === "user").length,
-      1,
-      "the rejected candidate's synthetic user row must not be duplicated",
-    );
+    const failed = manager.view.get(started.id);
+    assert.equal(failed?.status, "failed");
+    assert.equal(failed?.backend, "claude");
+    assert.match(failed?.errorText ?? "", /model_not_found/);
+    const deadline = Date.now() + 1_000;
+    while (activeStubSessionCount() > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(activeStubSessionCount(), 0);
   });
 });
 
-test("rejections after meaningful activity never trigger fallback", async () => {
+test("rejections after activity settle as failures", async () => {
   await withManager(async (manager, runtime) => {
     const started = await runTool(
       runtime,
       manager.spawn(
         "claude",
-        profileTask("REJECT_AFTER_ACTIVITY:claude do not fallback"),
+        profileTask("REJECT_AFTER_ACTIVITY:claude preserve partial work"),
       ),
     );
     await runTool(runtime, manager.waitFor([started.id]));
@@ -211,33 +197,7 @@ test("rejections after meaningful activity never trigger fallback", async () => 
   });
 });
 
-test("all rejected profile candidates produce one failed run with attempt history", async () => {
-  await withManager(async (manager, runtime) => {
-    const started = await runTool(
-      runtime,
-      manager.spawn(
-        "claude",
-        profileTask("REJECT:claude REJECT:codex exhaust candidates"),
-      ),
-    );
-    await runTool(runtime, manager.waitFor([started.id]));
-    const failed = manager.view.get(started.id);
-    assert.equal(failed?.status, "failed");
-    assert.match(failed?.errorText ?? "", /No fallback candidate/);
-    assert.deepEqual(
-      failed?.execution.attempts.map(({ harness, outcome }) => ({
-        harness,
-        outcome,
-      })),
-      [
-        { harness: "claude", outcome: "unavailable" },
-        { harness: "codex", outcome: "unavailable" },
-      ],
-    );
-  });
-});
-
-test("direct runs never use an undeclared fallback", async () => {
+test("direct startup rejection reports the backend failure", async () => {
   await withManager(async (manager, runtime) => {
     const started = await runTool(
       runtime,
@@ -255,10 +215,7 @@ test("cancel just before RunRejected cannot wedge the logical run", async () => 
   await withManager(async (manager, runtime) => {
     const started = await runTool(
       runtime,
-      manager.spawn(
-        "claude",
-        profileTask("REJECT_RACE:claude DELAY_SPAWN:codex cancel race"),
-      ),
+      manager.spawn("claude", profileTask("REJECT_RACE:claude cancel race")),
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
     const report = await runTool(runtime, manager.cancel([started.id]));
@@ -277,67 +234,6 @@ test("direct startup rejection honors an earlier cancellation", async () => {
     const report = await runTool(runtime, manager.cancel([started.id]));
     assert.equal(report[0]?.cancelled, true);
     assert.equal(manager.view.get(started.id)?.status, "cancelled");
-  });
-});
-
-test("cancellation during a fallback transition stops the logical run", async () => {
-  await withManager(async (manager, runtime) => {
-    const started = await runTool(
-      runtime,
-      manager.spawn(
-        "claude",
-        profileTask("REJECT:claude DELAY_SPAWN:codex cancel the transition"),
-      ),
-    );
-    const deadline = Date.now() + 1_000;
-    while (
-      manager.view.get(started.id)?.lastEvent !== "RunRejected" &&
-      Date.now() < deadline
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    assert.equal(manager.view.get(started.id)?.lastEvent, "RunRejected");
-    const report = await runTool(runtime, manager.cancel([started.id]));
-    assert.equal(report[0]?.cancelled, true);
-    assert.equal(manager.view.get(started.id)?.status, "cancelled");
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    assert.equal(manager.view.get(started.id)?.backend, "claude");
-    assert.equal(manager.view.get(started.id)?.status, "cancelled");
-  });
-});
-
-test("a fallback transition occupies exactly one concurrency slot", async () => {
-  await withManager(async (manager, runtime) => {
-    const transitioning = await runTool(
-      runtime,
-      manager.spawn(
-        "claude",
-        profileTask("REJECT:claude DELAY_SPAWN:codex count one slot"),
-      ),
-    );
-    const deadline = Date.now() + 1_000;
-    while (
-      manager.view.get(transitioning.id)?.lastEvent !== "RunRejected" &&
-      Date.now() < deadline
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    const others = await runTool(
-      runtime,
-      Effect.forEach(
-        [1, 2, 3],
-        (number) => manager.spawn("codex", task(`parallel ${number}`)),
-        { concurrency: "unbounded" },
-      ),
-    );
-    await assert.rejects(
-      runTool(runtime, manager.spawn("codex", task("fifth logical run"))),
-      (error) => error instanceof ConcurrencyLimitError,
-    );
-    await runTool(
-      runtime,
-      manager.cancel([transitioning.id, ...others.map(({ id }) => id)]),
-    );
   });
 });
 

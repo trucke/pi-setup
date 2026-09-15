@@ -4,7 +4,16 @@ import { Data } from "effect";
 export const BACKEND_NAMES = ["pi", "claude", "codex"] as const;
 export type BackendName = (typeof BACKEND_NAMES)[number];
 
-export const PROFILE_NAMES = ["scout", "worker", "reviewer", "oracle"] as const;
+export const PROFILE_NAMES = [
+  "scout",
+  "lookup",
+  "code",
+  "build",
+  "ui",
+  "review",
+  "research",
+  "write",
+] as const;
 export type ProfileName = (typeof PROFILE_NAMES)[number];
 
 export type SubagentOrigin = "model" | "btw";
@@ -53,10 +62,12 @@ export interface CandidateAttempt extends ExecutionCandidate {
 
 export interface ExecutionSelection {
   readonly requested:
-    | { readonly type: "profile"; readonly profile: ProfileName }
+    // Historical identifiers are metadata, not a request to apply today's role.
+    | { readonly type: "profile"; readonly profile: string }
     | { readonly type: "direct" };
   readonly selected: ExecutionCandidate;
-  readonly attempts: ReadonlyArray<CandidateAttempt>;
+  /** Historical fallback metadata, retained only when reading older runs. */
+  readonly attempts?: ReadonlyArray<CandidateAttempt>;
 }
 
 export interface ResumeSource {
@@ -75,9 +86,7 @@ export interface SpawnTask {
   readonly reasoningEffort?: ReasoningEffort;
   readonly runMode?: RunMode;
   readonly reviewTarget?: ReviewTarget;
-  readonly execution?: ExecutionSelection;
-  /** Remaining declared profile candidates available for pre-activity fallback. */
-  readonly fallbackCandidates?: ReadonlyArray<ExecutionCandidate>;
+  readonly profile?: ProfileName;
   readonly resume?: ResumeSource;
   readonly parent: ParentContext;
 }
@@ -280,8 +289,6 @@ export function formatElapsed(snap: SubagentSnapshot) {
 
 export class SpawnError extends Data.TaggedError("SpawnError")<{
   readonly message: string;
-  /** False only for manager lifecycle failures that another backend cannot fix. */
-  readonly fallbackAllowed?: boolean;
 }> {}
 
 export class BackendUnavailableError extends Data.TaggedError(

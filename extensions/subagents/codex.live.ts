@@ -80,7 +80,7 @@ test(
 );
 
 test(
-  "Codex asynchronous model rejection falls back before activity",
+  "Codex asynchronous model rejection is reported as a failed run",
   { timeout: 75_000 },
   async (t) => {
     if (!(await codexAvailable())) {
@@ -91,46 +91,18 @@ test(
     const runtime = createSubagentRuntime();
     try {
       const manager = await runtime.runPromise(SubagentManager);
-      const selected = {
-        harness: "codex" as const,
-        model: "pi-subagents-intentionally-unavailable-model",
-        reasoningEffort: "high" as const,
-        runMode: "agent" as const,
-      };
-      const fallback = {
-        harness: "claude" as const,
-        model: "haiku",
-        reasoningEffort: "off" as const,
-        runMode: "agent" as const,
-      };
       const started = await runTool(
         runtime,
         manager.spawn("codex", {
-          ...task("Reply with exactly: codex fallback worked"),
-          model: selected.model,
-          execution: {
-            requested: { type: "profile", profile: "worker" },
-            selected,
-            attempts: [{ ...selected, outcome: "selected" }],
-          },
-          fallbackCandidates: [fallback],
+          ...task("Reply with exactly: hello"),
+          model: "pi-subagents-intentionally-unavailable-model",
         }),
       );
       await deadline(runTool(runtime, manager.waitFor([started.id])), 60_000);
       const done = manager.view.get(started.id);
-      assert.equal(done?.status, "done");
-      assert.equal(done?.backend, "claude");
-      assert.match(done?.finalText ?? "", /codex fallback worked/i);
-      assert.deepEqual(
-        done?.execution.attempts.map(({ harness, outcome }) => ({
-          harness,
-          outcome,
-        })),
-        [
-          { harness: "codex", outcome: "unavailable" },
-          { harness: "claude", outcome: "selected" },
-        ],
-      );
+      assert.equal(done?.status, "failed");
+      assert.equal(done?.backend, "codex");
+      assert.ok(done?.errorText);
     } finally {
       await runtime.dispose();
     }

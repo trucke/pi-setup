@@ -1,5 +1,4 @@
 import {
-  Cause,
   Context,
   Effect,
   Exit,
@@ -25,8 +24,6 @@ import type {
 import { BackendRegistry } from "./backend.ts";
 import type {
   BackendName,
-  CandidateAttempt,
-  ExecutionCandidate,
   LiveToolState,
   ParentContext,
   RunOutcome,
@@ -46,6 +43,8 @@ import {
   SendError,
   SpawnError,
 } from "./domain.ts";
+
+import { buildReviewPrompt } from "./review.ts";
 
 export const MAX_RUNNING = 4;
 export const MAX_TRACKED = 64;
@@ -102,11 +101,6 @@ interface Entry {
   scope?: Scope.Closeable;
   pump?: Fiber.Fiber<void>;
   liveToolMap: Map<string, LiveToolState>;
-  fallbackCandidates: ExecutionCandidate[];
-  baseTask?: SpawnTask;
-  candidateTranscriptStart: number;
-  meaningfulActivity: boolean;
-  transitioning?: boolean;
   cancelRequested?: boolean;
   resuming?: boolean;
   restarting?: boolean;
@@ -416,11 +410,6 @@ const makeManager = Effect.gen(function* () {
     pruneSettled();
   };
 
-  let transitionCandidate: (
-    entry: Entry,
-    rejection: Extract<SubagentEvent, { _tag: "RunRejected" }>,
-  ) => Effect.Effect<void>;
-
   const scheduleEntryCleanup = (entry: Entry) => {
     const fiber = runDetached(
       closeEntryScope(entry).pipe(
@@ -432,56 +421,23 @@ const makeManager = Effect.gen(function* () {
     fiber.addObserver(() => cleanups.delete(fiber));
   };
 
-  const scheduleCandidateFallback = (
+  const rejectRun = (
     entry: Entry,
     rejection: Extract<SubagentEvent, { _tag: "RunRejected" }>,
   ) => {
-    if (entry.transitioning || entry.snapshot.status !== "running") return;
-    if (entry.cancelRequested) {
-      settle(entry, {
-        _tag: "Interrupted",
-        partialText: latestText(entry.snapshot) || undefined,
-      });
-      scheduleEntryCleanup(entry);
-      return;
-    }
-    const reason = `${rejection.reason}: ${rejection.message}`;
-    let terminalReason = reason;
-    if (
-      entry.meaningfulActivity ||
-      entry.fallbackCandidates.length === 0 ||
-      !entry.baseTask
-    ) {
-      if (
-        !entry.meaningfulActivity &&
-        entry.snapshot.execution.requested.type === "profile"
-      ) {
-        terminalReason = `No fallback candidate was available. ${reason}`;
-        entry.snapshot.execution = {
-          ...entry.snapshot.execution,
-          attempts: entry.snapshot.execution.attempts.map(
-            (attempt): CandidateAttempt =>
-              attempt.outcome === "selected"
-                ? { ...attempt, outcome: "unavailable", reason }
-                : attempt,
-          ),
-        };
-      }
-      settle(entry, {
-        _tag: "Failed",
-        errorText: terminalReason,
-        partialText: latestText(entry.snapshot) || undefined,
-      });
-      scheduleEntryCleanup(entry);
-      return;
-    }
-    entry.transitioning = true;
-    entry.snapshot.errorText = bounded(reason);
-    persistNow(entry);
-    notify(entry.snapshot.id);
-    const fiber = runDetached(transitionCandidate(entry, rejection));
-    cleanups.add(fiber);
-    fiber.addObserver(() => cleanups.delete(fiber));
+    if (entry.snapshot.status !== "running") return;
+    const partialText = latestText(entry.snapshot) || undefined;
+    settle(
+      entry,
+      entry.cancelRequested
+        ? { _tag: "Interrupted", partialText }
+        : {
+            _tag: "Failed",
+            errorText: `${rejection.reason}: ${rejection.message}`,
+            partialText,
+          },
+    );
+    scheduleEntryCleanup(entry);
   };
 
   const foldEvent = (entry: Entry, event: SubagentEvent) => {
@@ -504,7 +460,7 @@ const makeManager = Effect.gen(function* () {
         snapshot.recovery = { available: false };
         break;
       case "RunRejected":
-        scheduleCandidateFallback(entry, event);
+        rejectRun(entry, event);
         return;
       case "RunSettled":
         settle(entry, event.outcome);
@@ -516,7 +472,6 @@ const makeManager = Effect.gen(function* () {
         });
         break;
       case "AssistantDelta": {
-        entry.meaningfulActivity = true;
         const live = snapshot.liveAssistant ?? { text: "", thinking: "" };
         snapshot.liveAssistant =
           event.kind === "text"
@@ -535,7 +490,6 @@ const makeManager = Effect.gen(function* () {
         break;
       }
       case "AssistantMessage":
-        if (event.parts.length > 0) entry.meaningfulActivity = true;
         appendTranscript(snapshot, {
           kind: "assistant",
           parts: event.parts.map((part) =>
@@ -553,7 +507,6 @@ const makeManager = Effect.gen(function* () {
         snapshot.turns++;
         break;
       case "ToolStart":
-        entry.meaningfulActivity = true;
         entry.liveToolMap.set(event.toolId, {
           toolId: event.toolId,
           name: event.name,
@@ -565,7 +518,6 @@ const makeManager = Effect.gen(function* () {
         snapshot.currentTools = snapshot.liveTools.map((tool) => tool.name);
         break;
       case "ToolUpdate": {
-        entry.meaningfulActivity = true;
         const current = entry.liveToolMap.get(event.toolId);
         if (current) {
           entry.liveToolMap.set(event.toolId, {
@@ -579,7 +531,6 @@ const makeManager = Effect.gen(function* () {
         break;
       }
       case "ToolEnd":
-        entry.meaningfulActivity = true;
         entry.liveToolMap.delete(event.toolId);
         snapshot.liveTools = [...entry.liveToolMap.values()];
         snapshot.currentTools = snapshot.liveTools.map((tool) => tool.name);
@@ -630,14 +581,13 @@ const makeManager = Effect.gen(function* () {
       ).pipe(
         Effect.ensuring(
           Effect.sync(() => {
-            if (entry.snapshot.status === "running" && !entry.transitioning) {
+            if (entry.snapshot.status === "running") {
               settle(entry, {
                 _tag: "Failed",
                 errorText: "Backend event stream ended unexpectedly",
               });
             }
-            // An old candidate's pump may finish while a fallback is being
-            // attached. Clear only the session owned by this exact scope.
+            // Clear only the session owned by this exact scope.
             if (entry.scope === scope) {
               entry.session = undefined;
               entry.scope = undefined;
@@ -656,7 +606,6 @@ const makeManager = Effect.gen(function* () {
         if (disposed) {
           return new SpawnError({
             message: "Subagent manager is shutting down.",
-            fallbackAllowed: false,
           });
         }
         if (runningCount() + reserved >= MAX_RUNNING) {
@@ -686,164 +635,6 @@ const makeManager = Effect.gen(function* () {
       return backend;
     });
 
-  transitionCandidate = (entry, rejection) =>
-    Effect.gen(function* () {
-      const rejectionReason = `${rejection.reason}: ${rejection.message}`;
-      const stopped = yield* closeEntryScope(entry).pipe(
-        Effect.timeout(STOP_TIMEOUT_MS),
-        Effect.result,
-      );
-      if (Result.isFailure(stopped)) {
-        entry.transitioning = false;
-        settle(entry, {
-          _tag: "Failed",
-          errorText: `${rejectionReason}. The rejected candidate could not be stopped safely, so fallback was not attempted.`,
-          partialText: latestText(entry.snapshot) || undefined,
-        });
-        return;
-      }
-      if (entry.cancelRequested && entry.snapshot.status === "running") {
-        entry.transitioning = false;
-        settle(entry, {
-          _tag: "Interrupted",
-          partialText: latestText(entry.snapshot) || undefined,
-        });
-        return;
-      }
-      if (disposed || entry.snapshot.status !== "running") return;
-      if (entry.meaningfulActivity) {
-        entry.transitioning = false;
-        settle(entry, {
-          _tag: "Failed",
-          errorText: `${rejectionReason}. Fallback was blocked because meaningful activity occurred.`,
-          partialText: latestText(entry.snapshot) || undefined,
-        });
-        return;
-      }
-
-      entry.snapshot.transcript.splice(entry.candidateTranscriptStart);
-      entry.snapshot.liveAssistant = undefined;
-      entry.liveToolMap.clear();
-      entry.snapshot.liveTools = [];
-      entry.snapshot.currentTools = [];
-      entry.snapshot.queued = [];
-
-      const attempts: CandidateAttempt[] =
-        entry.snapshot.execution.attempts.map((attempt): CandidateAttempt =>
-          attempt.outcome === "selected"
-            ? { ...attempt, outcome: "unavailable", reason: rejectionReason }
-            : attempt,
-        );
-      let lastReason = rejectionReason;
-
-      while (entry.fallbackCandidates.length > 0) {
-        if (
-          disposed ||
-          entry.cancelRequested ||
-          entry.snapshot.status !== "running"
-        ) {
-          return;
-        }
-        const candidate = entry.fallbackCandidates.shift()!;
-        const selectedAttempt: CandidateAttempt = {
-          ...candidate,
-          outcome: "selected",
-        };
-        const candidateTask: SpawnTask = {
-          ...entry.baseTask!,
-          model: candidate.model,
-          reasoningEffort: candidate.reasoningEffort,
-          runMode: candidate.runMode,
-          fallbackCandidates: [...entry.fallbackCandidates],
-          execution: {
-            requested: entry.snapshot.execution.requested,
-            selected: candidate,
-            attempts: [...attempts, selectedAttempt],
-          },
-        };
-        const attempt = yield* Effect.gen(function* () {
-          const backend = yield* getReadyBackend(candidate.harness);
-          const scope = yield* Scope.make();
-          const session = yield* Scope.provide(
-            backend.spawn(candidateTask),
-            scope,
-          ).pipe(Effect.onError(() => Scope.close(scope, Exit.void)));
-          const meta = yield* session.meta;
-          return { backend, scope, session, meta };
-        }).pipe(Effect.result);
-
-        if (Result.isFailure(attempt)) {
-          lastReason = attempt.failure.message;
-          attempts.push({
-            ...candidate,
-            outcome: "unavailable",
-            reason: lastReason,
-          });
-          continue;
-        }
-
-        const { backend, scope, session, meta } = attempt.success;
-        if (
-          disposed ||
-          entry.cancelRequested ||
-          entry.snapshot.status !== "running"
-        ) {
-          yield* Scope.close(scope, Exit.void).pipe(Effect.ignore);
-          return;
-        }
-
-        entry.baseTask = candidateTask;
-        entry.snapshot.backend = backend.name;
-        entry.snapshot.meta = meta;
-        entry.snapshot.usage = { contextWindow: meta.contextWindow };
-        entry.snapshot.execution = candidateTask.execution!;
-        entry.snapshot.errorText = undefined;
-        entry.snapshot.lastActivityAt = Date.now();
-        entry.snapshot.lastEvent = "RunStarted";
-        entry.snapshot.recovery = { available: false };
-        entry.candidateTranscriptStart = entry.snapshot.transcript.length;
-        entry.meaningfulActivity = false;
-        entry.cancelRequested = false;
-        entry.transitioning = false;
-        const attached = yield* startPump(entry, session, scope);
-        if (!attached) return;
-        persistNow(entry);
-        notify(entry.snapshot.id);
-        return;
-      }
-
-      entry.transitioning = false;
-      entry.snapshot.execution = {
-        ...entry.snapshot.execution,
-        attempts,
-      };
-      settle(entry, {
-        _tag: "Failed",
-        errorText: `No fallback candidate was available. ${lastReason}`,
-        partialText: latestText(entry.snapshot) || undefined,
-      });
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.sync(() => {
-          entry.transitioning = false;
-          if (entry.snapshot.status === "running") {
-            settle(entry, {
-              _tag: "Failed",
-              errorText: `Fallback transition failed: ${Cause.pretty(cause)}`,
-              partialText: latestText(entry.snapshot) || undefined,
-            });
-          }
-        }),
-      ),
-      Effect.ensuring(
-        Effect.sync(() => {
-          if (entry.snapshot.status !== "running") {
-            entry.transitioning = false;
-          }
-        }),
-      ),
-    );
-
   const spawn = (backendName: BackendName, task: SpawnTask) =>
     Effect.gen(function* () {
       yield* reserve();
@@ -861,7 +652,6 @@ const makeManager = Effect.gen(function* () {
           unattachedScope = undefined;
           return yield* new SpawnError({
             message: "Subagent manager shut down while spawning.",
-            fallbackAllowed: false,
           });
         }
 
@@ -892,10 +682,11 @@ const makeManager = Effect.gen(function* () {
             meta,
             usage: { contextWindow: meta.contextWindow },
             reviewTarget: task.reviewTarget,
-            execution: task.execution ?? {
-              requested: { type: "direct" },
+            execution: {
+              requested: task.profile
+                ? { type: "profile", profile: task.profile }
+                : { type: "direct" },
               selected,
-              attempts: [{ ...selected, outcome: "selected" }],
             },
             transcript: [],
             liveTools: [],
@@ -907,10 +698,6 @@ const makeManager = Effect.gen(function* () {
             recovery: { available: false },
           },
           liveToolMap: new Map(),
-          fallbackCandidates: [...(task.fallbackCandidates ?? [])],
-          baseTask: task,
-          candidateTranscriptStart: 0,
-          meaningfulActivity: false,
         };
         pendingEntry = entry;
         entries.set(id, entry);
@@ -921,7 +708,6 @@ const makeManager = Effect.gen(function* () {
           unattachedScope = undefined;
           return yield* new SpawnError({
             message: "Subagent spawn was cancelled before attachment.",
-            fallbackAllowed: false,
           });
         }
         unattachedScope = undefined;
@@ -976,9 +762,6 @@ const makeManager = Effect.gen(function* () {
             transcript: [...snapshot.transcript],
           },
           liveToolMap: new Map(),
-          fallbackCandidates: [],
-          candidateTranscriptStart: snapshot.transcript.length,
-          meaningfulActivity: snapshot.turns > 0,
         };
         entries.set(snapshot.id, entry);
         if (persisted.status === "running") persistNow(entry);
@@ -1061,7 +844,7 @@ const makeManager = Effect.gen(function* () {
                 mode,
                 previousOutput: entry.snapshot.finalText,
               };
-        const continuationPrompt =
+        const continuationPrompt = buildReviewPrompt(
           mode === "native"
             ? prompt
             : [
@@ -1069,7 +852,9 @@ const makeManager = Effect.gen(function* () {
                 `Original task:\n${entry.snapshot.prompt.slice(0, RECOVERY_CONTEXT_MAX_LENGTH)}`,
                 `Previous partial output:\n${entry.snapshot.finalText.slice(0, RECOVERY_CONTEXT_MAX_LENGTH) || "(none)"}`,
                 `Continuation request:\n${prompt}`,
-              ].join("\n\n");
+              ].join("\n\n"),
+          entry.snapshot.reviewTarget,
+        );
         const selected = entry.snapshot.execution.selected;
         const task: SpawnTask = {
           prompt: continuationPrompt,
@@ -1077,8 +862,10 @@ const makeManager = Effect.gen(function* () {
           cwd: entry.snapshot.cwd,
           model: selected.model,
           reasoningEffort: selected.reasoningEffort,
+          // Native review sessions continue as normal turns. The target above
+          // also survives artifact recovery, which starts a fresh session.
           runMode: "agent",
-          execution: entry.snapshot.execution,
+          reviewTarget: entry.snapshot.reviewTarget,
           resume: resumeSource,
           parent,
         };
@@ -1110,12 +897,6 @@ const makeManager = Effect.gen(function* () {
         entry.snapshot.lastEvent = "RunStarted";
         entry.snapshot.recovery = { available: false };
         entry.liveToolMap.clear();
-        // Recovery is an explicit continuation of an existing logical run,
-        // not a fresh profile-selection window.
-        entry.fallbackCandidates = [];
-        entry.baseTask = task;
-        entry.candidateTranscriptStart = entry.snapshot.transcript.length;
-        entry.meaningfulActivity = true;
         const attached = yield* startPump(entry, session, scope);
         if (!attached) {
           unattachedScope = undefined;
@@ -1245,7 +1026,7 @@ const makeManager = Effect.gen(function* () {
       }
       if (entry.snapshot.status !== "running") return;
       entry.cancelRequested = true;
-      if (entry.transitioning || !entry.session) {
+      if (!entry.session) {
         settle(entry, {
           _tag: "Interrupted",
           partialText: latestText(entry.snapshot) || undefined,

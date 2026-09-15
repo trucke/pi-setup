@@ -43,16 +43,12 @@ import { Type } from "typebox";
 import { deriveBtwTitle, isModelVisible } from "./src/by-the-way.ts";
 import {
   BACKEND_NAMES,
-  ConcurrencyLimitError,
   formatElapsed,
   latestText,
   PROFILE_NAMES,
   REASONING_EFFORTS,
-  SpawnError,
-  type CandidateAttempt,
   type ExecutionCandidate,
   type ParentContext,
-  type ReviewTarget,
   type SubagentSnapshot,
 } from "./src/domain.ts";
 import {
@@ -80,12 +76,10 @@ import {
   SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS,
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
-import {
-  buildProfilePrompt,
-  defaultReviewTarget,
-  EXECUTION_PROFILES,
-} from "./src/profiles.ts";
+import { buildProfilePrompt, EXECUTION_PROFILES } from "./src/profiles.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
+import { buildReviewPrompt, resolveReviewTarget } from "./src/review.ts";
+import { loadChildGuidance } from "./src/guidance.ts";
 import {
   createSubagentRuntime,
   runTool,
@@ -96,59 +90,6 @@ import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
 const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
 const WAIT_PER_AGENT_MAX_BYTES = 16 * 1024;
-
-interface ReviewTargetInput {
-  readonly type: ReviewTarget["type"];
-  readonly branch?: string;
-  readonly sha?: string;
-  readonly number?: number;
-}
-
-export function resolveReviewTarget(
-  input: ReviewTargetInput | undefined,
-): ReviewTarget {
-  if (!input || input.type === "uncommittedChanges") {
-    return defaultReviewTarget();
-  }
-  if (input.type === "baseBranch") {
-    const branch = input.branch?.trim();
-    if (!branch)
-      throw new Error("reviewTarget.branch is required for baseBranch.");
-    if (
-      !/^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$/.test(branch) ||
-      branch.includes("..") ||
-      branch.includes("@{") ||
-      branch.endsWith("/") ||
-      branch.endsWith(".") ||
-      branch
-        .split("/")
-        .some(
-          (component) =>
-            !component ||
-            component.startsWith(".") ||
-            component.endsWith(".lock"),
-        )
-    ) {
-      throw new Error("reviewTarget.branch must be a safe Git branch name.");
-    }
-    return { type: "baseBranch", branch };
-  }
-  if (input.type === "commit") {
-    const sha = input.sha?.trim();
-    if (!sha) throw new Error("reviewTarget.sha is required for commit.");
-    if (!/^[0-9a-f]{7,64}$/i.test(sha)) {
-      throw new Error("reviewTarget.sha must be a 7-64 character commit hash.");
-    }
-    return { type: "commit", sha };
-  }
-  const number = input.number;
-  if (typeof number !== "number" || !Number.isInteger(number) || number < 1) {
-    throw new Error(
-      "reviewTarget.number must be a positive integer for pullRequest.",
-    );
-  }
-  return { type: "pullRequest", number };
-}
 
 function usageSummary(snap: SubagentSnapshot) {
   const parts = [
@@ -460,8 +401,8 @@ export default function (pi: ExtensionAPI) {
       if (!params.profile && !params.harness) {
         throw new Error("Provide either profile or harness.");
       }
-      if (params.reviewTarget && params.profile !== "reviewer") {
-        throw new Error('reviewTarget is only valid with profile "reviewer".');
+      if (params.reviewTarget && params.profile !== "review") {
+        throw new Error('reviewTarget is only valid with profile "review".');
       }
 
       const cwd = path.resolve(ctx.cwd, params.workingDir ?? ".");
@@ -486,86 +427,45 @@ export default function (pi: ExtensionAPI) {
       };
       const title = params.name.trim().slice(0, 160) || "subagent";
       const profile = params.profile;
-      const candidates: ReadonlyArray<ExecutionCandidate> = profile
-        ? EXECUTION_PROFILES[profile].candidates
-        : [
-            {
-              harness: params.harness!,
-              model: params.model,
-              reasoningEffort: params.reasoningEffort,
-              runMode: "agent",
-            },
-          ];
-      const prompt = profile
+      const selected: ExecutionCandidate = profile
+        ? EXECUTION_PROFILES[profile].execution
+        : {
+            harness: params.harness!,
+            model: params.model,
+            reasoningEffort: params.reasoningEffort,
+            runMode: "agent",
+          };
+      const reviewTarget = params.reviewTarget
+        ? resolveReviewTarget(params.reviewTarget)
+        : undefined;
+      const taskPrompt = profile
         ? buildProfilePrompt(profile, params.prompt)
         : params.prompt;
-      const reviewTarget =
-        profile === "reviewer"
-          ? resolveReviewTarget(params.reviewTarget)
-          : undefined;
-      const attempts: CandidateAttempt[] = [];
-      let snap: SubagentSnapshot | undefined;
-      let lastError: Error | undefined;
-
-      for (const [candidateIndex, candidate] of candidates.entries()) {
-        const selectedAttempt: CandidateAttempt = {
-          ...candidate,
-          outcome: "selected",
-        };
-        try {
-          snap = await runTool(
-            getRuntime(),
-            manager.spawn(candidate.harness, {
-              prompt,
-              title,
-              cwd,
-              model: candidate.model,
-              reasoningEffort: candidate.reasoningEffort,
-              runMode: candidate.runMode,
-              reviewTarget,
-              execution: {
-                requested: profile
-                  ? { type: "profile", profile }
-                  : { type: "direct" },
-                selected: candidate,
-                attempts: [...attempts, selectedAttempt],
-              },
-              fallbackCandidates: profile
-                ? candidates.slice(candidateIndex + 1)
-                : undefined,
-              parent,
-            }),
-            { signal, interruptMessage: "Subagent spawn aborted." },
-          );
-          break;
-        } catch (error) {
-          lastError = error instanceof Error ? error : new Error(String(error));
-          if (
-            !profile ||
-            signal?.aborted ||
-            error instanceof ConcurrencyLimitError ||
-            (error instanceof SpawnError && error.fallbackAllowed === false)
-          ) {
-            throw lastError;
-          }
-          attempts.push({
-            ...candidate,
-            outcome: "unavailable",
-            reason: lastError.message,
-          });
-        }
-      }
-      if (!snap) {
-        const report = attempts
-          .map(
-            (attempt) =>
-              `${attempt.harness}/${attempt.model ?? "default"}: ${attempt.reason ?? "unavailable"}`,
-          )
-          .join("; ");
-        throw new Error(
-          `No execution candidate was available${report ? ` (${report})` : ""}. ${lastError?.message ?? ""}`.trim(),
-        );
-      }
+      // Pi already discovers these resources in its child session. Other
+      // harnesses get the same guidance locations, not the parent's context.
+      const guidance =
+        profile && selected.harness !== "pi"
+          ? await loadChildGuidance(cwd, parent.projectTrusted)
+          : "";
+      const prompt = buildReviewPrompt(
+        guidance ? `${taskPrompt}\n\n${guidance}` : taskPrompt,
+        reviewTarget,
+      );
+      const snap = await runTool(
+        getRuntime(),
+        manager.spawn(selected.harness, {
+          prompt,
+          title,
+          cwd,
+          model: selected.model,
+          reasoningEffort: selected.reasoningEffort,
+          runMode: selected.runMode,
+          reviewTarget,
+          profile,
+          parent,
+        }),
+        { signal, interruptMessage: "Subagent spawn aborted." },
+      );
 
       return {
         content: [
@@ -578,7 +478,6 @@ export default function (pi: ExtensionAPI) {
               modelLabel: snap.meta.modelLabel ?? "?",
               cwd,
               profile,
-              attempts: snap.execution.attempts.length,
               artifactPath: fs.existsSync(snap.artifacts.receipt)
                 ? snap.artifacts.output
                 : undefined,

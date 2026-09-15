@@ -8,6 +8,7 @@ import type {
   SubagentSnapshot,
 } from "./domain.ts";
 import { latestText } from "./domain.ts";
+import { isReviewTarget } from "./review.ts";
 
 const RECEIPT_VERSION = 1;
 const DIRECTORY_MODE = 0o700;
@@ -244,6 +245,8 @@ function isSnapshot(value: unknown): value is SubagentSnapshot {
       candidate.backend === "codex") &&
     typeof candidate.title === "string" &&
     typeof candidate.prompt === "string" &&
+    (candidate.reviewTarget === undefined ||
+      isReviewTarget(candidate.reviewTarget)) &&
     typeof candidate.cwd === "string" &&
     typeof candidate.parentCwd === "string" &&
     typeof candidate.startedAt === "number" &&
@@ -268,11 +271,9 @@ function isSnapshot(value: unknown): value is SubagentSnapshot {
       selected.runMode === "code-review") &&
     (requested?.type === "direct" ||
       (requested?.type === "profile" &&
-        (requested.profile === "scout" ||
-          requested.profile === "worker" ||
-          requested.profile === "reviewer" ||
-          requested.profile === "oracle"))) &&
-    Array.isArray(execution?.attempts)
+        typeof requested.profile === "string" &&
+        requested.profile.length > 0)) &&
+    (execution?.attempts === undefined || Array.isArray(execution.attempts))
   );
 }
 

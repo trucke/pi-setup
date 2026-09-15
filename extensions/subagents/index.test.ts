@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import subagents, { resolveReviewTarget } from "./index.ts";
+import subagents from "./index.ts";
+import { resolveReviewTarget } from "./src/review.ts";
 
 interface RegisteredTool {
   readonly name: string;
   readonly parameters?: { readonly properties?: Record<string, unknown> };
+  readonly execute?: (...args: unknown[]) => Promise<unknown>;
 }
 
 function makePi(tools: RegisteredTool[]) {
@@ -77,9 +79,41 @@ test("spawn exposes profiles and camelCase direct settings without aliases", () 
   const profile = spawn?.parameters?.properties?.profile as {
     enum?: ReadonlyArray<string>;
   };
-  assert.deepEqual(profile.enum, ["scout", "worker", "reviewer", "oracle"]);
+  assert.deepEqual(profile.enum, [
+    "scout",
+    "lookup",
+    "code",
+    "build",
+    "ui",
+    "review",
+    "research",
+    "write",
+  ]);
   assert.equal(spawn?.parameters?.properties?.working_dir, undefined);
   assert.equal(spawn?.parameters?.properties?.reasoning_effort, undefined);
+});
+
+test("spawn rejects profile overrides and direct review targets before creating a session", async () => {
+  const tools: RegisteredTool[] = [];
+  subagents(makePi(tools));
+  const spawn = tools.find((tool) => tool.name === "subagent-spawn")!;
+  for (const override of [
+    { harness: "pi" },
+    { model: "other" },
+    { reasoningEffort: "max" },
+  ]) {
+    await assert.rejects(
+      spawn.execute!("test", { profile: "code", ...override }),
+      /mutually exclusive/,
+    );
+  }
+  await assert.rejects(
+    spawn.execute!("test", {
+      harness: "pi",
+      reviewTarget: { type: "uncommittedChanges" },
+    }),
+    /only valid with profile "review"/,
+  );
 });
 
 test("resume can explicitly bypass a stale native session", () => {
