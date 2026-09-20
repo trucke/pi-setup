@@ -143,7 +143,7 @@ dot_main_id="$(repo_value "${DOTFILES}" main 'commit_id')"
 dot_origin_id="$(repo_value "${DOTFILES}" 'main@origin' 'commit_id')"
 [ "${dot_main_id}" = "${dot_origin_id}" ] || die "dotfiles main differs from main@origin"
 
-pin_count="$(grep -cE '^package="git:github\.com/trucke/pi-setup@v[0-9]+\.[0-9]+\.[0-9]+"$' "${pin_file}" || true)"
+pin_count="$(grep -cE '^pi_setup_package="git:github\.com/trucke/pi-setup@v[0-9]+\.[0-9]+\.[0-9]+"$' "${pin_file}" || true)"
 [ "${pin_count}" = "1" ] || die "expected exactly one pi-setup pin in ${pin_file}"
 
 echo "--- validating dotfiles before release"
@@ -181,13 +181,13 @@ node - "${pin_file}" "${PIN_SOURCE}" "${tag}" <<'NODE'
 const fs = require("node:fs");
 const [, , path, source, tag] = process.argv;
 const input = fs.readFileSync(path, "utf8");
-const pattern = /^package="git:github\.com\/trucke\/pi-setup@v\d+\.\d+\.\d+"$/m;
+const pattern = /^pi_setup_package="git:github\.com\/trucke\/pi-setup@v\d+\.\d+\.\d+"$/m;
 const matches = input.match(new RegExp(pattern.source, "gm"));
 if (matches?.length !== 1) {
   console.error(`release: expected exactly one pi-setup pin in ${path}`);
   process.exit(1);
 }
-fs.writeFileSync(path, input.replace(pattern, `package="${source}@${tag}"`));
+fs.writeFileSync(path, input.replace(pattern, `pi_setup_package="${source}@${tag}"`));
 NODE
 
 pin_message="chore(agents): update pi-setup to ${tag}"
