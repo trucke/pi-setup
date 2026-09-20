@@ -5,34 +5,47 @@ const profileDescriptions = Object.entries(EXECUTION_PROFILES)
   .map(([name, profile]) => `${name} (${profile.description})`)
   .join("; ");
 
-export const SUBAGENT_SPAWN_TOOL_DESCRIPTION = `Spawn a background subagent using a release-pinned profile or explicit harness/model settings. Profiles: ${profileDescriptions}. Profile and direct execution settings are mutually exclusive; direct execution does not inherit profile instructions. Each profile has one primary model with no automatic fallback. Role instructions are not sandbox boundaries; child tool access is unchanged. Results arrive automatically or through subagent-wait. Children cannot see the parent conversation or ask the user. Max 4 active runs.`;
+export const SUBAGENT_SPAWN_TOOL_DESCRIPTION = `Spawn a background subagent using a release-pinned profile. Profiles: ${profileDescriptions}. Each profile fixes the harness, model, effort and role instructions, with no automatic fallback. To choose Claude, Pi, Codex or a specific model, use subagent-spawn-direct instead. Role instructions are not sandbox boundaries; child tool access is unchanged. Results arrive automatically or through subagent-wait. Children cannot see the parent conversation or ask the user. Max 4 active runs across both spawn tools.`;
 
 export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
-  "Spawn a background subagent through a focused profile or explicit Pi, Claude Code, or Codex settings";
+  "Spawn a background subagent using a named profile with a fixed model and role";
 
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
   "Use subagent-spawn for self-contained work that benefits from an independent context; include all required paths, constraints, and expected output.",
   "Use subagent-spawn only when isolation, parallel work, sustained investigation or independent assessment justifies the handoff. Keep trivial work with the parent and prefer one child owning a coherent outcome over routine agent pipelines.",
-  "For subagent-spawn, prefer the profile whose scope matches the task, as described in the tool. Use direct execution for explicit harness/model settings without a profile contract.",
+  "For subagent-spawn, choose the profile whose scope matches the task. When the user requests Claude, Pi, Codex or a specific model, use subagent-spawn-direct instead.",
   "With subagent-spawn profile review, describe the exact artifact in prompt or supply an explicit code reviewTarget. Omitting reviewTarget never implies Git changes. Failures and scope escalation return to the parent; do not silently launch a replacement writer.",
   "After subagent-spawn, continue useful work. Results arrive automatically; use subagent-wait only when progress depends on them.",
+];
+
+export const SUBAGENT_DIRECT_TOOL_DESCRIPTION =
+  'Spawn a background subagent on an explicit harness: "claude", "pi" or "codex". Use this when the user asks for Claude or another specific harness/model. Example: {"name":"Claude evaluation","harness":"claude","prompt":"Evaluate the design. Report findings; do not edit."}. No profile or reviewTarget fields: include the role, scope and constraints in prompt. Omit model and reasoningEffort, or set them to null, unless a particular setting is needed. Direct runs do not inherit profile instructions. Children cannot see the parent conversation or ask the user. Results arrive automatically or through subagent-wait. Max 4 active runs across both spawn tools.';
+
+export const SUBAGENT_DIRECT_PROMPT_SNIPPET =
+  "Spawn a background subagent on explicit Claude Code, Pi or Codex settings";
+
+export const SUBAGENT_DIRECT_PROMPT_GUIDELINES = [
+  "Use subagent-spawn-direct when a specific harness or model is requested. Include a self-contained task, paths, constraints and expected output; direct runs have no profile contract.",
+  "Use subagent-spawn-direct only when independent or substantial work justifies delegation. For a Claude evaluation, set harness to claude and put read-only scope in prompt; do not add profile or reviewTarget.",
+  "After subagent-spawn-direct, continue useful work. Results arrive automatically; use subagent-wait only when progress depends on them. Do not repeat a failed call unchanged; correct its arguments or report the blocker.",
 ];
 
 export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
   prompt:
     "Self-contained task prompt, including required context, paths, constraints, and expected report",
   name: "Short human-readable run name shown in listings and the UI",
-  profile: "Release-pinned execution profile",
+  profile:
+    "Required profile. Fixes the harness, model, effort and role instructions",
   harness:
     'Direct harness: "pi" (in-process Pi), "claude" (Claude Code), or "codex" (Codex CLI)',
   workingDir:
-    "Trusted working directory for the autonomous child (default: current working directory)",
+    "Trusted working directory for the autonomous child. Omit or use null for the current working directory.",
   model:
-    'Direct model hint (Pi: "provider/model-id"; Claude: model alias/id; Codex: model slug)',
+    'Optional model (Pi: "provider/model-id"; Claude: alias/id; Codex: slug). Omit or use null to inherit the parent model for Pi or use the harness default for Claude/Codex.',
   reasoningEffort:
-    "Direct reasoning effort on the shared off/minimal/low/medium/high/xhigh/max scale",
+    "Optional reasoning effort. Omit or use null for the parent effort in Pi or harness defaults in Claude/Codex. Supported levels depend on the harness/model.",
   reviewTarget:
-    "Optional code-change target for profile review. Omit for a document, plan or interface described in prompt. Uncommitted changes must also be selected explicitly.",
+    'Use null or omit unless profile is "review" AND the task explicitly requests a code-change review. For research, scouting, documents, plans or interfaces, use null and describe scope in prompt. Never invent a Git target.',
 };
 
 export function buildSubagentSpawnResult(options: {

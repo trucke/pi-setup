@@ -141,8 +141,13 @@ The subagent extension supports direct Pi, Claude Code and Codex runs plus
 release-pinned `scout`, `lookup`, `code`, `build`, `ui`, `review`, `research` and
 `write` profiles. Each profile has one primary model and no automatic fallback.
 Claude and Codex require their CLIs on `PATH` and authenticated with
-`claude auth` and `codex login` respectively. Direct execution does not inherit
-profile instructions.
+`claude auth` and `codex login` respectively.
+
+Use `subagent-spawn` with `prompt`, `name` and `profile` for pinned profiles.
+Use `subagent-spawn-direct` with `prompt`, `name` and `harness` when requesting
+Claude, Pi, Codex or a specific model. Only the direct tool accepts optional
+`model` and `reasoningEffort`. Direct execution does not inherit profile
+instructions; put role, scope and constraints in its prompt.
 
 For `review`, describe the artifact in the task or supply an explicit code-change
 `reviewTarget`; omitting it does not imply uncommitted changes. Profiles load

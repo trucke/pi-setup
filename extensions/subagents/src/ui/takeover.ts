@@ -25,6 +25,11 @@ function configuredKeys(
   return keybindings.getKeys(binding).join("/") || "unbound";
 }
 
+function profileLabel(snap: SubagentSnapshot): string {
+  const requested = snap.execution.requested;
+  return requested.type === "profile" ? requested.profile : "custom";
+}
+
 function statusGlyph(snap: SubagentSnapshot, theme: Theme): string {
   switch (snap.status) {
     case "running":
@@ -319,12 +324,13 @@ class SubagentDashboard implements Component {
       const index = start + i;
       const isSelected = index === this.selection.index;
 
-      // Left: marker, status square, title, dim id
+      // Keep the profile ahead of the title so long task names cannot hide it.
       const marker = isSelected ? theme.fg("accent", "❯") : " ";
       const title = isSelected
         ? theme.fg("accent", snap.title)
         : theme.fg("text", snap.title);
-      const left = ` ${marker} ${statusGlyph(snap, theme)} ${title} ${theme.fg("dim", snap.id)}`;
+      const label = theme.fg("muted", `[${profileLabel(snap)}]`);
+      const left = ` ${marker} ${statusGlyph(snap, theme)} ${label} ${title} ${theme.fg("dim", snap.id)}`;
 
       // Right: backend · model · context utilization · elapsed · status
       const utilization = formatContextUtilization(snap.usage);
@@ -518,6 +524,7 @@ class TakeoverView implements Component, Focusable {
     const utilization = formatContextUtilization(snap.usage);
     const header =
       `${statusGlyph(snap, theme)} ` +
+      theme.fg("muted", `[${profileLabel(snap)}] `) +
       theme.fg("accent", theme.bold(`${snap.id} · ${snap.title}`)) +
       theme.fg("muted", ` · ${snap.status} · ${formatElapsed(snap)}`) +
       (this.options?.badge

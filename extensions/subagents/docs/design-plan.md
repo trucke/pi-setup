@@ -12,7 +12,8 @@ The eight working contracts and their rationale are recorded in [Profile design]
 
 ## Public tools
 
-- `subagent-spawn`: spawn through a release-pinned profile or direct harness settings
+- `subagent-spawn`: spawn through a required release-pinned profile
+- `subagent-spawn-direct`: spawn through a required harness, with optional model and effort
 - `subagent-wait`: wait for all or any ids, with an optional non-cancelling timeout
 - `subagent-cancel`: cancel active runs while preserving partial output
 - `subagent-send`: steer or queue a message and return a delivery receipt
@@ -20,7 +21,7 @@ The eight working contracts and their rationale are recorded in [Profile design]
 - `subagent-check`: inspect factual liveness, usage, recovery and recent output
 - `subagent-list`: list runs and backend readiness
 
-Public JSON parameters use camelCase. Profile and direct execution options are mutually exclusive. Direct execution does not inherit profile instructions. The global concurrency cap is four and remains fail-fast; there is no hidden queue.
+Public JSON parameters use camelCase. Profile and direct execution use separate tool schemas in `src/spawn.ts`; neither accepts the other's settings. This prevents the former flat schema from advertising combinations rejected only at execution time. Argument preparation gives stale mixed-mode calls concrete routing instructions without silently discarding settings. Optional selections accept `null` as well as omission, so transports that require every property do not force callers to fabricate a model, effort, directory or review target. Direct execution does not inherit profile instructions; role and review scope belong in its prompt. The global concurrency cap is four across both tools and remains fail-fast; there is no hidden queue.
 
 Parent-facing tool guidance defines the routing boundaries and minimum worthwhile delegation. Prefer one child owning a coherent outcome; there is no mandatory agent pipeline.
 

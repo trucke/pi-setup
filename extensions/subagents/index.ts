@@ -3,7 +3,8 @@
  * (pi, Claude Code, Codex) unified behind a single Effect service interface.
  *
  * Tools (for the parent LLM):
- * - subagent-spawn: profile-driven or direct fire-and-forget spawn.
+ * - subagent-spawn: profile-driven fire-and-forget spawn.
+ * - subagent-spawn-direct: explicit harness/model spawn.
  * - subagent-wait: wait for all/any with an optional non-cancelling timeout.
  * - subagent-cancel: stop running work while preserving artifacts.
  * - subagent-send: steer or queue guidance with a structured receipt.
@@ -42,12 +43,8 @@ import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { deriveBtwTitle, isModelVisible } from "./src/by-the-way.ts";
 import {
-  BACKEND_NAMES,
   formatElapsed,
   latestText,
-  PROFILE_NAMES,
-  REASONING_EFFORTS,
-  type ExecutionCandidate,
   type ParentContext,
   type SubagentSnapshot,
 } from "./src/domain.ts";
@@ -69,16 +66,12 @@ import {
   SUBAGENT_RESUME_TOOL_DESCRIPTION,
   SUBAGENT_SEND_PARAMETER_DESCRIPTIONS,
   SUBAGENT_SEND_TOOL_DESCRIPTION,
-  SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
-  SUBAGENT_SPAWN_PROMPT_GUIDELINES,
-  SUBAGENT_SPAWN_PROMPT_SNIPPET,
-  SUBAGENT_SPAWN_TOOL_DESCRIPTION,
   SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS,
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
-import { buildProfilePrompt, EXECUTION_PROFILES } from "./src/profiles.ts";
+import { registerSpawnTools } from "./src/spawn.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
-import { buildReviewPrompt, resolveReviewTarget } from "./src/review.ts";
+import { buildReviewPrompt } from "./src/review.ts";
 import { loadChildGuidance } from "./src/guidance.ts";
 import {
   createSubagentRuntime,
@@ -331,174 +324,87 @@ export default function (pi: ExtensionAPI) {
 
   // --- Tools -------------------------------------------------------------
 
-  pi.registerTool({
-    name: "subagent-spawn",
-    label: "Spawn Subagent",
-    description: SUBAGENT_SPAWN_TOOL_DESCRIPTION,
-    promptSnippet: SUBAGENT_SPAWN_PROMPT_SNIPPET,
-    promptGuidelines: SUBAGENT_SPAWN_PROMPT_GUIDELINES,
-    parameters: Type.Object({
-      prompt: Type.String({
-        description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.prompt,
-      }),
-      name: Type.String({
-        description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.name,
-      }),
-      profile: Type.Optional(
-        StringEnum(PROFILE_NAMES, {
-          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.profile,
-        }),
-      ),
-      harness: Type.Optional(
-        StringEnum(BACKEND_NAMES, {
-          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.harness,
-        }),
-      ),
-      workingDir: Type.Optional(
-        Type.String({
-          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.workingDir,
-        }),
-      ),
-      model: Type.Optional(
-        Type.String({
-          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.model,
-        }),
-      ),
-      reasoningEffort: Type.Optional(
-        StringEnum(REASONING_EFFORTS, {
-          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
-        }),
-      ),
-      reviewTarget: Type.Optional(
-        Type.Object({
-          type: StringEnum(
-            [
-              "uncommittedChanges",
-              "baseBranch",
-              "commit",
-              "pullRequest",
-            ] as const,
-            {
-              description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reviewTarget,
-            },
-          ),
-          branch: Type.Optional(Type.String()),
-          sha: Type.Optional(Type.String()),
-          number: Type.Optional(Type.Integer({ minimum: 1 })),
-        }),
-      ),
-    }),
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const directOptionsPresent =
-        params.harness !== undefined ||
-        params.model !== undefined ||
-        params.reasoningEffort !== undefined;
-      if (params.profile && directOptionsPresent) {
-        throw new Error(
-          "profile is mutually exclusive with harness, model, and reasoningEffort.",
-        );
-      }
-      if (!params.profile && !params.harness) {
-        throw new Error("Provide either profile or harness.");
-      }
-      if (params.reviewTarget && params.profile !== "review") {
-        throw new Error('reviewTarget is only valid with profile "review".');
-      }
+  registerSpawnTools(pi, async (params, signal, ctx) => {
+    const cwd = path.resolve(ctx.cwd, params.workingDir ?? ".");
+    if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+      throw new Error(`workingDir is not a directory: ${cwd}`);
+    }
+    const manager = await getManager();
 
-      const cwd = path.resolve(ctx.cwd, params.workingDir ?? ".");
-      if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
-        throw new Error(`workingDir is not a directory: ${cwd}`);
-      }
-      const manager = await getManager();
-
-      const parent: ParentContext = {
+    const parent: ParentContext = {
+      parentCwd: ctx.cwd,
+      parentSessionId: ctx.sessionManager.getSessionId(),
+      projectTrusted: resolveChildProjectTrust({
         parentCwd: ctx.cwd,
-        parentSessionId: ctx.sessionManager.getSessionId(),
-        projectTrusted: resolveChildProjectTrust({
-          parentCwd: ctx.cwd,
-          childCwd: cwd,
-          parentTrusted: ctx.isProjectTrusted(),
-        }),
-        inheritedModel: ctx.model
-          ? { provider: ctx.model.provider, id: ctx.model.id }
-          : undefined,
-        inheritedThinkingLevel: pi.getThinkingLevel(),
-        modelRegistry: ctx.modelRegistry,
-      };
-      const title = params.name.trim().slice(0, 160) || "subagent";
-      const profile = params.profile;
-      const selected: ExecutionCandidate = profile
-        ? EXECUTION_PROFILES[profile].execution
-        : {
-            harness: params.harness!,
-            model: params.model,
-            reasoningEffort: params.reasoningEffort,
-            runMode: "agent",
-          };
-      const reviewTarget = params.reviewTarget
-        ? resolveReviewTarget(params.reviewTarget)
-        : undefined;
-      const taskPrompt = profile
-        ? buildProfilePrompt(profile, params.prompt)
-        : params.prompt;
-      // Pi already discovers these resources in its child session. Other
-      // harnesses get the same guidance locations, not the parent's context.
-      const guidance =
-        profile && selected.harness !== "pi"
-          ? await loadChildGuidance(cwd, parent.projectTrusted)
-          : "";
-      const prompt = buildReviewPrompt(
-        guidance ? `${taskPrompt}\n\n${guidance}` : taskPrompt,
+        childCwd: cwd,
+        parentTrusted: ctx.isProjectTrusted(),
+      }),
+      inheritedModel: ctx.model
+        ? { provider: ctx.model.provider, id: ctx.model.id }
+        : undefined,
+      inheritedThinkingLevel: pi.getThinkingLevel(),
+      modelRegistry: ctx.modelRegistry,
+    };
+    const title = params.name.trim().slice(0, 160) || "subagent";
+    const { profile, selected, reviewTarget } = params;
+    const taskPrompt = params.prompt;
+    // Pi already discovers these resources in its child session. Other
+    // harnesses get the same guidance locations, not the parent's context.
+    const guidance =
+      profile && selected.harness !== "pi"
+        ? await loadChildGuidance(cwd, parent.projectTrusted)
+        : "";
+    const prompt = buildReviewPrompt(
+      guidance ? `${taskPrompt}\n\n${guidance}` : taskPrompt,
+      reviewTarget,
+    );
+    const snap = await runTool(
+      getRuntime(),
+      manager.spawn(selected.harness, {
+        prompt,
+        title,
+        cwd,
+        model: selected.model,
+        reasoningEffort: selected.reasoningEffort,
+        runMode: selected.runMode,
         reviewTarget,
-      );
-      const snap = await runTool(
-        getRuntime(),
-        manager.spawn(selected.harness, {
-          prompt,
-          title,
-          cwd,
-          model: selected.model,
-          reasoningEffort: selected.reasoningEffort,
-          runMode: selected.runMode,
-          reviewTarget,
-          profile,
-          parent,
-        }),
-        { signal, interruptMessage: "Subagent spawn aborted." },
-      );
+        profile,
+        parent,
+      }),
+      { signal, interruptMessage: "Subagent spawn aborted." },
+    );
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: buildSubagentSpawnResult({
-              id: snap.id,
-              title: snap.title,
-              harness: snap.backend,
-              modelLabel: snap.meta.modelLabel ?? "?",
-              cwd,
-              profile,
-              artifactPath: fs.existsSync(snap.artifacts.receipt)
-                ? snap.artifacts.output
-                : undefined,
-              artifactError:
-                snap.recovery.reason ??
-                "Durable recovery artifacts could not be created.",
-            }),
-          },
-        ],
-        details: {
-          id: snap.id,
-          title: snap.title,
-          cwd,
-          profile,
-          harness: snap.backend,
-          model: snap.meta.modelLabel,
-          execution: snap.execution,
-          artifacts: snap.artifacts,
+    return {
+      content: [
+        {
+          type: "text",
+          text: buildSubagentSpawnResult({
+            id: snap.id,
+            title: snap.title,
+            harness: snap.backend,
+            modelLabel: snap.meta.modelLabel ?? "?",
+            cwd,
+            profile,
+            artifactPath: fs.existsSync(snap.artifacts.receipt)
+              ? snap.artifacts.output
+              : undefined,
+            artifactError:
+              snap.recovery.reason ??
+              "Durable recovery artifacts could not be created.",
+          }),
         },
-      };
-    },
+      ],
+      details: {
+        id: snap.id,
+        title: snap.title,
+        cwd,
+        profile,
+        harness: snap.backend,
+        model: snap.meta.modelLabel,
+        execution: snap.execution,
+        artifacts: snap.artifacts,
+      },
+    };
   });
 
   pi.registerTool({
@@ -1061,7 +967,7 @@ export default function (pi: ExtensionAPI) {
       const manager = await getManager();
       if (manager.view.size() === 0) {
         ctx.ui.notify(
-          "No subagents yet. The agent spawns them with subagent-spawn.",
+          "No subagents yet. Use subagent-spawn for profiles or subagent-spawn-direct for a specific harness.",
           "info",
         );
         return;

@@ -43,6 +43,7 @@ const CHILD_TIMEOUT_EXEMPT_TOOL_NAMES = ["web-research"] as const;
 /** Tools that headless children must not receive. Everything else stays enabled. */
 const CHILD_EXCLUDED_TOOL_NAMES = [
   "subagent-spawn",
+  "subagent-spawn-direct",
   "subagent-wait",
   "subagent-cancel",
   "subagent-check",

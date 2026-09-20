@@ -8,6 +8,7 @@ interface RegisteredTool {
   readonly name: string;
   readonly parameters?: { readonly properties?: Record<string, unknown> };
   readonly execute?: (...args: unknown[]) => Promise<unknown>;
+  readonly prepareArguments?: (args: unknown) => unknown;
 }
 
 function makePi(tools: RegisteredTool[]) {
@@ -52,6 +53,7 @@ test("registers the focused kebab-case subagent tool set", () => {
     tools.map((tool) => tool.name),
     [
       "subagent-spawn",
+      "subagent-spawn-direct",
       "subagent-wait",
       "subagent-cancel",
       "subagent-send",
@@ -62,7 +64,7 @@ test("registers the focused kebab-case subagent tool set", () => {
   );
 });
 
-test("spawn exposes profiles and camelCase direct settings without aliases", () => {
+test("spawn exposes separate profile and direct tool schemas", () => {
   const tools: RegisteredTool[] = [];
   subagents(makePi(tools));
   const spawn = tools.find((tool) => tool.name === "subagent-spawn");
@@ -70,10 +72,7 @@ test("spawn exposes profiles and camelCase direct settings without aliases", () 
     "prompt",
     "name",
     "profile",
-    "harness",
     "workingDir",
-    "model",
-    "reasoningEffort",
     "reviewTarget",
   ]);
   const profile = spawn?.parameters?.properties?.profile as {
@@ -91,28 +90,35 @@ test("spawn exposes profiles and camelCase direct settings without aliases", () 
   ]);
   assert.equal(spawn?.parameters?.properties?.working_dir, undefined);
   assert.equal(spawn?.parameters?.properties?.reasoning_effort, undefined);
+  const direct = tools.find((tool) => tool.name === "subagent-spawn-direct");
+  assert.deepEqual(Object.keys(direct?.parameters?.properties ?? {}), [
+    "prompt",
+    "name",
+    "harness",
+    "workingDir",
+    "model",
+    "reasoningEffort",
+  ]);
 });
 
-test("spawn rejects profile overrides and direct review targets before creating a session", async () => {
+test("old mixed calls get actionable routing errors before creating a session", () => {
   const tools: RegisteredTool[] = [];
   subagents(makePi(tools));
   const spawn = tools.find((tool) => tool.name === "subagent-spawn")!;
   for (const override of [
-    { harness: "pi" },
-    { model: "other" },
-    { reasoningEffort: "max" },
+    { harness: "claude" },
+    { model: "opus" },
+    { reasoningEffort: "high" },
   ]) {
-    await assert.rejects(
-      spawn.execute!("test", { profile: "code", ...override }),
-      /mutually exclusive/,
+    assert.throws(
+      () => spawn.prepareArguments!({ profile: "review", ...override }),
+      /use subagent-spawn-direct.*Remove profile and reviewTarget/,
     );
   }
-  await assert.rejects(
-    spawn.execute!("test", {
-      harness: "pi",
-      reviewTarget: { type: "uncommittedChanges" },
-    }),
-    /only valid with profile "review"/,
+  const direct = tools.find((tool) => tool.name === "subagent-spawn-direct")!;
+  assert.throws(
+    () => direct.prepareArguments!({ harness: "claude", profile: "review" }),
+    /Remove those fields.*scope in prompt/,
   );
 });
 

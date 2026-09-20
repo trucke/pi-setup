@@ -11,6 +11,13 @@ Delegate when isolation, parallel work, sustained investigation or independent a
 
 At most four runs can be active. The cap is fail-fast; there is no hidden queue. Results return automatically, so continue useful parent work instead of immediately waiting.
 
+## Choose the spawn tool
+
+- **Named role, no requested harness/model:** use `subagent-spawn` with `profile`. The profile fixes its harness, model, effort and role instructions.
+- **User asks for Claude, Pi, Codex or a specific model:** use `subagent-spawn-direct` with `harness`. Put the role and constraints in `prompt`, not in a `profile` field.
+
+Both tools return the same run ids and use the same wait, check, send, cancel and resume tools. The four-run cap is shared.
+
 ## Profiles
 
 | Profile    | Purpose                                                                         | Primary                        |
@@ -23,6 +30,8 @@ At most four runs can be active. The cap is fail-fast; there is no hidden queue.
 | `review`   | Independently assess code, plans, interfaces or documents                       | Pi · GPT-6 Astra · high        |
 | `research` | Investigate substantial questions through the analytical deliverable            | Pi · GPT-6 Astra · high        |
 | `write`    | Draft and refine prose while preserving established substance                   | Claude Code · Fable 5.1 · high |
+
+`subagent-spawn` requires `prompt`, `name` and `profile`. It does not accept `harness`, `model` or `reasoningEffort`; use `subagent-spawn-direct` to choose those settings.
 
 Each profile has one primary model. There are no automatic fallbacks. A failed run reports its error and available partial work; the parent decides whether to retry or reassign. Do not silently launch another writer after a failure.
 
@@ -57,30 +66,32 @@ subagent-spawn({
 
 ## Direct execution
 
-Use direct execution when explicit harness/model settings are needed. `profile` is mutually exclusive with `harness`, `model` and `reasoningEffort`. Direct execution does not inherit a profile contract; include the necessary instructions in the task.
+`subagent-spawn-direct` requires only `prompt`, `name` and `harness`. It has no `profile` or `reviewTarget` fields. Direct execution does not inherit a profile contract; include the role, authorization limits, required guidance and expected output in the task.
+
+For example, when asked for a Claude evaluation:
 
 ```text
-subagent-spawn({
-  prompt: "Implement the prepared change, stay within the assigned scope and run focused tests.",
-  name: "implementation",
-  harness: "pi",
-  model: "openai-codex/gpt-6-astra",
-  reasoningEffort: "high",
+subagent-spawn-direct({
+  prompt: "Read-only evaluation of /trusted/repo. Read its repository instructions, compare the web-search design with the supplied upstream sources and report evidence-backed simplifications. Do not edit, publish or make paid API calls.",
+  name: "Claude web-search evaluation",
+  harness: "claude",
   workingDir: "/trusted/repo"
 })
 ```
 
+Omit `model` and `reasoningEffort`, or set them to `null`, unless a particular setting is needed. Optional fields accept `null` for transports that require every property. `workingDir: null` uses the parent's directory. Do not fill unused fields with empty strings or placeholder values. Model formats: Pi uses `provider/model-id`, Claude accepts a model alias/id and Codex accepts a model slug.
+
 Harnesses:
 
 - `pi`: in-process Pi session; omitted model/effort inherit the parent in direct mode
-- `claude`: Claude Code; requires the installed CLI to be authenticated
-- `codex`: Codex app-server; requires `codex login`
+- `claude`: Claude Code; requires the installed CLI to be authenticated; omitted model/effort use Claude defaults
+- `codex`: Codex app-server; requires `codex login`; omitted model/effort use Codex defaults
 
 Reasoning efforts follow `off < minimal < low < medium < high < xhigh < max`. Supported effort levels and their meaning depend on the model and harness.
 
 ## Review targets
 
-Use `profile: "review"`. Describe the exact document, plan, interface or other artifact in `prompt`. For code-change reviews, optionally supply an explicit target:
+With `subagent-spawn`, use `profile: "review"`. Describe the exact document, plan, interface or other artifact in `prompt`; omit `reviewTarget` or set it to `null` for those tasks and for every non-review profile. Only code-change reviews need an optional explicit target:
 
 ```text
 reviewTarget: { type: "uncommittedChanges" }
@@ -89,7 +100,13 @@ reviewTarget: { type: "commit", sha: "<sha>" }
 reviewTarget: { type: "pullRequest", number: 123 }
 ```
 
-Omitting `reviewTarget` does not imply uncommitted changes. Reviews do not apply fixes, commit or post remote comments. Explicit targets survive both native and artifact-based recovery.
+Supply only the fields relevant to that target. Omitting `reviewTarget` does not imply uncommitted changes. Reviews do not apply fixes, commit or post remote comments. Explicit targets survive both native and artifact-based recovery.
+
+For a review on a requested harness, use `subagent-spawn-direct` and describe the exact review target and read-only constraints in `prompt` instead.
+
+## Handle failures
+
+Do not repeat a failed call unchanged. Argument errors identify the correction or the other spawn tool to use. If a backend cannot start, inspect `subagent-list` readiness and report the blocker rather than silently changing the requested harness/model. If a run id was returned, inspect it with `subagent-check` before creating another run.
 
 ## Manage runs
 
