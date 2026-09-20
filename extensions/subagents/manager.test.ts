@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test, { after } from "node:test";
-import { Effect, Layer, ManagedRuntime, Result } from "effect";
+import { Effect, Layer, ManagedRuntime, Result, Stream } from "effect";
 import { BackendRegistry, type SubagentBackend } from "./src/backend.ts";
 import { piBackend } from "./src/backends/pi.ts";
 import {
@@ -249,6 +249,64 @@ test("cancel interrupts a running stub subagent", async () => {
     ]);
     assert.equal(manager.view.get(snap.id)?.errorText, "Run was cancelled");
   });
+});
+
+test("cancellation wins when a backend reports its abort as a failure", async () => {
+  const stub = makeStubBackend({
+    backend: "pi",
+    defaultModelLabel: "test",
+    contextWindow: 1000,
+    toolName: "bash",
+    cadenceMs: 10,
+  });
+  const backend: SubagentBackend = {
+    ...stub,
+    spawn: (task) =>
+      stub.spawn(task).pipe(
+        Effect.map((session) => ({
+          ...session,
+          events: session.events.pipe(
+            Stream.map((event) =>
+              event._tag === "RunSettled" &&
+              event.outcome._tag === "Interrupted"
+                ? {
+                    _tag: "RunSettled" as const,
+                    outcome: {
+                      _tag: "Failed" as const,
+                      errorText: "The operation was aborted.",
+                      partialText: "Work completed before cancellation",
+                    },
+                  }
+                : event,
+            ),
+          ),
+        })),
+      ),
+  };
+  const runtime = ManagedRuntime.make(
+    SubagentManagerLive.pipe(
+      Layer.provide(Layer.succeed(BackendRegistry, new Map([["pi", backend]]))),
+    ),
+  );
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const snap = await runTool(
+      runtime,
+      manager.spawn("pi", task("Long running task")),
+    );
+    await runTool(runtime, manager.cancel([snap.id]));
+    const cancelled = manager.view.get(snap.id)!;
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.finalText, "Work completed before cancellation");
+    assert.deepEqual(cancelled.currentTools, []);
+    const saved = JSON.parse(
+      fs.readFileSync(cancelled.artifacts.snapshot, "utf8"),
+    );
+    assert.equal(saved.status, "cancelled");
+    assert.equal(saved.finalText, cancelled.finalText);
+  } finally {
+    await runtime.dispose();
+  }
 });
 
 test("clean manager shutdown persists active runs as cancelled with partial output", async () => {

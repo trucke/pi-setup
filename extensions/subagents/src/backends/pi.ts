@@ -505,6 +505,9 @@ const makePiSession = (
           });
           break;
         case "agent_settled":
+          // message_end listeners run before SDK persistence, so their session
+          // totals omit that response. Refresh after persistence before settling.
+          emitUsage();
           settle();
           break;
       }

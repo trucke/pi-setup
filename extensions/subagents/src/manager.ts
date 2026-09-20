@@ -366,6 +366,17 @@ const makeManager = Effect.gen(function* () {
     entry.restarting = false;
     entry.resuming = false;
     if (snapshot.status !== "running") return;
+    // Backends can report an abort as a failure (or finish while stopping).
+    // Once cancellation is requested, the terminal event acknowledges the stop.
+    if (entry.cancelRequested && outcome._tag !== "Interrupted") {
+      outcome = {
+        _tag: "Interrupted",
+        partialText:
+          outcome._tag === "Completed"
+            ? outcome.finalText
+            : (outcome.partialText ?? latestText(snapshot)),
+      };
+    }
     const now = Date.now();
     snapshot.lastActivityAt = now;
     snapshot.lastEvent = "RunSettled";
