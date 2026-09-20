@@ -1,23 +1,17 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Cause, Data, Effect, Exit } from "effect";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { resolveOptionalApiKey, type ApiKeyOptions } from "./env.ts";
-import {
-  boundedOutput,
-  errorMessage,
-  errorResult,
-  expandHint,
-  resultText,
-} from "./output.ts";
+import { boundedOutput, errorMessage } from "./output.ts";
+import { webRenderers } from "./render.ts";
+import { readResponseText } from "../shared/public-http.ts";
 import {
   DEVELOPER_SEARCH_PARAMETER_DESCRIPTIONS,
   DEVELOPER_SEARCH_PROMPT_GUIDELINES,
   DEVELOPER_SEARCH_PROMPT_SNIPPET,
   DEVELOPER_SEARCH_TOOL_DESCRIPTION,
 } from "./prompt.ts";
-import { displayUrl, summaryLine } from "./render.ts";
 import { sanitizeLine, sanitizeText } from "./sanitize.ts";
 
 export const DEVELOPER_SEARCH_URL =
@@ -45,9 +39,8 @@ export type DeveloperResultType = (typeof DEVELOPER_RESULT_TYPES)[number];
 const REPOSITORY_RESULT_TYPES = ["issue", "pull_request", "readme"] as const;
 
 /**
- * Loosely-typed Developer Index response. Every field is re-validated during
- * normalization, so one code path serves live responses and session details
- * restored from disk.
+ * Developer Index response. Remote fields are validated and bounded during
+ * normalization before producing quoted evidence.
  */
 interface DeveloperApiResponse {
   results?: unknown;
@@ -57,7 +50,7 @@ interface DeveloperApiResponse {
   sources?: unknown;
 }
 
-/** Normalized, sanitized, persisted developer-search details. */
+/** Normalized, sanitized developer-search evidence. */
 export interface DeveloperSearchItem {
   id: string;
   type: string;
@@ -70,10 +63,11 @@ export interface DeveloperSearchItem {
 export interface DeveloperSearchDetails {
   backend: "firecrawl";
   results: DeveloperSearchItem[];
-  coverage: Record<DeveloperResultType, string>;
+  coverage: Record<DeveloperResultType, string> | undefined;
   reranked: boolean;
   repos?: Array<{
     repo: string;
+    canonicalRepo?: string;
     indexed: boolean;
     types?: { issue: boolean; pullRequest: boolean; readme: boolean };
   }>;
@@ -160,7 +154,7 @@ class DeveloperSearchError extends Data.TaggedError("DeveloperSearchError")<{
 }> {}
 
 /**
- * One Developer Index HTTP call as an Effect, mirroring the Exa transport:
+ * One Developer Index HTTP call as an Effect:
  * fiber interruption (tool cancellation) aborts the in-flight request, and
  * `AbortSignal.timeout` bounds the request including body reads. The unref'd
  * web-standard timeout avoids the Effect v4 beta timer leak on interruption.
@@ -169,6 +163,7 @@ function developerSearchRequest(
   body: unknown,
   apiKey: string | undefined,
   transport: DeveloperSearchTransport,
+  onDispatch?: () => void,
 ): Effect.Effect<DeveloperApiResponse, DeveloperSearchError> {
   const doFetch = transport.fetch ?? fetch;
   const requestTimeoutMs = transport.timeoutMs ?? DEVELOPER_SEARCH_TIMEOUT_MS;
@@ -179,6 +174,8 @@ function developerSearchRequest(
       const combined = AbortSignal.any([signal, timeout]);
 
       try {
+        combined.throwIfAborted();
+        onDispatch?.();
         const response = await doFetch(DEVELOPER_SEARCH_URL, {
           method: "POST",
           headers: {
@@ -188,11 +185,15 @@ function developerSearchRequest(
           },
           body: JSON.stringify(body),
           signal: combined,
+          redirect: "error",
         });
+        const responseText = await readResponseText(response, combined);
 
         if (!response.ok) {
           const detail = sanitizeLine(
-            await response.text().catch(() => ""),
+            apiKey
+              ? responseText.replaceAll(apiKey, "[redacted]")
+              : responseText,
           ).slice(0, 300);
           throw new DeveloperSearchError({
             message: `Firecrawl developer search failed (HTTP ${response.status})${detail ? `: ${detail}` : ""}. ${RETRY_HINT}`,
@@ -200,7 +201,9 @@ function developerSearchRequest(
         }
 
         try {
-          return (await response.json()) as DeveloperApiResponse;
+          const parsed: unknown = JSON.parse(responseText);
+          if (!record(parsed)) throw new Error("Expected an object response");
+          return parsed as DeveloperApiResponse;
         } catch (error) {
           throw new DeveloperSearchError({
             message: `Firecrawl developer search returned invalid JSON: ${errorMessage(error)}. ${RETRY_HINT}`,
@@ -237,12 +240,12 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 function stringValue(value: unknown) {
-  return typeof value === "string" ? value : "";
+  return typeof value === "string" ? value.slice(0, 8192) : "";
 }
 
 function indexedEcho(value: unknown, key: "repo" | "source") {
   if (!Array.isArray(value)) return undefined;
-  return value.flatMap((candidate) => {
+  return value.slice(0, 20).flatMap((candidate) => {
     const echo = record(candidate);
     const name = sanitizeLine(stringValue(echo?.[key]));
     return name ? [{ name, indexed: echo?.indexed === true, echo }] : [];
@@ -250,7 +253,7 @@ function indexedEcho(value: unknown, key: "repo" | "source") {
 }
 
 /**
- * Normalizes a Developer Index response into sanitized persisted details.
+ * Normalizes a Developer Index response into bounded evidence.
  * Every remote string is terminal-sanitized; passage Markdown structure is
  * preserved because the model reads passages as quoted evidence.
  */
@@ -264,7 +267,8 @@ export function developerSearchDetails(
   const coverage = Object.fromEntries(
     DEVELOPER_RESULT_TYPES.map((type) => [
       type,
-      sanitizeLine(stringValue(coverageRecord?.[type])) || "unknown",
+      sanitizeLine(stringValue(coverageRecord?.[type])).slice(0, 100) ||
+        "unknown",
     ]),
   ) as Record<DeveloperResultType, string>;
 
@@ -273,6 +277,9 @@ export function developerSearchDetails(
       const types = record(echo?.types);
       return {
         repo: name,
+        ...(stringValue(echo?.canonicalRepo)
+          ? { canonicalRepo: sanitizeLine(stringValue(echo?.canonicalRepo)) }
+          : {}),
         indexed,
         ...(types
           ? {
@@ -299,7 +306,12 @@ export function developerSearchDetails(
       return [
         {
           id: sanitizeLine(stringValue(item?.id)),
-          type: sanitizeLine(stringValue(item?.type)) || "unknown",
+          type:
+            sanitizeLine(stringValue(item?.type)) ||
+            DEVELOPER_RESULT_TYPES.find((type) =>
+              stringValue(item?.id).startsWith(`${type}:`),
+            ) ||
+            "unknown",
           title: sanitizeLine(stringValue(item?.title)) || url,
           url,
           passages: (Array.isArray(item?.passages)
@@ -318,19 +330,15 @@ export function developerSearchDetails(
         },
       ];
     }),
-    coverage,
+    coverage: coverageRecord ? coverage : undefined,
     reranked: response.reranked === true,
     ...(repos?.length ? { repos } : {}),
     ...(sources?.length ? { sources } : {}),
   };
 }
 
-/** Re-validates restored session details before rendering. */
-export function developerSearchView(value: unknown): DeveloperSearchDetails {
-  return developerSearchDetails(record(value) ?? {});
-}
-
-function coverageLine(coverage: Record<DeveloperResultType, string>) {
+function coverageLine(coverage: DeveloperSearchDetails["coverage"]) {
+  if (!coverage) return "not reported";
   return DEVELOPER_RESULT_TYPES.map((type) => `${type} ${coverage[type]}`).join(
     " · ",
   );
@@ -354,6 +362,12 @@ function notIndexedLine(details: DeveloperSearchDetails) {
  */
 export function developerSearchResultText(details: DeveloperSearchDetails) {
   const sections = [`Coverage: ${coverageLine(details.coverage)}`];
+  for (const repo of details.repos ?? []) {
+    if (repo.indexed)
+      sections.push(
+        `Repository: ${repo.repo}${repo.canonicalRepo && repo.canonicalRepo !== repo.repo ? ` → ${repo.canonicalRepo}` : ""} (indexed)`,
+      );
+  }
 
   if (details.results.length === 0) {
     sections.push("No developer search results returned.");
@@ -380,11 +394,13 @@ async function developerSearch(
   options: DeveloperSearchOptions,
   signal?: AbortSignal,
   transport: DeveloperSearchTransport = {},
+  onDispatch?: () => void,
 ): Promise<DeveloperSearchDetails> {
+  if (signal?.aborted) throw new Error("Firecrawl developer search cancelled");
   const request = buildDeveloperSearchRequest(options);
   const program = Effect.sync(getApiKey).pipe(
     Effect.flatMap((apiKey) =>
-      developerSearchRequest(request, apiKey, transport),
+      developerSearchRequest(request, apiKey, transport, onDispatch),
     ),
     Effect.map(developerSearchDetails),
   );
@@ -404,15 +420,17 @@ async function developerSearch(
 export interface DeveloperSearchToolDependencies {
   getApiKey: OptionalFirecrawlKeyProvider;
   transport?: DeveloperSearchTransport;
+  onDispatch?: (toolCallId: string, auth: "anonymous" | "account") => void;
 }
 
 export function registerDeveloperSearchTool(
   pi: ExtensionAPI,
-  { getApiKey, transport }: DeveloperSearchToolDependencies,
+  { getApiKey, transport, onDispatch }: DeveloperSearchToolDependencies,
 ) {
   pi.registerTool({
     name: "developer-search",
     label: "Search Developer Index",
+    ...webRenderers("developer-search"),
     description: DEVELOPER_SEARCH_TOOL_DESCRIPTION,
     promptSnippet: DEVELOPER_SEARCH_PROMPT_SNIPPET,
     promptGuidelines: DEVELOPER_SEARCH_PROMPT_GUIDELINES,
@@ -420,6 +438,7 @@ export function registerDeveloperSearchTool(
       query: Type.String({
         description: DEVELOPER_SEARCH_PARAMETER_DESCRIPTIONS.query,
         minLength: 1,
+        maxLength: 4096,
       }),
       limit: Type.Optional(
         Type.Integer({
@@ -453,7 +472,9 @@ export function registerDeveloperSearchTool(
         }),
       ),
     }),
-    execute: async (_toolCallId, params, signal, onUpdate) => {
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      if (signal?.aborted)
+        throw new Error("Firecrawl developer search cancelled");
       onUpdate?.({
         content: [
           {
@@ -464,8 +485,9 @@ export function registerDeveloperSearchTool(
         details: undefined,
       });
 
+      const apiKey = getApiKey();
       const details = await developerSearch(
-        getApiKey,
+        () => apiKey,
         {
           query: params.query,
           limit: params.limit ?? DEFAULT_DEVELOPER_SEARCH_LIMIT,
@@ -476,95 +498,27 @@ export function registerDeveloperSearchTool(
         },
         signal,
         transport,
+        () => onDispatch?.(toolCallId, apiKey ? "account" : "anonymous"),
       );
 
+      const output = await boundedOutput(
+        `Provider: Firecrawl Developer Index (${apiKey ? "account" : "anonymous"})\n\n${developerSearchResultText(details)}`,
+        "developer-search",
+      );
       return {
-        content: [
-          {
-            type: "text" as const,
-            text: await boundedOutput(
-              developerSearchResultText(details),
-              "developer-search",
-            ),
-          },
-        ],
-        details,
+        content: [{ type: "text" as const, text: output.text }],
+        details: {
+          provider: "firecrawl-developer",
+          auth: apiKey ? "account" : "anonymous",
+          resultCount: details.results.length,
+          coverage: details.coverage,
+          ...output.details,
+          repos: details.repos,
+          items: details.results
+            .slice(0, 3)
+            .map(({ title, url }) => ({ title, url })),
+        },
       };
-    },
-    renderCall(args, theme) {
-      let text = theme.fg("toolTitle", theme.bold("developer-search"));
-      text += ` ${theme.fg("accent", `“${sanitizeLine(args.query)}”`)}`;
-      text += theme.fg(
-        "muted",
-        ` · limit ${args.limit ?? DEFAULT_DEVELOPER_SEARCH_LIMIT}`,
-      );
-      if (args.types?.length) {
-        text += theme.fg("muted", ` · ${args.types.join(", ")}`);
-      }
-      if (args.repos?.length) {
-        text += theme.fg(
-          "muted",
-          ` · in ${args.repos.map(sanitizeLine).join(", ")}`,
-        );
-      }
-      if (args.sources?.length) {
-        text += theme.fg(
-          "muted",
-          ` · docs ${args.sources.map(sanitizeLine).join(", ")}`,
-        );
-      }
-      return new Text(text, 0, 0);
-    },
-    renderResult(result, { expanded, isPartial }, theme, context) {
-      if (isPartial) {
-        return new Text(
-          theme.fg("warning", resultText(result)?.trim() || "Searching…"),
-          0,
-          0,
-        );
-      }
-      if (context.isError) {
-        return errorResult(result, theme, "Developer search failed");
-      }
-
-      const details = developerSearchView(result.details);
-      const degraded = DEVELOPER_RESULT_TYPES.filter(
-        (type) => !["ok", "skipped"].includes(details.coverage[type]),
-      );
-      let text = theme.fg(
-        "success",
-        `✓ ${details.results.length} result${details.results.length === 1 ? "" : "s"}`,
-      );
-      if (degraded.length > 0) {
-        text += theme.fg(
-          "warning",
-          ` · ${degraded.map((type) => `${type} ${details.coverage[type]}`).join(", ")}`,
-        );
-      }
-
-      const visible = expanded ? details.results : details.results.slice(0, 3);
-      for (const [index, item] of visible.entries()) {
-        text += `\n${theme.fg("accent", `${index + 1}. [${item.type}] ${item.title}`)}`;
-        if (item.url) {
-          text += theme.fg("dim", ` — ${displayUrl(item.url)}`);
-        }
-        if (expanded && item.passages[0]) {
-          text += `\n   ${theme.fg("muted", summaryLine(item.passages[0]))}`;
-        }
-        if (expanded && item.url) {
-          text += `\n   ${theme.fg("dim", item.url)}`;
-        }
-      }
-      if (!expanded && details.results.length > visible.length) {
-        text += `\n${theme.fg("dim", `… ${details.results.length - visible.length} more`)}`;
-      }
-      if (expanded) {
-        const missing = notIndexedLine(details);
-        if (missing) text += `\n${theme.fg("warning", missing)}`;
-      } else {
-        text += `\n${expandHint(theme)}`;
-      }
-      return new Text(text, 0, 0);
     },
   });
 }

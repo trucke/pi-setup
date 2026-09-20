@@ -5,686 +5,121 @@ import type {
   ExtensionContext,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import {
-  DEFAULT_FIRECRAWL_BUDGET,
-  FIRECRAWL_USAGE_CHANNEL,
-  REFRESH_CHANNEL,
-} from "../shared/dashboard-state.ts";
-import { HERDR_BLOCKED_CHANNEL } from "../shared/herdr.ts";
-import {
-  registerUsageTracking,
-  creditsForFirecrawlResult,
-  estimatedCreditsForCall,
-  usageForEntries,
-} from "./usage.ts";
+import { FIRECRAWL_USAGE_CHANNEL } from "../shared/dashboard-state.ts";
+import { registerUsageTracking, usageForEntries } from "./usage.ts";
 
-function messageEntry(message: Record<string, unknown>, id: string) {
-  return {
-    type: "message",
-    id,
-    parentId: null,
-    timestamp: "2026-01-01T00:00:00.000Z",
-    message,
-  } as unknown as SessionEntry;
-}
-
-function customEntry(customType: string, data: unknown, id: string) {
-  return {
-    type: "custom",
-    id,
-    parentId: null,
-    timestamp: "2026-01-01T00:00:00.000Z",
-    customType,
-    data,
-  } as unknown as SessionEntry;
-}
-
-function toolCallEntry(
-  id: string,
-  name: string,
-  arguments_: Record<string, unknown> = {},
-) {
-  return messageEntry(
-    {
-      role: "assistant",
-      content: [{ type: "toolCall", id, name, arguments: arguments_ }],
-    },
-    `assistant-${id}`,
-  );
-}
-
-function toolResultEntry(options: {
-  id: string;
-  name: string;
+type Event = {
+  toolName: string;
+  toolCallId: string;
+  input?: unknown;
   details?: unknown;
   isError?: boolean;
-}) {
-  return messageEntry(
-    {
-      role: "toolResult",
-      toolCallId: options.id,
-      toolName: options.name,
-      content: [],
-      details: options.details,
-      isError: options.isError ?? false,
-    },
-    `result-${options.id}`,
-  );
-}
-
-test("estimates Firecrawl calls conservatively", () => {
-  assert.equal(estimatedCreditsForCall("firecrawl_search", { limit: 5 }), 2);
-  assert.equal(estimatedCreditsForCall("firecrawl_search", { limit: 11 }), 4);
-  assert.equal(
-    estimatedCreditsForCall("firecrawl_search", {
-      limit: 3,
-      scrapeResults: true,
-    }),
-    5,
-  );
-  assert.equal(estimatedCreditsForCall("firecrawl_scrape", {}), 1);
-  assert.equal(estimatedCreditsForCall("firecrawl_crawl", {}), 5);
-  assert.equal(estimatedCreditsForCall("firecrawl_crawl", { limit: 12 }), 12);
-  assert.equal(estimatedCreditsForCall("read", {}), 0);
-});
-
-test("only explicit firecrawl backends reserve credits for the new tools", () => {
-  // Exa is the default backend and must never reserve Firecrawl credits.
-  assert.equal(estimatedCreditsForCall("web-search", { limit: 5 }), 0);
-  assert.equal(estimatedCreditsForCall("web-search", { backend: "exa" }), 0);
-  assert.equal(estimatedCreditsForCall("web-fetch", { url: "u" }), 0);
-  assert.equal(estimatedCreditsForCall("web-research", { query: "q" }), 0);
-
-  assert.equal(
-    estimatedCreditsForCall("web-search", { backend: "firecrawl", limit: 5 }),
-    2,
-  );
-  assert.equal(
-    estimatedCreditsForCall("web-fetch", { backend: "firecrawl", url: "u" }),
-    1,
-  );
-  assert.equal(estimatedCreditsForCall("web-crawl", { limit: 12 }), 12);
-  assert.equal(estimatedCreditsForCall("web-crawl", {}), 5);
-
-  // developer-search is always Firecrawl: 2 credits per 10 results.
-  assert.equal(estimatedCreditsForCall("developer-search", { query: "q" }), 2);
-  assert.equal(estimatedCreditsForCall("developer-search", { limit: 10 }), 2);
-  assert.equal(estimatedCreditsForCall("developer-search", { limit: 11 }), 4);
-  assert.equal(estimatedCreditsForCall("developer-search", { limit: 20 }), 4);
-
-  assert.equal(
-    creditsForFirecrawlResult(
-      "web-search",
-      { backend: "exa", results: [] },
-      { limit: 5 },
-    ),
-    0,
-  );
-  assert.equal(
-    creditsForFirecrawlResult(
-      "web-fetch",
-      { metadata: { creditsUsed: 1 } },
-      { backend: "firecrawl", url: "u" },
-    ),
-    1,
-  );
-
-  // developer-search reports no creditsUsed: charge the limit-based estimate,
-  // including on failures, and treat budget-blocked calls as free.
-  assert.equal(
-    creditsForFirecrawlResult(
-      "developer-search",
-      { backend: "firecrawl", results: [] },
-      { query: "q", limit: 15 },
-    ),
-    4,
-  );
-  assert.equal(
-    creditsForFirecrawlResult(
-      "developer-search",
-      undefined,
-      { query: "q" },
-      true,
-    ),
-    2,
-  );
-  assert.equal(
-    creditsForFirecrawlResult(
-      "developer-search",
-      { localBudgetBlocked: true },
-      { query: "q" },
-      true,
-    ),
-    0,
-  );
-});
-
-test("uses reported credits and treats local cache hits as free", () => {
-  assert.equal(
-    creditsForFirecrawlResult("firecrawl_scrape", {
-      metadata: { creditsUsed: 1 },
-    }),
-    1,
-  );
-  assert.equal(
-    creditsForFirecrawlResult("firecrawl_scrape", {
-      localCacheHit: true,
-      metadata: { creditsUsed: 0 },
-    }),
-    0,
-  );
-  assert.equal(
-    creditsForFirecrawlResult(
-      "firecrawl_crawl",
-      { localBudgetBlocked: true },
-      { limit: 100 },
-      true,
-    ),
-    0,
-  );
-  assert.equal(
-    creditsForFirecrawlResult("firecrawl_crawl", {
-      creditsUsed: 7,
-      data: [{ metadata: { creditsUsed: 1 } }],
-    }),
-    7,
-  );
-  assert.equal(creditsForFirecrawlResult("read", { creditsUsed: 99 }), 0);
-});
-
-test("calculates search credits even for empty or legacy scraped results", () => {
-  assert.equal(
-    creditsForFirecrawlResult("firecrawl_search", { web: [] }, { limit: 5 }),
-    2,
-  );
-  assert.equal(
-    creditsForFirecrawlResult(
-      "firecrawl_search",
-      {
-        web: Array.from({ length: 11 }, () => ({ url: "https://example.com" })),
-      },
-      { limit: 11 },
-    ),
-    4,
-  );
-  assert.equal(
-    creditsForFirecrawlResult(
-      "firecrawl_search",
-      { web: [{ markdown: "one" }, { markdown: "two" }] },
-      { limit: 2, scrapeResults: true },
-    ),
-    4,
-  );
-});
-
-test("reconstructs irreversible spend from all entries including failures", () => {
-  // Legacy snake_case names cover sessions persisted before the rename.
-  const usage = usageForEntries([
-    toolCallEntry("search-1", "firecrawl_search", { limit: 5 }),
-    toolResultEntry({
-      id: "search-1",
-      name: "firecrawl_search",
-      details: { web: [{ url: "https://example.com" }] },
-    }),
-    toolCallEntry("scrape-1", "firecrawl_scrape"),
-    toolResultEntry({
-      id: "scrape-1",
-      name: "firecrawl_scrape",
-      details: { metadata: { creditsUsed: 1 } },
-    }),
-    toolCallEntry("failed-1", "firecrawl_crawl", { limit: 20 }),
-    toolResultEntry({
-      id: "failed-1",
-      name: "firecrawl_crawl",
-      isError: true,
-    }),
-  ]);
-
-  assert.equal(usage.creditsUsed, 23);
-  assert.deepEqual(
-    usage.toolCallIds,
-    new Set(["search-1", "scrape-1", "failed-1"]),
-  );
-});
-
+};
 type Handler = (
-  event: Record<string, unknown>,
+  event: Event,
   ctx: ExtensionContext,
-) => unknown | Promise<unknown>;
-
-function createHarness(
-  entries: SessionEntry[],
-  options: {
-    hasUI?: boolean;
-    select?: (
-      choices: readonly string[],
-    ) => string | undefined | Promise<string | undefined>;
-  } = {},
-) {
+) => Promise<unknown> | unknown;
+function harness(account = false) {
   const handlers = new Map<string, Handler>();
-  const eventHandlers = new Map<string, (value: unknown) => void>();
-  const emitted: Array<{ name: string; value: unknown }> = [];
-  const appended: Array<{ customType: string; data: unknown }> = [];
-  const selections: Array<{ title: string; choices: readonly string[] }> = [];
+  const published: unknown[] = [];
+  const entries: SessionEntry[] = [];
   const pi = {
-    on(name: string, handler: Handler) {
-      handlers.set(name, handler);
-    },
-    appendEntry(customType: string, data: unknown) {
-      appended.push({ customType, data });
-    },
+    on: (name: string, handler: Handler) => handlers.set(name, handler),
+    appendEntry: () => {},
     events: {
-      on(name: string, handler: (value: unknown) => void) {
-        eventHandlers.set(name, handler);
-        return () => eventHandlers.delete(name);
-      },
-      emit(name: string, value: unknown) {
-        emitted.push({ name, value });
-        eventHandlers.get(name)?.(value);
+      on: () => () => {},
+      emit: (name: string, value: unknown) => {
+        if (name === FIRECRAWL_USAGE_CHANNEL) published.push(value);
       },
     },
   } as unknown as ExtensionAPI;
   const ctx = {
-    hasUI: options.hasUI ?? true,
+    hasUI: false,
     sessionManager: { getEntries: () => entries },
-    ui: {
-      select: async (title: string, choices: readonly string[]) => {
-        selections.push({ title, choices });
-        return options.select ? options.select(choices) : choices[0];
-      },
-    },
   } as unknown as ExtensionContext;
-
-  registerUsageTracking(pi);
-
-  const emit = async (name: string, event: Record<string, unknown>) => {
-    const handler = handlers.get(name);
-    assert.ok(handler, `missing ${name} handler`);
-    return handler(event, ctx);
+  const dispatch = registerUsageTracking(pi);
+  return {
+    published,
+    entries,
+    dispatch: (id: string) => dispatch(id, account ? "account" : "anonymous"),
+    async emit(name: string, event: Event) {
+      return handlers.get(name)?.(event, ctx);
+    },
   };
-
-  return { emit, emitted, eventHandlers, appended, selections };
 }
-
-function usageEvents(emitted: Array<{ name: string; value: unknown }>) {
-  return emitted
-    .filter(({ name }) => name === FIRECRAWL_USAGE_CHANNEL)
-    .map(({ value }) => value);
-}
-
-function herdrEvents(emitted: Array<{ name: string; value: unknown }>) {
-  return emitted
-    .filter(({ name }) => name === HERDR_BLOCKED_CHANNEL)
-    .map(({ value }) => value);
-}
-
-test("publishes restored and live usage without double counting", async () => {
-  const entries = [
-    toolCallEntry("scrape-1", "firecrawl_scrape"),
-    toolResultEntry({
-      id: "scrape-1",
-      name: "firecrawl_scrape",
-      details: { metadata: { creditsUsed: 1 } },
-    }),
-  ];
-  const { emit, emitted, eventHandlers } = createHarness(entries);
-
-  await emit("session_start", { type: "session_start", reason: "startup" });
-  await emit("tool_call", {
-    toolCallId: "search-2",
-    toolName: "firecrawl_search",
-    input: { limit: 5 },
-  });
-  await emit("tool_result", {
-    toolCallId: "search-2",
-    toolName: "firecrawl_search",
-    input: { limit: 5 },
-    details: { web: [{ url: "https://example.com" }] },
-    content: [],
-    isError: false,
-  });
-  await emit("tool_result", {
-    toolCallId: "search-2",
-    toolName: "firecrawl_search",
-    input: { limit: 5 },
-    details: { web: [{ url: "https://example.com" }] },
-    content: [],
-    isError: false,
-  });
-  eventHandlers.get(REFRESH_CHANNEL)?.(undefined);
-
-  assert.deepEqual(usageEvents(emitted), [
-    {
-      creditsUsed: 1,
-      budget: DEFAULT_FIRECRAWL_BUDGET,
-      unlimited: false,
-    },
-    {
-      creditsUsed: 3,
-      budget: DEFAULT_FIRECRAWL_BUDGET,
-      unlimited: false,
-    },
-    {
-      creditsUsed: 3,
-      budget: DEFAULT_FIRECRAWL_BUDGET,
-      unlimited: false,
-    },
-  ]);
+const call = (id: string, limit = 10): Event => ({
+  toolCallId: id,
+  toolName: "developer-search",
+  input: { limit },
 });
 
-test("tree navigation preserves spend from all session entries", async () => {
-  const entries: SessionEntry[] = [];
-  const { emit, emitted } = createHarness(entries);
-
-  await emit("session_start", { type: "session_start", reason: "startup" });
-  entries.push(
-    toolCallEntry("crawl-1", "firecrawl_crawl", { limit: 8 }),
-    toolResultEntry({
-      id: "crawl-1",
-      name: "firecrawl_crawl",
-      details: { creditsUsed: 8 },
-    }),
-  );
-  await emit("session_tree", {
-    type: "session_tree",
-    newLeafId: "result-crawl-1",
-    oldLeafId: null,
-  });
-
-  assert.deepEqual(usageEvents(emitted), [
-    {
-      creditsUsed: 0,
-      budget: DEFAULT_FIRECRAWL_BUDGET,
-      unlimited: false,
-    },
-    {
-      creditsUsed: 8,
-      budget: DEFAULT_FIRECRAWL_BUDGET,
-      unlimited: false,
-    },
-  ]);
-});
-
-test("restores approved budget settings from session entries", async () => {
-  const { emit, emitted } = createHarness([
-    customEntry("firecrawl-budget", { budget: 35 }, "budget-1"),
-    customEntry("firecrawl-budget", { unlimited: true }, "budget-2"),
-  ]);
-
-  await emit("session_start", { type: "session_start", reason: "startup" });
-
-  assert.deepEqual(usageEvents(emitted), [
-    { creditsUsed: 0, budget: 35, unlimited: true },
-  ]);
-});
-
-test("reserves parallel calls and persists an approved budget increase", async () => {
-  const { emit, emitted, appended } = createHarness([]);
-  await emit("session_start", { type: "session_start", reason: "startup" });
-
-  assert.equal(
-    await emit("tool_call", {
-      toolCallId: "crawl-1",
-      toolName: "web-crawl",
-      input: { limit: 20 },
-    }),
-    undefined,
-  );
-  assert.equal(
-    await emit("tool_call", {
-      toolCallId: "fetch-1",
-      toolName: "web-fetch",
-      input: { url: "https://example.com", backend: "firecrawl" },
-    }),
-    undefined,
-  );
-
-  assert.deepEqual(appended, [
-    { customType: "firecrawl-budget", data: { budget: 25 } },
-  ]);
-  assert.deepEqual(usageEvents(emitted).at(-1), {
-    creditsUsed: 0,
-    budget: 25,
-    unlimited: false,
-  });
-  assert.deepEqual(herdrEvents(emitted), [
-    {
-      active: true,
-      label: "Waiting for Firecrawl budget approval",
-    },
-    { active: false },
-  ]);
-});
-
-test("allows all remaining Firecrawl requests for the current session", async () => {
-  const harness = createHarness([], {
-    select: (choices) => choices[1],
-  });
-  await harness.emit("session_start", {
-    type: "session_start",
-    reason: "startup",
-  });
-
-  assert.equal(
-    await harness.emit("tool_call", {
-      toolCallId: "crawl-1",
-      toolName: "firecrawl_crawl",
-      input: { limit: 21 },
-    }),
-    undefined,
-  );
-  assert.equal(
-    await harness.emit("tool_call", {
-      toolCallId: "crawl-2",
-      toolName: "firecrawl_crawl",
-      input: { limit: 100 },
-    }),
-    undefined,
-  );
-
-  assert.deepEqual(harness.appended, [
-    { customType: "firecrawl-budget", data: { unlimited: true } },
-  ]);
-  assert.equal(harness.selections.length, 1);
-  assert.deepEqual(harness.selections[0]?.choices.slice(1), [
-    "Allow all Firecrawl requests for this session",
-    "Decline this request",
-  ]);
-  assert.deepEqual(usageEvents(harness.emitted).at(-1), {
-    creditsUsed: 0,
-    budget: DEFAULT_FIRECRAWL_BUDGET,
-    unlimited: true,
-  });
-});
-
-test("blocks budget overruns without approval", async () => {
-  const noUi = createHarness([], { hasUI: false });
-  await noUi.emit("session_start", {
-    type: "session_start",
-    reason: "startup",
-  });
-  const unavailable = await noUi.emit("tool_call", {
-    toolCallId: "crawl-1",
-    toolName: "firecrawl_crawl",
-    input: { limit: 21 },
-  });
-  assert.deepEqual(unavailable, {
-    block: true,
-    reason:
-      "Firecrawl request blocked: projected usage is 21 credits, above the 20-credit session budget. Reduce the scope or approve a higher budget in an interactive session.",
-  });
-  assert.deepEqual(
-    await noUi.emit("tool_result", {
-      toolCallId: "crawl-1",
-      toolName: "firecrawl_crawl",
-      input: { limit: 21 },
+test("reserves concurrent attempts, blocks headless overruns and separates anonymous/account usage", async () => {
+  for (const account of [false, true]) {
+    const h = harness(account);
+    for (let i = 0; i < 5; i++)
+      assert.equal(await h.emit("tool_call", call(`${i}`, 20)), undefined);
+    const blocked = await h.emit("tool_call", call("blocked"));
+    assert.equal((blocked as { block: boolean }).block, true);
+    await h.emit("tool_result", { ...call("blocked"), isError: true });
+    h.dispatch("0");
+    const result = await h.emit("tool_result", {
+      ...call("0", 20),
       isError: true,
-    }),
-    { details: { localBudgetBlocked: true } },
-  );
-  assert.deepEqual(usageEvents(noUi.emitted).at(-1), {
-    creditsUsed: 0,
-    budget: DEFAULT_FIRECRAWL_BUDGET,
-    unlimited: false,
-  });
-
-  const declined = createHarness([], {
-    select: (choices) => choices[2],
-  });
-  await declined.emit("session_start", {
-    type: "session_start",
-    reason: "startup",
-  });
-  const result = await declined.emit("tool_call", {
-    toolCallId: "crawl-2",
-    toolName: "firecrawl_crawl",
-    input: { limit: 21 },
-  });
-  assert.deepEqual(result, {
-    block: true,
-    reason:
-      "Firecrawl request declined because projected usage exceeds the 20-credit session budget.",
-  });
-  assert.deepEqual(declined.appended, []);
-  assert.deepEqual(herdrEvents(declined.emitted), [
-    {
-      active: true,
-      label: "Waiting for Firecrawl budget approval",
-    },
-    { active: false },
-  ]);
+    });
+    assert.deepEqual(result, {
+      details: {
+        developerUsage: { units: 4, auth: account ? "account" : "anonymous" },
+      },
+    });
+    await h.emit("tool_result", call("0", 20));
+    assert.deepEqual(h.published.at(-1), {
+      unitsUsed: 4,
+      anonymousUnits: account ? 0 : 4,
+      accountCredits: account ? 4 : 0,
+      budget: 20,
+      unlimited: false,
+    });
+  }
 });
 
-test("clears the blocked state when budget confirmation fails", async () => {
-  const confirmationError = new Error("confirmation failed");
-  const harness = createHarness([], {
-    select: async () => {
-      throw confirmationError;
-    },
-  });
-
-  await assert.rejects(
-    harness.emit("tool_call", {
-      toolCallId: "crawl-1",
-      toolName: "firecrawl_crawl",
-      input: { limit: 21 },
-    }),
-    confirmationError,
+test("unsubmitted validation failures and cancellation release reservations without usage", async () => {
+  const h = harness();
+  await h.emit("tool_call", call("invalid", 20));
+  assert.equal(
+    await h.emit("tool_result", { ...call("invalid"), isError: true }),
+    undefined,
   );
-  assert.deepEqual(herdrEvents(harness.emitted), [
-    {
-      active: true,
-      label: "Waiting for Firecrawl budget approval",
-    },
-    { active: false },
-  ]);
-});
-
-test("counts failed calls conservatively and cached calls as free", async () => {
-  const { emit, emitted } = createHarness([]);
-  await emit("session_start", { type: "session_start", reason: "startup" });
-
-  await emit("tool_call", {
-    toolCallId: "crawl-1",
-    toolName: "firecrawl_crawl",
-    input: { limit: 7 },
-  });
-  await emit("tool_result", {
-    toolCallId: "crawl-1",
-    toolName: "firecrawl_crawl",
-    input: { limit: 7 },
-    isError: true,
-  });
-  await emit("tool_call", {
-    toolCallId: "scrape-1",
-    toolName: "firecrawl_scrape",
-    input: {},
-  });
-  await emit("tool_result", {
-    toolCallId: "scrape-1",
-    toolName: "firecrawl_scrape",
-    input: {},
-    details: {
-      localCacheHit: true,
-      metadata: { creditsUsed: 0 },
-    },
-    isError: false,
-  });
-
-  assert.deepEqual(usageEvents(emitted).at(-1), {
-    creditsUsed: 7,
-    budget: DEFAULT_FIRECRAWL_BUDGET,
+  for (let i = 0; i < 5; i++)
+    assert.equal(await h.emit("tool_call", call(`${i}`, 20)), undefined);
+  assert.deepEqual(h.published.at(-1), {
+    unitsUsed: 0,
+    anonymousUnits: 0,
+    accountCredits: 0,
+    budget: 20,
     unlimited: false,
   });
 });
 
-test("restores mixed legacy and current tool names from one session", () => {
-  const usage = usageForEntries([
-    toolCallEntry("legacy-1", "firecrawl_scrape", {}),
-    toolResultEntry({
-      id: "legacy-1",
-      name: "firecrawl_scrape",
-      details: { metadata: { creditsUsed: 1 } },
-    }),
-    toolCallEntry("new-1", "web-crawl", { limit: 4 }),
-    toolResultEntry({
-      id: "new-1",
-      name: "web-crawl",
-      details: { creditsUsed: 4 },
-    }),
-    toolCallEntry("exa-1", "web-search", { query: "q" }),
-    toolResultEntry({
-      id: "exa-1",
-      name: "web-search",
-      details: { backend: "exa", results: [] },
-    }),
-    toolCallEntry("dev-1", "developer-search", { query: "q", limit: 20 }),
-    toolResultEntry({
-      id: "dev-1",
-      name: "developer-search",
-      details: { backend: "firecrawl", results: [] },
-    }),
-  ]);
-
-  assert.equal(usage.creditsUsed, 9);
-  assert.deepEqual(usage.toolCallIds, new Set(["legacy-1", "new-1", "dev-1"]));
-});
-
-test("never gates or reserves exa-backed search and fetch calls", async () => {
-  const { emit, selections } = createHarness([]);
-  await emit("session_start", { type: "session_start", reason: "startup" });
-
-  // Fill the budget completely with an explicit Firecrawl crawl…
-  await emit("tool_call", {
-    toolCallId: "crawl-1",
-    toolName: "web-crawl",
-    input: { limit: 20 },
-  });
-
-  // …then exa-backed defaults must pass without approval or reservation.
-  assert.equal(
-    await emit("tool_call", {
-      toolCallId: "search-1",
-      toolName: "web-search",
-      input: { query: "q", limit: 10 },
-    }),
-    undefined,
-  );
-  assert.equal(
-    await emit("tool_call", {
-      toolCallId: "fetch-1",
-      toolName: "web-fetch",
-      input: { url: "https://example.com" },
-    }),
-    undefined,
-  );
-  assert.deepEqual(selections, []);
-
-  // developer-search is always Firecrawl-backed, so it is budget-gated.
-  await emit("tool_call", {
-    toolCallId: "dev-1",
-    toolName: "developer-search",
-    input: { query: "q" },
-  });
-  assert.equal(selections.length, 1);
+test("restores attributed attempts across branches, without guessing old billing", () => {
+  const entry = (id: string, details: unknown) =>
+    ({
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "developer-search",
+        toolCallId: id,
+        details,
+      },
+    }) as unknown as SessionEntry;
+  const entries = [
+    entry("a", { developerUsage: { units: 2, auth: "anonymous" } }),
+    entry("b", { developerUsage: { units: 4, auth: "account" } }),
+    entry("a", { developerUsage: { units: 2, auth: "anonymous" } }),
+    entry("legacy", { results: [] }),
+  ];
+  const state = usageForEntries(entries);
+  assert.equal(state.unitsUsed, 6);
+  assert.equal(state.anonymousUnits, 2);
+  assert.equal(state.accountCredits, 4);
+  assert.deepEqual([...state.toolCallIds], ["a", "b"]);
 });

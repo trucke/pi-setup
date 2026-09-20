@@ -1,15 +1,6 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Data } from "effect";
-
-export class MissingApiKeyError extends Data.TaggedError("MissingApiKeyError")<{
-  readonly message: string;
-}> {}
-
-export type CommandExecutor = Pick<ExtensionAPI, "exec">;
-
 export interface ApiKeyOptions {
   env?: NodeJS.ProcessEnv;
   envPath?: string;
@@ -60,14 +51,4 @@ export function resolveOptionalApiKey(
 
   const fileApiKey = readEnvFileValue(name, options.envPath);
   return fileApiKey || undefined;
-}
-
-/** Resolves a required API key from the process environment or ~/.pi/agent/.env. */
-export async function resolveApiKey(name: string, options: ApiKeyOptions = {}) {
-  const apiKey = resolveOptionalApiKey(name, options);
-  if (apiKey) return apiKey;
-
-  throw new MissingApiKeyError({
-    message: `Missing ${name} in the process environment or ~/.pi/agent/.env`,
-  });
 }

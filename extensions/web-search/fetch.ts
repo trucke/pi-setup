@@ -1,375 +1,194 @@
-import { StringEnum } from "@earendil-works/pi-ai";
-import {
-  formatSize,
-  getMarkdownTheme,
-  type ExtensionAPI,
-  type Theme,
-} from "@earendil-works/pi-coding-agent";
-import { Effect } from "effect";
-import { Container, Markdown, Text } from "@earendil-works/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
-  memoizedRequest,
-  scrapeRequestKey,
-  type ScrapeCache,
-} from "./cache.ts";
-import {
-  exaFetch,
-  type ExaFetchDetails,
-  type ExaKeyProvider,
-  type ExaTransport,
-} from "./exa.ts";
-import {
-  firecrawlOutputError,
-  firecrawlRequest,
-  runFirecrawl,
-  type FirecrawlProvider,
-} from "./firecrawl.ts";
-import {
-  boundedOutput,
-  errorResult,
-  expandHint,
-  resultText,
-  stringify,
-} from "./output.ts";
-import {
-  FETCH_PARAMETER_DESCRIPTIONS,
-  FETCH_PROMPT_GUIDELINES,
-  FETCH_PROMPT_SNIPPET,
-  FETCH_TOOL_DESCRIPTION,
-} from "./prompt.ts";
-import {
-  boundedMarkdown,
-  displayUrl,
-  documentView,
-  type DocumentView,
-} from "./render.ts";
-import { parsePublicHttpUrl } from "../shared/public-url.ts";
-import { sanitizeLine } from "./sanitize.ts";
+  abortable,
+  readPublicHttp,
+  type PublicHttpOptions,
+} from "../shared/public-http.ts";
+import { boundedOutput, errorMessage } from "./output.ts";
+import { webRenderers } from "./render.ts";
+import { sanitizeText } from "./sanitize.ts";
 
-const EXA_RETRY_HINT =
-  'Retry web-fetch, or escalate explicitly with backend: "firecrawl".';
-const FIRECRAWL_RETRY_HINT =
-  'Retry web-fetch with backend: "firecrawl", configure FIRECRAWL_API_KEY for higher limits, or use the default exa backend.';
+export const MAX_FETCH_BYTES = 5 * 1024 * 1024;
+const ACCEPT =
+  "text/markdown, text/plain;q=0.9, text/html;q=0.8, application/xhtml+xml;q=0.8, application/json;q=0.7";
 
-/** Firecrawl-only scrape options that must not be silently ignored on exa. */
-const FIRECRAWL_ONLY_PARAMETERS = [
-  "onlyMainContent",
-  "waitFor",
-  "timeout",
-  "includeMetadata",
-] as const;
-
-function documentSummary(document: DocumentView) {
-  const parts = [document.title];
-  if (document.statusCode !== undefined) {
-    parts.push(`HTTP ${document.statusCode}`);
+export async function extractHtml(html: string, url: string) {
+  const [{ Readability }, { parseHTML }, { default: TurndownService }] =
+    await Promise.all([
+      import("@mozilla/readability"),
+      import("linkedom"),
+      import("turndown"),
+    ]);
+  // linkedom never executes scripts or loads subresources.
+  const { document } = parseHTML(html);
+  const title = document.title;
+  let base = url;
+  const declaredBase = document
+    .querySelector("base[href]")
+    ?.getAttribute("href");
+  if (declaredBase) {
+    try {
+      const candidate = new URL(declaredBase, url);
+      if (["http:", "https:"].includes(candidate.protocol))
+        base = candidate.href;
+    } catch {
+      /* Ignore malformed base declarations. */
+    }
   }
-  if (document.creditsUsed !== undefined) {
-    parts.push(
-      `${document.creditsUsed} credit${document.creditsUsed === 1 ? "" : "s"}`,
-    );
+  for (const node of document.querySelectorAll(
+    "script, style, noscript, iframe, object, embed, form, template, base",
+  ))
+    node.remove();
+  for (const node of document.querySelectorAll("[href], [src]")) {
+    for (const attribute of ["href", "src"]) {
+      const value = node.getAttribute(attribute);
+      if (!value) continue;
+      try {
+        const resolved = new URL(value, base);
+        if (
+          !["http:", "https:"].includes(resolved.protocol) ||
+          resolved.username ||
+          resolved.password
+        )
+          node.removeAttribute(attribute);
+        else node.setAttribute(attribute, resolved.href);
+      } catch {
+        node.removeAttribute(attribute);
+      }
+    }
   }
-  if (document.markdown) {
-    parts.push(formatSize(Buffer.byteLength(document.markdown, "utf8")));
-  }
-  return parts.join(" · ");
+  const fallback =
+    document.querySelector("main")?.innerHTML ?? document.body.innerHTML;
+  const article = new Readability(document as unknown as Document, {
+    maxElemsToParse: 30_000,
+  }).parse();
+  const markdown = new TurndownService({
+    headingStyle: "atx",
+    codeBlockStyle: "fenced",
+  }).turndown(article?.content || fallback);
+  return {
+    title: sanitizeText(article?.title || title),
+    text: sanitizeText(markdown).trim(),
+  };
 }
 
-function expandedDocument(
-  document: DocumentView,
-  summary: string,
-  theme: Theme,
+export async function fetchLocal(
+  url: string,
+  options: { timeout?: number; signal?: AbortSignal } = {},
+  transport: Pick<PublicHttpOptions, "request" | "resolve"> = {},
 ) {
-  const container = new Container();
-  container.addChild(new Text(theme.fg("success", `✓ ${summary}`), 0, 0));
-  if (document.url) {
-    container.addChild(
-      new Text(theme.fg("dim", `Source: ${document.url}`), 0, 0),
-    );
+  const timeoutMs = options.timeout ?? 30_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000)
+    throw new Error("timeout must be between 1 and 120000 milliseconds.");
+  const deadline = Date.now() + timeoutMs;
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeout])
+    : timeout;
+  try {
+    const response = await readPublicHttp(url, {
+      ...transport,
+      signal,
+      maxBytes: MAX_FETCH_BYTES,
+      accept: ACCEPT,
+    });
+    const mediaType = response.contentType
+      .split(";", 1)[0]
+      .trim()
+      .toLowerCase();
+    const charset =
+      response.contentType.match(/charset\s*=\s*["']?([^\s;"']+)/i)?.[1] ??
+      "utf-8";
+    const body = new TextDecoder(charset).decode(response.body);
+    let text: string;
+    let title: string | undefined;
+    if (["text/html", "application/xhtml+xml"].includes(mediaType)) {
+      ({ text, title } = await abortable(
+        extractHtml(body, response.url),
+        signal,
+      ));
+    } else if (
+      mediaType.startsWith("text/") ||
+      mediaType === "application/json" ||
+      mediaType.endsWith("+json")
+    ) {
+      text = sanitizeText(body);
+    } else {
+      throw new Error(
+        `Unsupported content type: ${mediaType || "missing"}. Use read-pdf for PDFs. No hosted request was made.`,
+      );
+    }
+    signal.throwIfAborted();
+    if (Date.now() >= deadline)
+      throw new Error("Local extraction exceeded its deadline.");
+    return {
+      text:
+        text ||
+        "[No readable content. This may require JavaScript; no hosted request was made.]",
+      details: {
+        provider: "local" as const,
+        url: response.url,
+        contentType: sanitizeText(response.contentType).slice(0, 256),
+        bytes: response.bytes,
+        title: title?.slice(0, 300),
+      },
+    };
+  } catch (error) {
+    if (options.signal?.aborted) throw new Error("Local web fetch cancelled.");
+    if (timeout.aborted || Date.now() >= deadline)
+      throw new Error(
+        `Local web fetch timed out after ${timeoutMs / 1000} seconds. No hosted request was made.`,
+      );
+    throw new Error(errorMessage(error));
   }
-  if (document.description) {
-    container.addChild(new Text(theme.fg("muted", document.description), 0, 0));
-  }
-
-  if (!document.markdown) {
-    container.addChild(
-      new Text(theme.fg("dim", "No Markdown content returned."), 0, 0),
-    );
-    return container;
-  }
-
-  const bounded = boundedMarkdown(document.markdown);
-  container.addChild(new Markdown(bounded.content, 0, 0, getMarkdownTheme()));
-  if (bounded.truncated) {
-    container.addChild(
-      new Text(
-        theme.fg(
-          "warning",
-          `Preview truncated to ${bounded.outputLines} of ${bounded.totalLines} lines.`,
-        ),
-        0,
-        0,
-      ),
-    );
-  }
-  return container;
 }
 
-function exaFetchDetails(value: unknown): ExaFetchDetails | undefined {
-  const details = value as ExaFetchDetails | undefined;
-  return details?.backend === "exa" && Array.isArray(details.pages)
-    ? details
-    : undefined;
-}
-
-function exaSummary(details: ExaFetchDetails) {
-  const page = details.pages[0];
-  const parts = [page?.title ?? "No content"];
-  if (page) parts.push(`${page.characters.toLocaleString("en-US")} chars`);
-  if (details.errors.length > 0) {
-    parts.push(
-      `${details.errors.length} error${details.errors.length === 1 ? "" : "s"}`,
-    );
-  }
-  return parts.join(" · ");
-}
-
-export interface FetchToolDependencies {
-  getFirecrawl: FirecrawlProvider;
-  getExaKey: ExaKeyProvider;
-  scrapeCache: ScrapeCache;
-  transport?: ExaTransport;
-}
-
-export function registerFetchTool(
-  pi: ExtensionAPI,
-  { getFirecrawl, getExaKey, scrapeCache, transport }: FetchToolDependencies,
-) {
+export function registerFetchTool(pi: ExtensionAPI) {
   pi.registerTool({
     name: "web-fetch",
-    label: "Fetch Page",
-    description: FETCH_TOOL_DESCRIPTION,
-    promptSnippet: FETCH_PROMPT_SNIPPET,
-    promptGuidelines: FETCH_PROMPT_GUIDELINES,
+    label: "Fetch Web Page Locally",
+    ...webRenderers("web-fetch"),
+    description:
+      "Read one public HTTP(S) URL directly, without a hosted provider. HTML becomes readable Markdown; text, Markdown and JSON are returned directly. No JavaScript, cookies or credentials. Every redirect and DNS answer is validated and connections are pinned. Downloads are limited to 5 MiB and 30 seconds by default. Inline output is limited to 16KB or 400 lines, with complete extracted content saved to a temp file when truncated; use read for more. Never falls back to hosted fetching.",
+    promptSnippet:
+      "Read a public URL locally as Markdown or text, without sending it to a hosted provider.",
+    promptGuidelines: [
+      "Use web-fetch to read selected known URLs; do not re-fetch content already available unless freshness matters.",
+      "web-fetch does not execute JavaScript or use a hosted fallback. Only explicitly call web-fetch-hosted, when available, if sending that public URL to a third party is appropriate.",
+    ],
     parameters: Type.Object({
-      url: Type.String({ description: FETCH_PARAMETER_DESCRIPTIONS.url }),
-      backend: Type.Optional(
-        StringEnum(["exa", "firecrawl"] as const, {
-          description: FETCH_PARAMETER_DESCRIPTIONS.backend,
-        }),
-      ),
-      fresh: Type.Optional(
-        Type.Boolean({
-          description: FETCH_PARAMETER_DESCRIPTIONS.fresh,
-        }),
-      ),
-      maxCharacters: Type.Optional(
-        Type.Number({
-          description: FETCH_PARAMETER_DESCRIPTIONS.maxCharacters,
-          minimum: 1,
-        }),
-      ),
-      onlyMainContent: Type.Optional(
-        Type.Boolean({
-          description: FETCH_PARAMETER_DESCRIPTIONS.onlyMainContent,
-        }),
-      ),
-      waitFor: Type.Optional(
-        Type.Number({
-          description: FETCH_PARAMETER_DESCRIPTIONS.waitFor,
-          minimum: 0,
-          maximum: 60_000,
-        }),
-      ),
+      url: Type.String({
+        minLength: 1,
+        maxLength: 8192,
+        description: "Public HTTP(S) URL to read.",
+      }),
       timeout: Type.Optional(
-        Type.Number({
-          description: FETCH_PARAMETER_DESCRIPTIONS.timeout,
+        Type.Integer({
           minimum: 1,
           maximum: 120_000,
-        }),
-      ),
-      includeMetadata: Type.Optional(
-        Type.Boolean({
-          description: FETCH_PARAMETER_DESCRIPTIONS.includeMetadata,
+          description:
+            "End-to-end timeout in milliseconds. Default 30000; maximum 120000.",
         }),
       ),
     }),
-    execute: async (_toolCallId, params, signal, onUpdate) => {
-      const backend = params.backend ?? "exa";
-      const url = parsePublicHttpUrl(params.url, "Web URL").href;
-
-      if (backend === "exa") {
-        const unsupported = FIRECRAWL_ONLY_PARAMETERS.filter(
-          (name) => params[name] !== undefined,
-        );
-        if (unsupported.length > 0) {
-          throw new Error(
-            `${unsupported.join(", ")} only appl${unsupported.length === 1 ? "ies" : "y"} to the firecrawl backend. Retry web-fetch with backend: "firecrawl" or without ${unsupported.length === 1 ? "it" : "them"}.`,
-          );
-        }
-
-        onUpdate?.({
-          content: [
-            {
-              type: "text",
-              text: `Fetching with Exa: ${sanitizeLine(url)}`,
-            },
-          ],
-          details: undefined,
-        });
-
-        const { details, output } = await exaFetch(
-          getExaKey,
-          {
-            url,
-            maxCharacters: params.maxCharacters,
-            fresh: params.fresh,
-          },
-          EXA_RETRY_HINT,
-          signal,
-          transport,
-        );
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: await boundedOutput(output, "fetch"),
-            },
-          ],
-          details,
-        };
-      }
-
-      if (params.maxCharacters !== undefined) {
-        throw new Error(
-          "maxCharacters only applies to the exa backend. Retry web-fetch with the default exa backend or without it.",
-        );
-      }
-
-      return runFirecrawl(
-        getFirecrawl,
-        "scrape",
-        `Scraping page with Firecrawl: ${sanitizeLine(url)}`,
-        (params.timeout ?? 30_000) + 5_000,
-        FIRECRAWL_RETRY_HINT,
+    async execute(_id, params, signal) {
+      const result = await fetchLocal(params.url, {
+        timeout: params.timeout,
         signal,
-        onUpdate,
-        (client) => {
-          const request = {
-            url,
-            onlyMainContent: params.onlyMainContent,
-            waitFor: params.waitFor,
-            timeout: params.timeout,
-          };
-          const key = scrapeRequestKey(request);
-          if (params.fresh) scrapeCache.delete(key);
-          return firecrawlRequest(() =>
-            memoizedRequest(scrapeCache, key, () =>
-              client.scrape(url, {
-                formats: ["markdown"],
-                onlyMainContent: params.onlyMainContent ?? true,
-                waitFor: params.waitFor,
-                timeout: params.timeout ?? 30_000,
-              }),
-            ),
-          ).pipe(
-            Effect.flatMap(({ value: document, cacheHit }) =>
-              Effect.try({
-                try: () => {
-                  const details = cacheHit
-                    ? {
-                        ...document,
-                        metadata: { ...document.metadata, creditsUsed: 0 },
-                        localCacheHit: true,
-                      }
-                    : document;
-                  const metadata =
-                    params.includeMetadata && details.metadata
-                      ? `\n\nMetadata:\n${stringify(details.metadata)}`
-                      : "";
-                  const markdown =
-                    document.markdown?.trim() ||
-                    "No markdown content returned.";
-                  const cacheNotice = cacheHit
-                    ? "[Reused cached scrape; no Firecrawl request was made.]\n\n"
-                    : "";
-
-                  return {
-                    details,
-                    output: `${cacheNotice}${markdown}${metadata}`,
-                  };
-                },
-                catch: firecrawlOutputError,
-              }),
-            ),
-          );
-        },
+      });
+      const output = await boundedOutput(
+        `Source: ${result.details.url}\nProvider: local${result.details.title ? `\nTitle: ${result.details.title}` : ""}\n\n${result.text}`,
+        "web-fetch",
       );
-    },
-    renderCall(args, theme) {
-      let text = theme.fg("toolTitle", theme.bold("web-fetch"));
-      text += ` ${theme.fg("accent", displayUrl(args.url))}`;
-      text += theme.fg("muted", ` · ${args.backend ?? "exa"}`);
-      if (args.onlyMainContent === false) {
-        text += theme.fg("muted", " · full page");
-      }
-      if (args.fresh) {
-        text += theme.fg("warning", " · fresh");
-      }
-      if (args.includeMetadata) {
-        text += theme.fg("dim", " · metadata");
-      }
-      return new Text(text, 0, 0);
-    },
-    renderResult(result, { expanded, isPartial }, theme, context) {
-      if (isPartial) {
-        return new Text(
-          theme.fg("warning", resultText(result)?.trim() || "Fetching…"),
-          0,
-          0,
-        );
-      }
-      if (context.isError) {
-        return errorResult(result, theme, "Web fetch failed");
-      }
-
-      const exa = exaFetchDetails(result.details);
-      if (exa) {
-        const summary = exaSummary(exa);
-        if (!expanded) {
-          let text = theme.fg("success", `✓ ${summary}`);
-          const page = exa.pages[0];
-          if (page?.url) {
-            text += `\n${theme.fg("dim", displayUrl(page.url))}`;
-          }
-          text += `\n${expandHint(theme)}`;
-          return new Text(text, 0, 0);
-        }
-
-        const container = new Container();
-        container.addChild(new Text(theme.fg("success", `✓ ${summary}`), 0, 0));
-        // The bounded page text lives in the tool output, not in details.
-        container.addChild(
-          new Markdown(resultText(result) ?? "", 0, 0, getMarkdownTheme()),
-        );
-        return container;
-      }
-
-      const document = documentView(result.details);
-      const summary = documentSummary(document);
-      if (expanded) return expandedDocument(document, summary, theme);
-
-      let text = theme.fg("success", `✓ ${summary}`);
-      if (document.url) {
-        text += `\n${theme.fg("dim", displayUrl(document.url))}`;
-      }
-      if (document.description) {
-        text += `\n${theme.fg("muted", document.description)}`;
-      }
-      text += `\n${expandHint(theme)}`;
-      return new Text(text, 0, 0);
+      return {
+        content: [{ type: "text", text: output.text }],
+        details: {
+          ...result.details,
+          contentBytes: Buffer.byteLength(result.text),
+          ...output.details,
+        },
+      };
     },
   });
 }

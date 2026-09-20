@@ -1,257 +1,205 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Effect } from "effect";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
-  exaSearch,
-  type ExaKeyProvider,
-  type ExaTransport,
-  type RecencyFilter,
-} from "./exa.ts";
+  withHostedFallback,
+  type CallHosted,
+  type HostedProvider,
+} from "./mcp.ts";
+import { boundedOutput } from "./output.ts";
+import { webRenderers } from "./render.ts";
 import {
-  FIRECRAWL_SEARCH_TIMEOUT_MS,
-  firecrawlRequest,
-  runFirecrawl,
-  type FirecrawlProvider,
-} from "./firecrawl.ts";
-import {
-  boundedOutput,
-  errorResult,
-  expandHint,
-  resultText,
-} from "./output.ts";
-import {
-  SEARCH_PARAMETER_DESCRIPTIONS,
-  SEARCH_PROMPT_SNIPPET,
-  SEARCH_TOOL_DESCRIPTION,
-  WEB_ROUTING_GUIDELINES,
-} from "./prompt.ts";
-import {
-  displayUrl,
-  searchItems,
-  searchResultText,
-  summaryLine,
-} from "./render.ts";
-import { sanitizeLine } from "./sanitize.ts";
+  normalizeSearchResults,
+  SEARCH_EXCERPT_CHARACTERS,
+} from "./search-results.ts";
+import { WEB_ROUTING_GUIDELINES } from "./prompt.ts";
 
-const DEFAULT_SEARCH_LIMIT = 5;
-
-const EXA_RETRY_HINT =
-  'Retry web-search, or escalate explicitly with backend: "firecrawl".';
-const FIRECRAWL_RETRY_HINT =
-  'Retry web-search with backend: "firecrawl", configure FIRECRAWL_API_KEY for higher limits, or use the default exa backend.';
-
-/** Maps the friendly recency filter to Firecrawl's Google-style `tbs` values. */
-const RECENCY_TBS: Record<RecencyFilter, string> = {
-  hour: "qdr:h",
-  day: "qdr:d",
-  week: "qdr:w",
-  month: "qdr:m",
-  year: "qdr:y",
-};
-
-export interface SearchToolDependencies {
-  getFirecrawl: FirecrawlProvider;
-  getExaKey: ExaKeyProvider;
-  transport?: ExaTransport;
+const RECENCY = {
+  hour: { hours: 1, tbs: "qdr:h" },
+  day: { hours: 24, tbs: "qdr:d" },
+  week: { hours: 168, tbs: "qdr:w" },
+  month: { hours: 720, tbs: "qdr:m" },
+  year: { hours: 8760, tbs: "qdr:y" },
+} as const;
+const HOSTNAME =
+  /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+interface SearchOptions {
+  query: string;
+  objective?: string;
+  limit?: number;
+  provider?: HostedProvider;
+  includeDomains?: string[];
+  excludeDomains?: string[];
+  recency?: keyof typeof RECENCY;
 }
 
-export function registerSearchTool(
-  pi: ExtensionAPI,
-  { getFirecrawl, getExaKey, transport }: SearchToolDependencies,
+export async function searchHosted(
+  call: CallHosted,
+  params: SearchOptions,
+  signal: AbortSignal = new AbortController().signal,
 ) {
+  const limit = params.limit ?? 5;
+  if (
+    !params.query.trim() ||
+    params.query.length > 4096 ||
+    !Number.isInteger(limit) ||
+    limit < 1 ||
+    limit > 10
+  )
+    throw new Error(
+      "Search requires a non-empty query (maximum 4096 characters) and limit between 1 and 10.",
+    );
+  if (
+    params.objective !== undefined &&
+    (!params.objective.trim() || params.objective.length > 4096)
+  )
+    throw new Error("Search objective must contain 1 to 4096 characters.");
+  if (params.includeDomains?.length && params.excludeDomains?.length)
+    throw new Error(
+      "includeDomains and excludeDomains are mutually exclusive.",
+    );
+  for (const domains of [params.includeDomains, params.excludeDomains]) {
+    if (
+      domains &&
+      (domains.length > 20 ||
+        domains.some((domain) => domain.length > 253 || !HOSTNAME.test(domain)))
+    )
+      throw new Error(
+        "Domain filters require at most 20 lowercase hostnames, without protocol or path.",
+      );
+  }
+  const recency = params.recency ? RECENCY[params.recency] : undefined;
+  if (params.recency && !recency) throw new Error("Invalid recency filter.");
+  const filters = {
+    ...(params.includeDomains?.length
+      ? { includeDomains: params.includeDomains }
+      : {}),
+    ...(params.excludeDomains?.length
+      ? { excludeDomains: params.excludeDomains }
+      : {}),
+  };
+  const advanced = Boolean(Object.keys(filters).length || recency);
+  const combined = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
+  const queryWithObjective = params.objective
+    ? `${params.query}\n${params.objective}`
+    : params.query;
+  return withHostedFallback(
+    (provider) =>
+      call({
+        provider,
+        tool:
+          provider === "exa"
+            ? advanced
+              ? "web_search_advanced_exa"
+              : "web_search_exa"
+            : "firecrawl_search",
+        args:
+          provider === "exa"
+            ? advanced
+              ? {
+                  query: queryWithObjective,
+                  numResults: limit,
+                  ...filters,
+                  ...(recency
+                    ? {
+                        startPublishedDate: new Date(
+                          Date.now() - recency.hours * 3_600_000,
+                        ).toISOString(),
+                      }
+                    : {}),
+                  enableHighlights: true,
+                  highlightsMaxCharacters: SEARCH_EXCERPT_CHARACTERS,
+                  textMaxCharacters: SEARCH_EXCERPT_CHARACTERS,
+                }
+              : {
+                  query: params.query,
+                  objective: params.objective ?? params.query,
+                  numResults: limit,
+                }
+            : {
+                query: queryWithObjective,
+                limit,
+                ...filters,
+                ...(recency ? { tbs: recency.tbs } : {}),
+                highlights: true,
+              },
+        signal: combined,
+      }),
+    combined,
+    params.provider,
+  );
+}
+
+export function registerSearchTool(pi: ExtensionAPI, call: CallHosted) {
+  const domains = Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: 253 }), {
+      maxItems: 20,
+      description:
+        "Lowercase hostnames, without protocol or path. includeDomains and excludeDomains are mutually exclusive.",
+    }),
+  );
   pi.registerTool({
     name: "web-search",
     label: "Search Web",
-    description: SEARCH_TOOL_DESCRIPTION,
-    promptSnippet: SEARCH_PROMPT_SNIPPET,
+    ...webRenderers("web-search"),
+    description:
+      "Search the web through anonymous hosted MCP: Exa first, Firecrawl only on transient failures, rate limits or unavailable pages. Returns titles, source URLs, dates and excerpts of up to 1200 characters per result, not full pages or a synthesized answer. Authentication, billing, validation and cancellation failures never trigger fallback; empty results are valid. Inline output is limited to 16KB or 400 lines; use read on the saved file for more.",
+    promptSnippet:
+      "Discover URLs and relevant excerpts through anonymous Exa MCP, with limited Firecrawl fallback.",
     promptGuidelines: WEB_ROUTING_GUIDELINES,
     parameters: Type.Object({
       query: Type.String({
-        description: SEARCH_PARAMETER_DESCRIPTIONS.query,
+        minLength: 1,
+        maxLength: 4096,
+        description: "Describe the ideal page or information to find.",
       }),
-      backend: Type.Optional(
-        StringEnum(["exa", "firecrawl"] as const, {
-          description: SEARCH_PARAMETER_DESCRIPTIONS.backend,
+      objective: Type.Optional(
+        Type.String({
+          minLength: 1,
+          maxLength: 4096,
+          description:
+            "Specific facts to extract or documents to prioritize. Defaults to the query.",
         }),
       ),
       limit: Type.Optional(
-        Type.Number({
-          description: SEARCH_PARAMETER_DESCRIPTIONS.limit,
+        Type.Integer({
           minimum: 1,
           maximum: 10,
+          description: "Maximum results. Default 5.",
         }),
       ),
-      source: Type.Optional(
-        StringEnum(["web", "news", "images"] as const, {
-          description: SEARCH_PARAMETER_DESCRIPTIONS.source,
-        }),
-      ),
-      includeDomains: Type.Optional(
-        Type.Array(Type.String(), {
-          description: SEARCH_PARAMETER_DESCRIPTIONS.includeDomains,
-        }),
-      ),
-      excludeDomains: Type.Optional(
-        Type.Array(Type.String(), {
-          description: SEARCH_PARAMETER_DESCRIPTIONS.excludeDomains,
-        }),
-      ),
+      includeDomains: domains,
+      excludeDomains: domains,
       recency: Type.Optional(
         StringEnum(["hour", "day", "week", "month", "year"] as const, {
-          description: SEARCH_PARAMETER_DESCRIPTIONS.recency,
+          description:
+            "Restrict by publication recency. Provider date precision may differ.",
+        }),
+      ),
+      provider: Type.Optional(
+        StringEnum(["exa", "firecrawl"] as const, {
+          description:
+            "Explicit provider for a targeted retry; disables automatic fallback.",
         }),
       ),
     }),
-    execute: async (_toolCallId, params, signal, onUpdate) => {
-      if (params.includeDomains?.length && params.excludeDomains?.length) {
-        throw new Error(
-          "web-search cannot combine includeDomains and excludeDomains",
-        );
-      }
-
-      const backend = params.backend ?? "exa";
-      const limit = params.limit ?? DEFAULT_SEARCH_LIMIT;
-
-      if (backend === "exa") {
-        if (params.source && params.source !== "web") {
-          throw new Error(
-            `The exa backend has no structured "${params.source}" source. Retry web-search with backend: "firecrawl".`,
-          );
-        }
-
-        onUpdate?.({
-          content: [
-            {
-              type: "text",
-              text: `Searching Exa for: ${sanitizeLine(params.query)}`,
-            },
-          ],
-          details: undefined,
-        });
-
-        const details = await exaSearch(
-          getExaKey,
-          {
-            query: params.query,
-            limit,
-            includeDomains: params.includeDomains,
-            excludeDomains: params.excludeDomains,
-            recency: params.recency,
-          },
-          EXA_RETRY_HINT,
-          signal,
-          transport,
-        );
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: await boundedOutput(searchResultText(details), "search"),
-            },
-          ],
-          details,
-        };
-      }
-
-      return runFirecrawl(
-        getFirecrawl,
-        "search",
-        `Searching Firecrawl for: ${sanitizeLine(params.query)}`,
-        FIRECRAWL_SEARCH_TIMEOUT_MS + 5_000,
-        FIRECRAWL_RETRY_HINT,
-        signal,
-        onUpdate,
-        (client) =>
-          firecrawlRequest(() =>
-            client.search(params.query, {
-              limit,
-              sources: [params.source ?? "web"],
-              includeDomains: params.includeDomains,
-              excludeDomains: params.excludeDomains,
-              tbs: params.recency ? RECENCY_TBS[params.recency] : undefined,
-              // Explicit so query-relevant excerpts survive an upstream
-              // default change.
-              highlights: true,
-              timeout: FIRECRAWL_SEARCH_TIMEOUT_MS,
-            }),
-          ).pipe(
-            Effect.map((result) => ({
-              details: result,
-              output: searchResultText(result),
-            })),
-          ),
+    async execute(_id, params, signal) {
+      const result = await searchHosted(call, params, signal);
+      const { text, ...details } = result;
+      const normalized = normalizeSearchResults(text, params.limit ?? 5);
+      const output = await boundedOutput(
+        `Provider: ${result.provider} (anonymous MCP)${result.fallbackReason ? `\nFallback: ${result.fallbackReason}` : ""}\n\n${normalized.resultCount !== undefined ? `Results: ${normalized.resultCount}\n\n` : ""}${normalized.text}`,
+        "web-search",
       );
-    },
-    renderCall(args, theme) {
-      let text = theme.fg("toolTitle", theme.bold("web-search"));
-      text += ` ${theme.fg("accent", `“${sanitizeLine(args.query)}”`)}`;
-      text += theme.fg(
-        "muted",
-        ` · ${args.backend ?? "exa"} · limit ${args.limit ?? DEFAULT_SEARCH_LIMIT}`,
-      );
-      if (args.source && args.source !== "web") {
-        text += theme.fg("muted", ` · ${args.source}`);
-      }
-      if (args.recency) {
-        text += theme.fg("muted", ` · past ${args.recency}`);
-      }
-      if (args.includeDomains?.length) {
-        text += theme.fg(
-          "muted",
-          ` · on ${args.includeDomains.map(sanitizeLine).join(", ")}`,
-        );
-      }
-      if (args.excludeDomains?.length) {
-        text += theme.fg(
-          "muted",
-          ` · not ${args.excludeDomains.map(sanitizeLine).join(", ")}`,
-        );
-      }
-      return new Text(text, 0, 0);
-    },
-    renderResult(result, { expanded, isPartial }, theme, context) {
-      if (isPartial) {
-        return new Text(
-          theme.fg("warning", resultText(result)?.trim() || "Searching…"),
-          0,
-          0,
-        );
-      }
-      if (context.isError) {
-        return errorResult(result, theme, "Web search failed");
-      }
-
-      const items = searchItems(result.details);
-      if (items.length === 0) {
-        return new Text(theme.fg("dim", "No search results"), 0, 0);
-      }
-
-      const kinds = [...new Set(items.map((item) => item.kind))].join("/");
-      let text = theme.fg(
-        "success",
-        `✓ ${items.length} ${kinds} result${items.length === 1 ? "" : "s"}`,
-      );
-      const visible = expanded ? items : items.slice(0, 3);
-      for (const [index, item] of visible.entries()) {
-        text += `\n${theme.fg("accent", `${index + 1}. ${item.title}`)}`;
-        if (item.url) {
-          text += theme.fg("dim", ` — ${displayUrl(item.url)}`);
-        }
-        if (expanded && item.description) {
-          text += `\n   ${theme.fg("muted", summaryLine(item.description))}`;
-        }
-        if (expanded && item.url) {
-          text += `\n   ${theme.fg("dim", item.url)}`;
-        }
-      }
-      if (!expanded && items.length > visible.length) {
-        text += `\n${theme.fg("dim", `… ${items.length - visible.length} more`)}`;
-      }
-      if (!expanded) text += `\n${expandHint(theme)}`;
-      return new Text(text, 0, 0);
+      return {
+        content: [{ type: "text", text: output.text }],
+        details: {
+          ...details,
+          resultCount: normalized.resultCount,
+          items: normalized.items,
+          ...output.details,
+        },
+      };
     },
   });
 }

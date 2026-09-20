@@ -1,249 +1,176 @@
 import {
-  DEFAULT_MAX_BYTES,
-  DEFAULT_MAX_LINES,
-  truncateHead,
+  keyHint,
+  type Theme,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import type { TSchema } from "typebox";
 import { sanitizeLine, sanitizeText } from "./sanitize.ts";
 
-export interface SearchItemView {
-  kind: "web" | "news" | "images";
-  title: string;
-  url: string;
-  description: string;
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function size(bytes: number) {
+  return `${(bytes / 1024).toFixed(1)}KB`;
+}
+function line(value: unknown) {
+  return typeof value === "string" ? sanitizeLine(value) : "";
 }
 
-export interface DocumentView {
-  title: string;
-  url: string;
-  description: string;
-  markdown: string;
-  statusCode?: number;
-  creditsUsed?: number;
-}
-
-export interface CrawlView {
-  id: string;
-  status: string;
-  completed: number;
-  total: number;
-  creditsUsed?: number;
-  documents: DocumentView[];
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function stringValue(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function numberValue(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
-}
-
-function firstString(...values: unknown[]) {
-  for (const value of values) {
-    const text = stringValue(value);
-    if (text) return text;
-  }
-  return "";
-}
-
-function oneLine(value: string) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-/** Collapses an excerpt to one bounded line for compact TUI rows. */
-export function summaryLine(value: string, maxChars = 200) {
-  const text = oneLine(value);
-  return text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text;
-}
-
-export function displayUrl(value: string) {
-  try {
-    const url = new URL(value);
-    const path = url.pathname === "/" ? "" : url.pathname;
-    return sanitizeLine(`${url.hostname}${path}`);
-  } catch {
-    return sanitizeLine(value);
-  }
-}
-
-/**
- * Normalizes search details from either backend into one renderable list.
- * Exa results arrive as `{ backend: "exa", results: [...] }`; Firecrawl keeps
- * its `{ web, news, images }` groups. All web-controlled strings are
- * sanitized here so every render path stays terminal-safe.
- */
-export function searchItems(value: unknown): SearchItemView[] {
-  const data = record(value);
-  if (!data) return [];
-
-  if (data.backend === "exa") {
-    const results = Array.isArray(data.results) ? data.results : [];
-    return results.flatMap((candidate): SearchItemView[] => {
-      const item = record(candidate);
-      if (!item) return [];
-      const url = sanitizeLine(stringValue(item.url));
-      return [
-        {
-          kind: "web",
-          title:
-            sanitizeLine(firstString(item.title, url, "Untitled result")) ||
-            "Untitled result",
-          url,
-          description: sanitizeText(stringValue(item.snippet)),
-        },
-      ];
-    });
-  }
-
-  const items: SearchItemView[] = [];
-  for (const kind of ["web", "news", "images"] as const) {
-    const group = data[kind];
-    if (!Array.isArray(group)) continue;
-
-    for (const candidate of group) {
-      const item = record(candidate);
-      if (!item) continue;
-      const metadata = record(item.metadata);
-      const url = sanitizeLine(
-        firstString(
-          item.url,
-          metadata?.sourceURL,
-          metadata?.url,
-          item.imageUrl,
-        ),
-      );
-      const description = sanitizeText(
-        firstString(
-          item.description,
-          item.snippet,
-          metadata?.description,
-          metadata?.ogDescription,
-        ),
-      );
-      items.push({
-        kind,
-        title: sanitizeLine(
-          firstString(item.title, metadata?.title, url, "Untitled result"),
-        ),
-        url,
-        // Web and news highlights can contain Markdown. Images do not receive
-        // highlights, so keep their defensive description fallback compact.
-        description:
-          kind === "images" ? summaryLine(description, 500) : description,
-      });
+const renderResult: NonNullable<
+  ToolDefinition<TSchema, unknown, unknown>["renderResult"]
+> = (result, { expanded, isPartial }, theme, context) => {
+  const output = sanitizeText(
+    result.content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n\n"),
+  );
+  const details = record(result.details) ? result.details : {};
+  const args = record(context.args) ? context.args : {};
+  const text = new Text(
+    output || (isPartial ? "Working…" : "No output."),
+    0,
+    0,
+  );
+  // Card metadata comes from tool-authored details only. The output text holds
+  // page content, which can imitate the truncation notice or a Coverage line.
+  const provider = line(details.provider) || "Result";
+  const path = line(details.savedPath);
+  const providerLabel =
+    (
+      {
+        exa: "Exa",
+        firecrawl: "Firecrawl",
+        local: "Local",
+        "firecrawl-developer": "Firecrawl Developer Index",
+      } as Record<string, string>
+    )[provider] ?? provider;
+  const status = [providerLabel];
+  if (line(details.auth)) status.push(line(details.auth));
+  if (typeof details.resultCount === "number")
+    status.push(`${details.resultCount} results`);
+  status.push(`${size(Buffer.byteLength(output))} shown`);
+  if (path)
+    status.push(
+      typeof details.contentBytes === "number"
+        ? `${size(details.contentBytes)} total · saved`
+        : "full output saved",
+    );
+  const summary = [status.join(" · ")];
+  const filters = [
+    Array.isArray(args.includeDomains)
+      ? args.includeDomains.map(line).filter(Boolean).join(", ")
+      : "",
+    Array.isArray(args.repos)
+      ? args.repos.map(line).filter(Boolean).join(", ")
+      : "",
+    Array.isArray(args.excludeDomains) && args.excludeDomains.length
+      ? `excluding ${args.excludeDomains.map(line).filter(Boolean).join(", ")}`
+      : "",
+    line(args.recency) ? `past ${line(args.recency)}` : "",
+  ].filter(Boolean);
+  if (filters.length) summary.push(`Scope: ${filters.join(" · ")}`);
+  if (Array.isArray(details.repos)) {
+    for (const repo of details.repos.slice(0, 1)) {
+      if (
+        record(repo) &&
+        line(repo.canonicalRepo) &&
+        repo.canonicalRepo !== repo.repo
+      )
+        summary.push(
+          `${line(repo.repo)} → ${line(repo.canonicalRepo)}${repo.indexed === true ? " (indexed)" : ""}`,
+        );
     }
   }
-
-  return items;
-}
-
-export function documentView(value: unknown): DocumentView {
-  const document = record(value) ?? {};
-  const metadata = record(document.metadata) ?? {};
-  const url = sanitizeLine(
-    firstString(metadata.sourceURL, metadata.url, metadata.ogUrl),
-  );
+  if (Array.isArray(details.items)) {
+    for (const item of details.items.slice(0, 3)) {
+      if (record(item)) summary.push(`${line(item.title)} · ${line(item.url)}`);
+    }
+  } else {
+    if (line(details.title)) summary.push(line(details.title));
+    const source = line(details.url) || line(args.url);
+    if (source) summary.push(source);
+    const body = output
+      .split(/\n\n/)
+      .slice(1)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    // JSON is useful expanded, but a page summary should not show serialized envelopes.
+    if (body && !/^[{[]/.test(body))
+      summary.push(`Excerpt: ${body.slice(0, 240)}`);
+  }
+  if (provider === "firecrawl-developer")
+    summary.push(
+      `Coverage: ${
+        record(details.coverage)
+          ? Object.entries(details.coverage)
+              .map(([type, state]) => `${type} ${line(state)}`)
+              .join(" · ")
+          : "not reported"
+      }`,
+    );
+  if (line(details.fallbackReason))
+    summary.splice(1, 0, `Fallback: ${line(details.fallbackReason)}`);
+  if (path) summary.push(`Saved: ${path}`);
 
   return {
-    title: sanitizeLine(
-      firstString(metadata.title, metadata.ogTitle, url, "Untitled page"),
-    ),
-    url,
-    description: sanitizeLine(
-      oneLine(firstString(metadata.description, metadata.ogDescription)),
-    ),
-    markdown: sanitizeText(stringValue(document.markdown)),
-    statusCode: numberValue(metadata.statusCode),
-    creditsUsed: numberValue(metadata.creditsUsed),
-  };
-}
-
-export function crawlView(value: unknown): CrawlView {
-  const crawl = record(value) ?? {};
-  const data = Array.isArray(crawl.data) ? crawl.data : [];
-
-  return {
-    id: sanitizeLine(stringValue(crawl.id)),
-    status: sanitizeLine(firstString(crawl.status, "unknown")),
-    completed: numberValue(crawl.completed) ?? data.length,
-    total: numberValue(crawl.total) ?? data.length,
-    creditsUsed: numberValue(crawl.creditsUsed),
-    documents: data.map(documentView),
-  };
-}
-
-export function boundedMarkdown(markdown: string) {
-  return truncateHead(markdown, {
-    maxBytes: DEFAULT_MAX_BYTES,
-    maxLines: DEFAULT_MAX_LINES,
-  });
-}
-
-/** Bounds each excerpt so one result cannot starve the rest before the global limit. */
-const MAX_EXCERPT_CHARS = 2_000;
-const MAX_EXCERPT_LINES = 100;
-
-function boundedExcerpt(value: string) {
-  const lines = value.split("\n");
-  const lineBound = lines.slice(0, MAX_EXCERPT_LINES).join("\n");
-  const truncated =
-    lines.length > MAX_EXCERPT_LINES || lineBound.length > MAX_EXCERPT_CHARS;
-  if (!truncated) return lineBound;
-
-  return `${lineBound.slice(0, MAX_EXCERPT_CHARS - 1).trimEnd()}…`;
-}
-
-export function searchResultText(value: unknown) {
-  const items = searchItems(value);
-  if (items.length === 0) return "No search results returned.";
-
-  return items
-    .map((item, index) => {
-      const excerpt = boundedExcerpt(item.description);
-      const lines = [`${index + 1}. [${item.kind}] ${item.title}`];
-      if (item.url) lines.push(`   URL: ${item.url}`);
-      if (excerpt) {
-        lines.push(...excerpt.split("\n").map((line) => `   ${line}`));
+    invalidate: () => text.invalidate(),
+    render(width: number) {
+      if (context.isError || isPartial) {
+        const rows = text.render(width);
+        const shown = expanded ? rows : rows.slice(0, 6);
+        return [
+          ...shown.map((row) =>
+            theme.fg(context.isError ? "error" : "muted", row),
+          ),
+          ...(!expanded && rows.length > 6
+            ? [truncateToWidth(keyHint("app.tools.expand", "to expand"), width)]
+            : []),
+        ];
       }
-      return lines.join("\n");
-    })
-    .join("\n\n");
-}
+      const header = theme.fg(
+        "accent",
+        `${expanded ? "▾" : "▸"} ${summary[0]}`,
+      );
+      if (expanded)
+        return [
+          truncateToWidth(header, width),
+          ...text.render(width).map((row) => theme.fg("toolOutput", row)),
+        ];
+      return [
+        truncateToWidth(header, width),
+        ...summary
+          .slice(1, 6)
+          .map((row) => truncateToWidth(theme.fg("muted", `  ${row}`), width)),
+        truncateToWidth(
+          keyHint("app.tools.expand", "to expand details"),
+          width,
+        ),
+      ];
+    },
+  };
+};
 
-export function crawlDocumentMarkdown(documents: DocumentView[]) {
-  return documents
-    .map((document, index) => {
-      const heading = `## ${index + 1}. ${document.title}`;
-      const source = document.url ? `\n\nSource: ${document.url}` : "";
-      const content = document.markdown
-        ? `\n\n${document.markdown}`
-        : "\n\n_No Markdown content returned._";
-      return `${heading}${source}${content}`;
-    })
-    .join("\n\n---\n\n");
-}
-
-export function crawlResultText(value: unknown) {
-  const crawl = crawlView(value);
-  const credits =
-    crawl.creditsUsed === undefined
-      ? ""
-      : ` · ${crawl.creditsUsed} credit${crawl.creditsUsed === 1 ? "" : "s"}`;
-  const summary = `Crawl ${crawl.status}: ${crawl.completed}/${crawl.total} pages${credits}`;
-  const markdown = crawlDocumentMarkdown(crawl.documents);
-  return markdown
-    ? `${summary}\n\n${markdown}`
-    : `${summary}\n\nNo pages returned.`;
-}
-
-export function crawlMarkdown(documents: DocumentView[]) {
-  return boundedMarkdown(crawlDocumentMarkdown(documents));
+export function webRenderers(name: string) {
+  return {
+    renderCall(
+      args: { query?: string; url?: string; provider?: string },
+      theme: Theme,
+    ) {
+      const target = line(args.query ?? args.url);
+      return {
+        invalidate() {},
+        render: (width: number) => [
+          truncateToWidth(
+            theme.fg("toolTitle", theme.bold(name)) +
+              (target ? ` ${target}` : ""),
+            width,
+          ),
+        ],
+      };
+    },
+    renderResult,
+  };
 }

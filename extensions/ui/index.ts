@@ -195,7 +195,9 @@ export default function ui(
     (value) => {
       if (!isFirecrawlUsageState(value)) return;
       if (
-        firecrawlUsage.creditsUsed === value.creditsUsed &&
+        firecrawlUsage.unitsUsed === value.unitsUsed &&
+        firecrawlUsage.anonymousUnits === value.anonymousUnits &&
+        firecrawlUsage.accountCredits === value.accountCredits &&
         firecrawlUsage.budget === value.budget &&
         firecrawlUsage.unlimited === value.unlimited
       ) {
@@ -326,18 +328,18 @@ export default function ui(
               dropAt: 80,
             });
           }
-          if (firecrawlUsage.creditsUsed > 0) {
+          if (firecrawlUsage.unitsUsed > 0) {
             const budget = firecrawlUsage.unlimited
               ? "∞"
               : firecrawlUsage.budget;
             right.push({
               text: theme.fg(
                 "muted",
-                `FC ${firecrawlUsage.creditsUsed}/${budget} cr`,
+                `Dev ${firecrawlUsage.unitsUsed}/${budget} est (${firecrawlUsage.anonymousUnits} anon, ${firecrawlUsage.accountCredits} acct)`,
               ),
               compactText: theme.fg(
                 "muted",
-                `FC ${firecrawlUsage.creditsUsed}/${budget}`,
+                `Dev ${firecrawlUsage.unitsUsed}/${budget} est`,
               ),
               compactAt: 5,
               dropAt: 10,

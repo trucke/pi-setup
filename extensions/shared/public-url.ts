@@ -46,6 +46,7 @@ export function isPublicIpAddress(address: string) {
       (a === 192 && b === 0 && c === 0) ||
       (a === 192 && b === 0 && c === 2) ||
       (a === 192 && b === 168) ||
+      (a === 192 && b === 88 && c === 99) ||
       (a === 198 && (b === 18 || b === 19)) ||
       (a === 198 && b === 51 && c === 100) ||
       (a === 203 && b === 0 && c === 113) ||
@@ -94,6 +95,11 @@ export function isPublicIpAddress(address: string) {
   }
 
   return !(
+    // Accept ordinary global unicast only. Special transition ranges above
+    // validate their embedded IPv4; other reserved ranges fail closed.
+    (first & 0xe000) !== 0x2000 ||
+    (first === 0x2001 && second < 0x0200) ||
+    (first === 0x3fff && (second & 0xf000) === 0) ||
     isUnspecifiedOrLoopback ||
     isIpv4Compatible ||
     (first & 0xfe00) === 0xfc00 ||
@@ -116,7 +122,7 @@ export function parsePublicHttpUrl(input: string, label = "URL") {
   try {
     url = new URL(input);
   } catch {
-    throw new Error(`Invalid ${label}: ${input}`);
+    throw new Error(`Invalid ${label}.`);
   }
 
   if (url.protocol !== "http:" && url.protocol !== "https:") {

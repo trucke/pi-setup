@@ -2,36 +2,38 @@ export const FIRECRAWL_USAGE_CHANNEL = "dashboard:firecrawl-usage";
 export const REFRESH_CHANNEL = "dashboard:refresh";
 export const DEFAULT_FIRECRAWL_BUDGET = 20;
 
+/** Developer Search estimates only, not provider billing receipts. */
 export interface FirecrawlUsageState {
-  creditsUsed: number;
+  unitsUsed: number;
+  anonymousUnits: number;
+  accountCredits: number;
   budget: number;
   unlimited: boolean;
 }
 
 export function emptyFirecrawlUsageState(): FirecrawlUsageState {
   return {
-    creditsUsed: 0,
+    unitsUsed: 0,
+    anonymousUnits: 0,
+    accountCredits: 0,
     budget: DEFAULT_FIRECRAWL_BUDGET,
     unlimited: false,
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 export function isFirecrawlUsageState(
   value: unknown,
 ): value is FirecrawlUsageState {
-  if (!isRecord(value)) return false;
-
+  if (typeof value !== "object" || value === null) return false;
+  const state = value as Record<string, unknown>;
   return (
-    typeof value.creditsUsed === "number" &&
-    Number.isFinite(value.creditsUsed) &&
-    value.creditsUsed >= 0 &&
-    typeof value.budget === "number" &&
-    Number.isFinite(value.budget) &&
-    value.budget > 0 &&
-    typeof value.unlimited === "boolean"
+    [state.unitsUsed, state.anonymousUnits, state.accountCredits].every(
+      (number) =>
+        typeof number === "number" && Number.isFinite(number) && number >= 0,
+    ) &&
+    typeof state.budget === "number" &&
+    Number.isFinite(state.budget) &&
+    state.budget > 0 &&
+    typeof state.unlimited === "boolean"
   );
 }

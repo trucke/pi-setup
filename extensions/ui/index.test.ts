@@ -130,21 +130,25 @@ test("renders a stable one-line dashboard with conditional usage", () => {
   assert.match(beforeFirecrawl[0] ?? "", /3 files changed/);
   assert.match(beforeFirecrawl[0] ?? "", /opencode\/claude-fable-5/);
   assert.match(beforeFirecrawl[0] ?? "", /medium · ctx 38% · \$1\.23/);
-  assert.doesNotMatch(beforeFirecrawl[0] ?? "", /FC|tok\/s/);
+  assert.doesNotMatch(beforeFirecrawl[0] ?? "", /Dev|tok\/s/);
 
   footer.emit(FIRECRAWL_USAGE_CHANNEL, {
-    creditsUsed: 4,
+    unitsUsed: 4,
+    anonymousUnits: 2,
+    accountCredits: 2,
     budget: 20,
     unlimited: false,
   });
-  assert.match(footer.render(160)[0] ?? "", /FC 4\/20 cr/);
+  assert.match(footer.render(200)[0] ?? "", /Dev 4\/20 est \(2 anon, 2 acct\)/);
 });
 
 test("compacts low-priority fields instead of splitting the line", () => {
   const footer = createFooter();
   footer.setVcs(vcsState);
   footer.emit(FIRECRAWL_USAGE_CHANNEL, {
-    creditsUsed: 4,
+    unitsUsed: 4,
+    anonymousUnits: 4,
+    accountCredits: 0,
     budget: 20,
     unlimited: false,
   });
@@ -156,7 +160,7 @@ test("compacts low-priority fields instead of splitting the line", () => {
   assert.match(line, /38%/);
   assert.match(line, /\$1\.23/);
   assert.match(line, /\+3/);
-  assert.doesNotMatch(line, /\/tmp\/project|opencode\/|change-123|FC/);
+  assert.doesNotMatch(line, /\/tmp\/project|opencode\/|change-123|Dev/);
 });
 
 test("consolidates extension activity into one transient row", () => {

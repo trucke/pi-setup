@@ -51,89 +51,103 @@ the backend; requesting priority does not guarantee faster serving.
 
 ## Web tools
 
-The package registers five consolidated web tools: `web-research`,
-`web-search`, `developer-search`, `web-fetch`, and `web-crawl`.
+Three tools are enabled by default: `web-search`, `web-fetch` and
+`developer-search`. No credentials are required. Results are untrusted source
+material, not instructions. Inline output is sanitized and limited to 16KB or
+400 lines; truncated output includes a path to the complete sanitized text for
+`read`. Collapsed tool cards show provider, result count or content size, search
+scope and up to three source titles/URLs (or a short page summary). Click or use
+Ctrl+O to expand the content. Summary rows are width-bounded, including for
+single-line JSON; errors remain visible without expansion.
 
-### web-research
+### web-search
 
-`web-research` is the preferred tool for current information and general web
-research. It runs a one-shot `codex exec` session (ephemeral, read-only
-sandbox, empty temporary working directory) with live web search enabled and
-returns a concise, cited Markdown answer with at most 10 sources.
+Search uses anonymous hosted MCP at `https://mcp.exa.ai/mcp`, with
+`https://mcp.firecrawl.dev/v2/mcp` as a secondary provider. It returns excerpts
+and source URLs rather than a synthesized answer. Known response formats are
+normalized to titles, URLs, dates and excerpts of up to 1200 characters per
+result; full-page bodies and provider metadata are omitted when highlights are
+available. Fetch the source URL for more context. The default limit is 5,
+with a maximum of 10. Optional `includeDomains`, `excludeDomains` and `recency`
+filters work with both providers. Exa uses its advanced tool for filtered
+searches; basic searches use the query as their objective unless one is supplied.
+Date precision can differ between providers.
 
-It requires the [Codex CLI](https://github.com/openai/codex) on `PATH`,
-authenticated via `codex login` with the ChatGPT subscription. No OpenAI API
-key is needed, and calls consume no search-API credits. `web-search` remains
-available as a fallback when Codex is unavailable or structured search-result
-listings are needed.
+Automatic Exa-to-Firecrawl fallback is limited to recognized transient network
+or provider failures, rate limits and unavailable pages. Cancellation, unsafe
+URLs, invalid arguments, authentication and billing failures do not trigger it.
+Empty search results are valid. Results identify the provider and any fallback
+reason. Set `provider: "exa"` or `provider: "firecrawl"` for an explicit retry
+with automatic fallback disabled.
 
-### web-search and web-fetch
+MCP requests are anonymous even when API keys exist. There is no automatic
+sign-in or transition to account-backed usage. OAuth and API-key MCP modes are
+deferred. Requests are bounded to 30 seconds per provider, 60 seconds overall
+and 4 MiB per provider response. No provider SDK or REST search adapter is used.
 
-Both tools default to the `exa` backend, which calls the Exa Search and
-Contents HTTP APIs directly and is the cheap default. The `firecrawl` backend
-is the explicit escalation: structured web/news/image search listings for
-`web-search`, and robust browser-rendered scraping for `web-fetch`. Backends
-never fall back to each other silently; errors name the retry to make.
+### web-fetch
 
-### developer-search
+Fetch reads one public HTTP(S) URL directly from this machine. It does not send
+the URL to Exa or Firecrawl, including when fetching fails. DNS answers are
+validated and pinned to the connection; every redirect is validated again.
+Private, loopback, link-local and reserved destinations are rejected, as are
+embedded URL credentials. No cookies, authorization headers or proxy environment
+settings are used.
 
-`developer-search` queries Firecrawl's Developer Index — library
-documentation, GitHub issues, merged pull requests, and READMEs — through the
-dedicated `/v2/search/developer` endpoint and returns ranked results with
-query-relevant passages. Use it for external libraries and frameworks (API
-history, known bugs, error messages, upstream docs); local file search remains
-the tool for the current checkout. Results can be scoped with `types`,
-`repos` (issues/PRs/READMEs), and `sources` (documentation source IDs).
+The tool negotiates Markdown, text, HTML or JSON. HTML is extracted locally
+with Readability and Turndown, retaining resolved relative links. Other supported
+text and JSON responses are returned directly. It does not run JavaScript or
+load page subresources. Downloads use identity encoding and reject unexpected
+compression. Binary content requires another tool, such as `read-pdf`.
 
-The endpoint works without an API key; a configured `FIRECRAWL_API_KEY` is
-sent automatically for higher rate limits. Returned passages are quoted
-evidence from third parties and are never interpreted as instructions.
+Downloads are limited to 5 MiB and five redirects. `timeout` defaults to 30000
+milliseconds and can be raised to 120000. The deadline and cancellation cover
+DNS, redirects and response bodies. HTML extraction has a 30,000-element limit;
+its synchronous parsing cannot be preempted, so the deadline is checked afterward.
 
-### web-crawl
+### Optional web-fetch-hosted
 
-`web-crawl` crawls multiple pages of one website with Firecrawl and defaults
-to 5 pages.
+Set `PI_WEB_HOSTED_FETCH=1` in the **process environment** before starting Pi to
+register this separate tool. It explicitly sends a public URL to Exa's
+`web_fetch_exa`, with Firecrawl's `firecrawl_scrape` as the limited fallback
+under the same rules as search. `provider` selects an explicit retry.
 
-## Credentials
+Use it only when disclosing the URL to a third party is appropriate. Local fetch
+never invokes it. The initial URL and local DNS answers are validated before
+submission, but the hosted provider controls subsequent DNS, redirects and
+browser behavior. Results may come from provider caches; no freshness guarantee
+is exposed. Exa extraction requests up to 100,000 characters per page.
 
-The tools resolve `EXA_API_KEY` and the optional `FIRECRAWL_API_KEY` in this
-order:
+### developer-search and budget
 
-1. Process environment
-2. `~/.pi/agent/.env`
+Developer Search retains the direct Firecrawl `/v2/search/developer` endpoint,
+which works anonymously. Use it for external library docs, upstream issues,
+merged pull requests and READMEs. Scope results with `types`, `repos` or
+`sources`. Coverage reports degraded and unavailable indexes explicitly.
 
-For the file fallback, copy `.env.example` to `~/.pi/agent/.env`, replace the
-Exa placeholder, and optionally uncomment the Firecrawl entry. Never commit the
-resulting file. Credentials are resolved lazily on first use, so a missing key
-for one backend does not affect the others.
+Only this tool resolves optional `FIRECRAWL_API_KEY`, first from the process
+environment and then from `~/.pi/agent/.env`. A configured key is used for account
+limits. `.env.example` documents this optional setting. Never commit credentials.
 
-Firecrawl search and single-page scraping use Firecrawl's rate-limited keyless
-tier when `FIRECRAWL_API_KEY` is absent. A configured key is used automatically
-for higher limits. `web-crawl` is not available on the keyless tier and requires
-a key.
+The default session budget is 20 estimated units. Each dispatched request
+reserves 2 units per 10 requested results, rounded up (maximum 4). Failed
+requests that reached dispatch count conservatively; local validation failures,
+early cancellation and blocked requests do not. These are estimates, not billing
+receipts. Anonymous units are tracked separately from estimated account credits.
+The dashboard shows `Dev used/budget est` with anonymous/account attribution
+when space permits. Hosted MCP requests are not included in this budget.
 
-## Firecrawl credit budgeting
+Interactive sessions can approve a higher budget or allow remaining requests;
+headless sessions block overruns. Usage and approvals survive session reloads.
+Legacy results without authentication attribution are not counted as account
+spend.
 
-Firecrawl-backed retrieval is credit-aware:
+### Migration
 
-- `web-search` with `backend: "firecrawl"` discovers at most 10 results and
-  returns query-relevant excerpts when available, without returning complete
-  page content.
-- `developer-search` costs 2 credits per 10 results, rounded up: the default
-  limit of 10 costs 2 credits, limits of 11-20 cost 4.
-- `web-crawl` defaults to 5 pages.
-- Equivalent Firecrawl page scrapes are reused across reloads and resumes,
-  including pages already returned by crawls and sessions recorded under the
-  legacy `firecrawl_*` tool names. Set `fresh: true` only when revalidation is
-  needed.
-- The default session budget is 20 credits. Interactive sessions can raise the
-  budget, allow all remaining requests for the session, or decline; non-interactive
-  sessions block requests that would exceed the budget.
-- Approved budget settings persist in the session, and the dashboard displays
-  `used/budget` credits (`used/∞` when all requests are allowed).
-
-Exa-backed calls (the default for `web-search` and `web-fetch`) never reserve
-or consume Firecrawl credits.
+`web-research` and `web-crawl` were removed. Search no longer accepts the old
+`backend` or backend-specific news/image options. Fetch is now local; old hosted
+fetch parameters and reconstructed scrape caches were removed. Use the separate
+opt-in hosted tool where needed. `EXA_API_KEY` is no longer read by these tools.
 
 ## Subagents
 

@@ -1,77 +1,53 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  DEFAULT_MAX_BYTES,
-  DEFAULT_MAX_LINES,
-  formatSize,
-  keyHint,
-  truncateHead,
-  type Theme,
-} from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { truncateHead } from "@earendil-works/pi-coding-agent";
 import { sanitizeText } from "./sanitize.ts";
 
-export function stringify(value: unknown) {
-  return JSON.stringify(value, null, 2);
+export function errorMessage(error: unknown) {
+  return sanitizeText(
+    error instanceof Error ? error.message : String(error),
+  ).slice(0, 1000);
 }
 
-export function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+const MAX_BYTES = 16 * 1024;
+const MAX_LINES = 400;
+
+/**
+ * truncateHead only keeps whole lines, so one over-budget line (minified JSON)
+ * would leave an empty preview. Keep a partial final line instead.
+ */
+function head(text: string, maxBytes: number, maxLines: number) {
+  const bytes = Buffer.from(text.split("\n", maxLines).join("\n"));
+  let end = Math.min(maxBytes, bytes.length);
+  // Never split a UTF-8 sequence: back up while the next byte is a continuation.
+  while (end > 0 && end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString("utf8");
 }
 
 /**
- * Bounds model-facing output to the shared context limits and keeps the
- * complete text on disk when truncated.
+ * Keep inline content modest; preserve the complete sanitized text for read.
+ * Spread `details` into the tool result: `savedPath` is the trusted source for
+ * UI, because the model-facing notice can be imitated by page content.
  */
 export async function boundedOutput(
-  value: unknown,
+  value: string,
   operation: string,
-  extension = "md",
-) {
-  const output = sanitizeText(
-    typeof value === "string" ? value : stringify(value),
-  );
-  const truncation = truncateHead(output, {
-    maxBytes: DEFAULT_MAX_BYTES,
-    maxLines: DEFAULT_MAX_LINES,
+): Promise<{ text: string; details: { savedPath?: string } }> {
+  const output = sanitizeText(value);
+  const { truncated } = truncateHead(output, {
+    maxBytes: MAX_BYTES,
+    maxLines: MAX_LINES,
   });
-  if (!truncation.truncated) return output;
-
-  const outputDirectory = await mkdtemp(join(tmpdir(), "pi-web-search-"));
-  const outputPath = join(outputDirectory, `${operation}.${extension}`);
-  await writeFile(outputPath, output, "utf8");
-
-  return `${truncation.content}\n\n[Output truncated: ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}). Full output saved to: ${outputPath}]`;
-}
-
-export interface RenderableResult {
-  content: Array<{ type: string; text?: string }>;
-  details?: unknown;
-}
-
-export function resultText(result: RenderableResult) {
-  return result.content.find(
-    (item): item is { type: "text"; text: string } =>
-      item.type === "text" && typeof item.text === "string",
-  )?.text;
-}
-
-export function expandHint(theme: Theme) {
-  return theme.fg("dim", keyHint("app.tools.expand", "to expand"));
-}
-
-export function errorResult(
-  result: RenderableResult,
-  theme: Theme,
-  fallback: string,
-) {
-  return new Text(
-    theme.fg(
-      "error",
-      sanitizeText(resultText(result) ?? "").trim() || fallback,
-    ),
-    0,
-    0,
+  if (!truncated) return { text: output, details: {} };
+  const directory = await mkdtemp(join(tmpdir(), "pi-web-output-"));
+  const path = join(directory, `${operation}.md`);
+  await writeFile(path, output, { encoding: "utf8", mode: 0o600 });
+  const notice = `[Output truncated. Use read for more. Full output saved to: ${path}]`;
+  const preview = head(
+    output,
+    MAX_BYTES - Buffer.byteLength(notice) - 2,
+    MAX_LINES - 2,
   );
+  return { text: `${preview}\n\n${notice}`, details: { savedPath: path } };
 }
