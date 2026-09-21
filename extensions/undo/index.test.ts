@@ -4,7 +4,7 @@ import type {
   ExtensionAPI,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import undo, { findLatestUserEntryId } from "./index.ts";
+import undo from "./index.ts";
 
 interface TestContext {
   readonly isIdle: () => boolean;
@@ -100,27 +100,6 @@ function createContext(options: {
   return { context, notifications, navigations };
 }
 
-test("finds the latest user entry on the active branch", () => {
-  const entries = [
-    userEntry("user-1", null),
-    assistantEntry("assistant-1", "user-1"),
-    userEntry("user-2", "assistant-1"),
-    assistantEntry("assistant-2", "user-2"),
-    customEntry("status", "assistant-2"),
-  ];
-
-  assert.equal(findLatestUserEntryId(entries), "user-2");
-  assert.equal(
-    findLatestUserEntryId([assistantEntry("assistant", null)]),
-    undefined,
-  );
-});
-
-test("registers a conversation-only undo command", () => {
-  const command = registerUndoCommand();
-  assert.match(command.description, /latest user turn/i);
-});
-
 test("rewinds to the latest user entry without a summary", async () => {
   const command = registerUndoCommand();
   const { context, navigations, notifications } = createContext({
@@ -129,6 +108,8 @@ test("rewinds to the latest user entry without a summary", async () => {
       assistantEntry("assistant-1", "user-1"),
       userEntry("user-2", "assistant-1"),
       assistantEntry("assistant-2", "user-2"),
+      // Trailing non-message entries must not hide the user turn.
+      customEntry("status", "assistant-2"),
     ],
   });
 

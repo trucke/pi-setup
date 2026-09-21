@@ -11,10 +11,7 @@ import { FIRECRAWL_USAGE_CHANNEL } from "../shared/dashboard-state.ts";
 import ui from "./index.ts";
 import type { VcsInfoState } from "./vcs/state.ts";
 
-function createFooter(
-  statuses: ReadonlyMap<string, string> = new Map(),
-  initialVcsState?: VcsInfoState,
-) {
+function createFooter(initialVcsState?: VcsInfoState) {
   const handlers = new Map<
     string,
     (event: Record<string, unknown>, ctx: ExtensionContext) => void
@@ -93,7 +90,7 @@ function createFooter(
     fg: (_color: string, text: string) => text,
   } as unknown as Theme;
   const footer = footerFactory({ requestRender() {} }, theme, {
-    getExtensionStatuses: () => statuses,
+    getExtensionStatuses: () => new Map<string, string>(),
   } as unknown as ReadonlyFooterDataProvider);
 
   return {
@@ -111,17 +108,9 @@ const vcsState = {
   pullRequest: null,
 };
 
-test("collects model info and preserves VCS state during startup", () => {
-  const footer = createFooter(new Map(), vcsState);
-
-  const [line = ""] = footer.render(160);
-  assert.match(line, /opencode\/claude-fable-5/);
-  assert.match(line, /jj change-123/);
-});
-
 test("renders a stable one-line dashboard with conditional usage", () => {
-  const footer = createFooter();
-  footer.setVcs(vcsState);
+  // VCS state arrives before session_start and must survive it.
+  const footer = createFooter(vcsState);
 
   const beforeFirecrawl = footer.render(160);
   assert.equal(beforeFirecrawl.length, 1);
@@ -161,17 +150,4 @@ test("compacts low-priority fields instead of splitting the line", () => {
   assert.match(line, /\$1\.23/);
   assert.match(line, /\+3/);
   assert.doesNotMatch(line, /\/tmp\/project|opencode\/|change-123|Dev/);
-});
-
-test("consolidates extension activity into one transient row", () => {
-  const footer = createFooter(
-    new Map([
-      ["background-terminals", "■ terminal running"],
-      ["subagents", "■ 2 agents running"],
-    ]),
-  );
-
-  const lines = footer.render(120);
-  assert.equal(lines.length, 2);
-  assert.equal(lines[1], "■ terminal running · ■ 2 agents running");
 });

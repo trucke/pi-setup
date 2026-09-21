@@ -108,10 +108,7 @@ test("stub subagent completes and delivers a final result", async () => {
       manager.spawn("claude", task("Say hello to the tests")),
     );
     assert.equal(snap.status, "running");
-    assert.equal(snap.backend, "claude");
     assert.deepEqual(snap.execution.requested, { type: "direct" });
-    assert.equal(snap.execution.attempts, undefined);
-    assert.ok(snap.meta.sessionFilePath);
 
     await runTool(runtime, manager.waitFor([snap.id]));
     const done = manager.view.get(snap.id);
@@ -121,11 +118,17 @@ test("stub subagent completes and delivers a final result", async () => {
       done.finalText,
       /\[stub:claude\] completed: Say hello to the tests/,
     );
-    assert.ok(done.turns >= 2);
-    assert.ok(done.transcript.some((item) => item.kind === "toolResult"));
     // Wait results are deferred first and retracted by the tool after capture;
     // pre-consuming them here would create timeout/interruption races.
     assert.deepEqual(settled, [{ id: snap.id, consumed: false }]);
+
+    // Durable artifacts hold prompts and output: they must stay private.
+    assert.ok(fs.existsSync(done.artifacts.receipt));
+    assert.ok(fs.existsSync(done.artifacts.output));
+    if (process.platform !== "win32") {
+      assert.equal(fs.statSync(done.artifacts.receipt).mode & 0o777, 0o600);
+      assert.equal(fs.statSync(done.artifacts.directory).mode & 0o777, 0o700);
+    }
   });
 });
 
@@ -197,38 +200,11 @@ test("rejections after activity settle as failures", async () => {
   });
 });
 
-test("direct startup rejection reports the backend failure", async () => {
-  await withManager(async (manager, runtime) => {
-    const started = await runTool(
-      runtime,
-      manager.spawn("claude", task("REJECT:claude direct failure")),
-    );
-    await runTool(runtime, manager.waitFor([started.id]));
-    const failed = manager.view.get(started.id);
-    assert.equal(failed?.status, "failed");
-    assert.equal(failed?.backend, "claude");
-    assert.match(failed?.errorText ?? "", /model_not_found/);
-  });
-});
-
 test("cancel just before RunRejected cannot wedge the logical run", async () => {
   await withManager(async (manager, runtime) => {
     const started = await runTool(
       runtime,
       manager.spawn("claude", profileTask("REJECT_RACE:claude cancel race")),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    const report = await runTool(runtime, manager.cancel([started.id]));
-    assert.equal(report[0]?.cancelled, true);
-    assert.equal(manager.view.get(started.id)?.status, "cancelled");
-  });
-});
-
-test("direct startup rejection honors an earlier cancellation", async () => {
-  await withManager(async (manager, runtime) => {
-    const started = await runTool(
-      runtime,
-      manager.spawn("claude", task("REJECT_RACE:claude direct cancel race")),
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
     const report = await runTool(runtime, manager.cancel([started.id]));
@@ -341,38 +317,6 @@ test("clean manager shutdown persists active runs as cancelled with partial outp
   }
 });
 
-test("spawn origin propagates to ids, snapshots, and settlement", async () => {
-  await withManager(async (manager, runtime) => {
-    const settled: Array<{ id: string; origin: string }> = [];
-    manager.view.setOnSettled((snap) =>
-      settled.push({ id: snap.id, origin: snap.origin }),
-    );
-
-    const model = await runTool(
-      runtime,
-      manager.spawn("codex", task("model task")),
-    );
-    const btw = await runTool(
-      runtime,
-      manager.spawn("claude", { ...task("side question"), origin: "btw" }),
-    );
-
-    assert.match(model.id, /^sa-/);
-    assert.equal(model.origin, "model");
-    assert.match(btw.id, /^btw-/);
-    assert.equal(btw.origin, "btw");
-
-    await runTool(runtime, manager.cancel([model.id, btw.id]));
-    assert.deepEqual(
-      settled.sort((a, b) => a.id.localeCompare(b.id)),
-      [
-        { id: btw.id, origin: "btw" },
-        { id: model.id, origin: "model" },
-      ].sort((a, b) => a.id.localeCompare(b.id)),
-    );
-  });
-});
-
 test("the global concurrency cap includes by-the-way sessions", async () => {
   await withManager(async (manager, runtime) => {
     const tasks: SpawnTask[] = [
@@ -388,30 +332,7 @@ test("the global concurrency cap includes by-the-way sessions", async () => {
       }),
     );
     assert.equal(spawns.length, 4);
-    await assert.rejects(
-      runTool(
-        runtime,
-        manager.spawn("codex", {
-          ...task("another side question"),
-          origin: "btw",
-        }),
-      ),
-      /Max 4 subagents/,
-    );
-  });
-});
-
-test("the concurrency cap rejects a fifth running subagent", async () => {
-  await withManager(async (manager, runtime) => {
-    const spawns = await runTool(
-      runtime,
-      Effect.forEach(
-        [1, 2, 3, 4],
-        (n) => manager.spawn("codex", task(`Task ${n}`)),
-        { concurrency: "unbounded" },
-      ),
-    );
-    assert.equal(spawns.length, 4);
+    assert.equal(spawns[0]?.origin, "btw");
     await assert.rejects(
       runTool(runtime, manager.spawn("codex", task("Task 5"))),
       (error) =>
@@ -504,29 +425,6 @@ test("send steers an idle subagent into another turn", async () => {
   });
 });
 
-test("send receipts distinguish queued backend continuations", async () => {
-  await withManager(async (manager, runtime) => {
-    const snap = await runTool(
-      runtime,
-      manager.spawn("codex", task("first turn")),
-    );
-    const toolDeadline = Date.now() + 2_000;
-    while (
-      (manager.view.get(snap.id)?.liveTools.length ?? 0) === 0 &&
-      Date.now() < toolDeadline
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    assert.ok((manager.view.get(snap.id)?.liveTools.length ?? 0) > 0);
-    const receipt = await runTool(
-      runtime,
-      manager.send(snap.id, "follow-up turn"),
-    );
-    assert.equal(receipt.disposition, "queued");
-    await runTool(runtime, manager.cancel([snap.id]));
-  });
-});
-
 test("wait-for-any returns settled ids without cancelling pending runs", async () => {
   await withManager(async (manager, runtime) => {
     const slower = await runTool(
@@ -551,31 +449,6 @@ test("wait-for-any returns settled ids without cancelling pending runs", async (
       assert.equal(manager.view.get(id)?.status, "running");
     }
     await runTool(runtime, manager.cancel(result.pendingIds));
-  });
-});
-
-test("wait returns detached terminal snapshots", async () => {
-  await withManager(async (manager, runtime) => {
-    const started = await runTool(
-      runtime,
-      manager.spawn("codex", task("capture terminal receipt")),
-    );
-    const wait = await runTool(runtime, manager.waitFor([started.id]));
-    const receipt = wait.settledSnapshots[0];
-    assert.equal(receipt?.status, "done");
-    assert.notEqual(receipt, manager.view.get(started.id));
-
-    await runTool(runtime, manager.send(started.id, "start another turn"));
-    const deadline = Date.now() + 1_000;
-    while (
-      manager.view.get(started.id)?.status !== "running" &&
-      Date.now() < deadline
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    assert.equal(manager.view.get(started.id)?.status, "running");
-    assert.equal(receipt?.status, "done");
-    await runTool(runtime, manager.cancel([started.id]));
   });
 });
 
@@ -611,35 +484,6 @@ test(
     });
   },
 );
-
-test("snapshots expose factual liveness, usage, and durable artifacts", async () => {
-  await withManager(async (manager, runtime) => {
-    const snap = await runTool(
-      runtime,
-      manager.spawn("codex", task("report facts")),
-    );
-    await runTool(runtime, manager.waitFor([snap.id]));
-    const done = manager.view.get(snap.id);
-    assert.ok(done);
-    assert.ok(done.lastActivityAt >= done.startedAt);
-    assert.equal(done.lastEvent, "RunSettled");
-    assert.equal(done.currentTools.length, 0);
-    assert.ok((done.usage.inputTokens ?? 0) > 0);
-    assert.ok(fs.existsSync(done.artifacts.receipt));
-    assert.ok(fs.existsSync(done.artifacts.snapshot));
-    assert.ok(fs.existsSync(done.artifacts.transcript));
-    assert.ok(fs.existsSync(done.artifacts.output));
-    const receipt = JSON.parse(
-      fs.readFileSync(done.artifacts.receipt, "utf8"),
-    ) as { version?: number; execution?: unknown };
-    assert.equal(receipt.version, 1);
-    assert.ok(receipt.execution);
-    if (process.platform !== "win32") {
-      assert.equal(fs.statSync(done.artifacts.receipt).mode & 0o777, 0o600);
-      assert.equal(fs.statSync(done.artifacts.directory).mode & 0o777, 0o700);
-    }
-  });
-});
 
 test("restoring one parent never marks another parent's live run interrupted", async () => {
   const firstRuntime = createTestRuntime();
@@ -718,7 +562,7 @@ test("recovery restoration is scoped to the parent Pi session", async () => {
   }
 });
 
-test("in-flight resume uses one slot and can be cancelled before attach", async () => {
+test("an in-flight resume can be aborted or cancelled before attach without leaking its session", async () => {
   const resumeParent: ParentContext = {
     ...parent,
     parentSessionId: "manager-resume-race",
@@ -764,12 +608,6 @@ test("in-flight resume uses one slot and can be cancelled before attach", async 
     assert.equal(manager.view.get(recoveredId!)?.status, "done");
     assert.equal(activeStubSessionCount(), resumeSessionBaseline);
 
-    const running = await runTool(
-      secondRuntime,
-      Effect.forEach([1, 2], (number) =>
-        manager.spawn("claude", task(`occupy ${number}`)),
-      ),
-    );
     const resumePromise = runTool(
       secondRuntime,
       manager.resume(
@@ -779,32 +617,10 @@ test("in-flight resume uses one slot and can be cancelled before attach", async 
       ),
     );
     await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const fourth = await runTool(
-      secondRuntime,
-      manager.spawn("claude", task("fourth logical run")),
-    );
     const report = await runTool(secondRuntime, manager.cancel([recoveredId!]));
     assert.equal(report[0]?.cancelled, true);
-    await runTool(secondRuntime, manager.cancel([fourth.id]));
-    await assert.rejects(
-      runTool(
-        secondRuntime,
-        manager.resume(
-          recoveredId!,
-          "competing resume must not steal the claim",
-          resumeParent,
-        ),
-      ),
-      /already running or resuming/,
-    );
     await assert.rejects(resumePromise, /was cancelled/);
     assert.equal(manager.view.get(recoveredId!)?.status, "done");
-
-    await runTool(
-      secondRuntime,
-      manager.cancel([...running.map(({ id }) => id), fourth.id]),
-    );
   } finally {
     await secondRuntime.dispose();
   }

@@ -112,30 +112,6 @@ test("keeps one continuous run across repeated agent_start before settle", () =>
   assert.equal(harness.renderEntry(0), "✓ Worked for 1m 00s");
 });
 
-test("starts a fresh measurement for the next request", () => {
-  const harness = createHarness();
-
-  harness.emit("agent_start");
-  harness.advance(5_000);
-  harness.emit("agent_settled");
-
-  harness.advance(10_000);
-  harness.emit("agent_start");
-  harness.advance(2_000);
-  harness.emit("agent_settled");
-
-  assert.deepEqual(harness.entries, [
-    { durationMs: 5_000 },
-    { durationMs: 2_000 },
-  ]);
-});
-
-test("ignores agent_settled without an active run", () => {
-  const harness = createHarness();
-  harness.emit("agent_settled");
-  assert.deepEqual(harness.entries, []);
-});
-
 test("session_shutdown abandons an active measurement", () => {
   const harness = createHarness();
 

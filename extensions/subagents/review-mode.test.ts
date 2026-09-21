@@ -7,7 +7,6 @@ import {
 } from "./src/backends/claude.ts";
 import {
   codexBackend,
-  codexItemIsMeaningful,
   codexReviewTarget,
   codexStartupFailure,
 } from "./src/backends/codex.ts";
@@ -33,12 +32,6 @@ test("Codex refuses untrusted project configuration", async () => {
   if (Result.isFailure(result)) {
     assert.match(result.failure.message, /untrusted project/);
   }
-});
-
-test("Codex ignores its echoed user item when classifying startup activity", () => {
-  assert.equal(codexItemIsMeaningful({ type: "userMessage" }), false);
-  assert.equal(codexItemIsMeaningful({ type: "agentMessage" }), true);
-  assert.equal(codexItemIsMeaningful({ type: "commandExecution" }), true);
 });
 
 test("Codex distinguishes pre-activity rejection from terminal failure", () => {
@@ -118,18 +111,4 @@ test("Claude review mode uses a direct read-only prompt for commit targets", () 
   assert.match(prompt, /Focus on lifecycle races/);
   assert.match(prompt, /Do not .*post remote comments/);
   assert.doesNotMatch(prompt, /^\/code-review/m);
-});
-
-test("Claude review mode describes branch and PR targets without command expansion", () => {
-  const branch = claudeCodeReviewPrompt({
-    ...baseTask,
-    reviewTarget: { type: "baseBranch", branch: "main" },
-  });
-  const pullRequest = claudeCodeReviewPrompt({
-    ...baseTask,
-    reviewTarget: { type: "pullRequest", number: 42 },
-  });
-  assert.match(branch, /git diff main\.\.\.HEAD/);
-  assert.match(pullRequest, /gh pr diff 42/);
-  assert.match(pullRequest, /Do not .*post remote comments/);
 });

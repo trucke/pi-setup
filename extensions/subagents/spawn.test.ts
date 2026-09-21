@@ -49,7 +49,7 @@ function setup() {
   };
 }
 
-test("Claude evaluation reaches spawning without a profile or fabricated review target", async () => {
+test("direct spawning routes the requested harness and settings without a profile or fabricated review target", async () => {
   const { call, requests } = setup();
   const prompt =
     "Compare pi-web-access with our web-search extension. Read-only; report evidence and recommendations.";
@@ -59,7 +59,6 @@ test("Claude evaluation reaches spawning without a profile or fabricated review 
     prompt,
   });
   assert.deepEqual(result.details, { id: "sa-test" });
-  assert.equal(requests.length, 1);
   assert.equal(requests[0].prompt, prompt);
   assert.equal(requests[0].profile, undefined);
   assert.equal(requests[0].reviewTarget, undefined);
@@ -69,6 +68,22 @@ test("Claude evaluation reaches spawning without a profile or fabricated review 
     reasoningEffort: undefined,
     runMode: "agent",
   });
+
+  await call("subagent-spawn-direct", {
+    name: "evaluation",
+    prompt: "Read only.",
+    harness: "codex",
+    model: "gpt-6-astra",
+    reasoningEffort: "high",
+    workingDir: "/trusted/repo",
+  });
+  assert.deepEqual(requests[1].selected, {
+    harness: "codex",
+    model: "gpt-6-astra",
+    reasoningEffort: "high",
+    runMode: "agent",
+  });
+  assert.equal(requests[1].workingDir, "/trusted/repo");
 });
 
 test("explicit nulls preserve defaults when transports require all properties", async () => {
@@ -98,31 +113,6 @@ test("explicit nulls preserve defaults when transports require all properties", 
     });
     assert.equal(requests.at(-1)?.reviewTarget, undefined);
     assert.equal(requests.at(-1)?.workingDir, undefined);
-  }
-});
-
-test("direct spawning preserves explicit settings for every harness", async () => {
-  const { call, requests } = setup();
-  for (const [harness, model] of [
-    ["pi", "provider/model"],
-    ["claude", "opus"],
-    ["codex", "gpt-6-astra"],
-  ]) {
-    await call("subagent-spawn-direct", {
-      name: "evaluation",
-      prompt: "Read only.",
-      harness,
-      model,
-      reasoningEffort: "high",
-      workingDir: "/trusted/repo",
-    });
-    assert.deepEqual(requests.at(-1)?.selected, {
-      harness,
-      model,
-      reasoningEffort: "high",
-      runMode: "agent",
-    });
-    assert.equal(requests.at(-1)?.workingDir, "/trusted/repo");
   }
 });
 

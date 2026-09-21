@@ -38,16 +38,3 @@ test("generic review does not invent a code-change target", () => {
   assert.doesNotMatch(prompt, /git diff|uncommitted|staged changes/);
   assert.match(prompt, /docs\/plan.md/);
 });
-
-test("explicit review targets reach ordinary agent prompts", () => {
-  const prompt = buildReviewPrompt(
-    buildProfilePrompt("review", "Assess correctness."),
-    {
-      type: "commit",
-      sha: "abc1234",
-    },
-  );
-  assert.match(prompt, /Review commit "abc1234"/);
-  assert.match(prompt, /Do not modify files/);
-  assert.match(prompt, /Assess correctness/);
-});

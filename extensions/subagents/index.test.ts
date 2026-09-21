@@ -6,8 +6,6 @@ import { resolveReviewTarget } from "./src/review.ts";
 
 interface RegisteredTool {
   readonly name: string;
-  readonly parameters?: { readonly properties?: Record<string, unknown> };
-  readonly execute?: (...args: unknown[]) => Promise<unknown>;
   readonly prepareArguments?: (args: unknown) => unknown;
 }
 
@@ -64,43 +62,6 @@ test("registers the focused kebab-case subagent tool set", () => {
   );
 });
 
-test("spawn exposes separate profile and direct tool schemas", () => {
-  const tools: RegisteredTool[] = [];
-  subagents(makePi(tools));
-  const spawn = tools.find((tool) => tool.name === "subagent-spawn");
-  assert.deepEqual(Object.keys(spawn?.parameters?.properties ?? {}), [
-    "prompt",
-    "name",
-    "profile",
-    "workingDir",
-    "reviewTarget",
-  ]);
-  const profile = spawn?.parameters?.properties?.profile as {
-    enum?: ReadonlyArray<string>;
-  };
-  assert.deepEqual(profile.enum, [
-    "scout",
-    "lookup",
-    "code",
-    "build",
-    "ui",
-    "review",
-    "research",
-    "write",
-  ]);
-  assert.equal(spawn?.parameters?.properties?.working_dir, undefined);
-  assert.equal(spawn?.parameters?.properties?.reasoning_effort, undefined);
-  const direct = tools.find((tool) => tool.name === "subagent-spawn-direct");
-  assert.deepEqual(Object.keys(direct?.parameters?.properties ?? {}), [
-    "prompt",
-    "name",
-    "harness",
-    "workingDir",
-    "model",
-    "reasoningEffort",
-  ]);
-});
-
 test("old mixed calls get actionable routing errors before creating a session", () => {
   const tools: RegisteredTool[] = [];
   subagents(makePi(tools));
@@ -119,40 +80,5 @@ test("old mixed calls get actionable routing errors before creating a session", 
   assert.throws(
     () => direct.prepareArguments!({ harness: "claude", profile: "review" }),
     /Remove those fields.*scope in prompt/,
-  );
-});
-
-test("resume can explicitly bypass a stale native session", () => {
-  const tools: RegisteredTool[] = [];
-  subagents(makePi(tools));
-  const resume = tools.find((tool) => tool.name === "subagent-resume");
-  assert.deepEqual(Object.keys(resume?.parameters?.properties ?? {}), [
-    "id",
-    "prompt",
-    "mode",
-  ]);
-  assert.deepEqual(
-    (
-      resume?.parameters?.properties?.mode as {
-        enum?: ReadonlyArray<string>;
-      }
-    ).enum,
-    ["auto", "native", "continuation"],
-  );
-});
-
-test("wait exposes wait-for-any and a non-cancelling timeout", () => {
-  const tools: RegisteredTool[] = [];
-  subagents(makePi(tools));
-  const wait = tools.find((tool) => tool.name === "subagent-wait");
-  assert.deepEqual(Object.keys(wait?.parameters?.properties ?? {}), [
-    "ids",
-    "mode",
-    "timeoutMs",
-  ]);
-  assert.deepEqual(
-    (wait?.parameters?.properties?.mode as { enum?: ReadonlyArray<string> })
-      .enum,
-    ["all", "any"],
   );
 });

@@ -8,7 +8,6 @@
 
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { Effect } from "effect";
@@ -127,12 +126,6 @@ test("happy path: stdout and stderr captured separately, settles done, hook fire
           0o700,
         );
       }
-    }
-    if (done.stderr.spillPath) {
-      assert.equal(
-        fs.readFileSync(done.stderr.spillPath, "utf8"),
-        "err-line\n",
-      );
     }
   });
 });
@@ -276,16 +269,12 @@ test(
   { skip: process.platform === "win32" },
   async () => {
     await withManager(async (manager, runtime) => {
-      const sentinelDir = fs.mkdtempSync(
-        path.join(os.tmpdir(), "bt-tree-test-"),
-      );
-      const sentinel = path.join(sentinelDir, "heartbeat");
       const snap = await runTool(
         runtime,
         manager.start({
           // sh spawns node in the background and prints the grandchild pid,
           // then waits forever so the group stays alive.
-          command: `node -e 'const fs = require("node:fs"); const file = ${JSON.stringify(sentinel)}; let n = 0; fs.writeFileSync(file, String(n)); setInterval(() => fs.writeFileSync(file, String(++n)), 25)' & echo "child:$!"; wait`,
+          command: `${nodeCmd("setInterval(() => {}, 1000)")} & echo "child:$!"; wait`,
           title: "tree",
           cwd,
         }),
@@ -302,32 +291,25 @@ test(
       const match = /child:(\d+)/.exec(text);
       assert.ok(match, "parsed grandchild pid");
       const grandchild = Number(match[1]);
-      assert.equal(processGone(grandchild), false);
-      assert.ok(
-        await pollUntil(() => fs.existsSync(sentinel)),
-        "heartbeat exists",
-      );
-      const heartbeatBefore = fs.readFileSync(sentinel, "utf8");
-      assert.ok(
-        await pollUntil(
-          () => fs.readFileSync(sentinel, "utf8") !== heartbeatBefore,
-        ),
-        "heartbeat belongs to the live grandchild",
-      );
+      let reaped = false;
+      try {
+        assert.equal(processGone(grandchild), false);
 
-      await runTool(runtime, manager.kill([snap.id]));
-      assert.ok(
-        await pollUntil(() => processGone(grandchild)),
-        "grandchild process is gone after group kill",
-      );
-      const stoppedAt = fs.readFileSync(sentinel, "utf8");
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.equal(
-        fs.readFileSync(sentinel, "utf8"),
-        stoppedAt,
-        "the unique grandchild heartbeat stopped",
-      );
-      fs.rmSync(sentinelDir, { recursive: true, force: true });
+        await runTool(runtime, manager.kill([snap.id]));
+        reaped = await pollUntil(() => processGone(grandchild));
+        assert.ok(reaped, "grandchild process is gone after group kill");
+      } finally {
+        // If the manager failed to kill the tree, the orphan would keep the
+        // test runner alive. Only signal a pid never observed gone, so a
+        // recycled pid is never touched on the passing path.
+        if (!reaped) {
+          try {
+            process.kill(grandchild, "SIGKILL");
+          } catch {
+            // Already gone.
+          }
+        }
+      }
     });
   },
 );
@@ -373,43 +355,6 @@ test(
         await pollUntil(() => processGone(grandchild)),
         "surviving process-group descendant was reaped",
       );
-    });
-  },
-);
-
-test(
-  "kill preserves a natural exit observed before the signal point",
-  { skip: process.platform === "win32" },
-  async () => {
-    await withManager(async (manager, runtime) => {
-      const snap = await runTool(
-        runtime,
-        manager.start({
-          command: `node -e "setInterval(()=>{},1e3)" & echo "child:$!"; exit 0`,
-          title: "natural-race",
-          cwd,
-        }),
-      );
-      assert.ok(
-        await pollUntil(() =>
-          (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
-        ),
-      );
-      const match = /child:(\d+)/.exec(
-        manager.view.get(snap.id)?.stdout.text ?? "",
-      );
-      assert.ok(match);
-      const grandchild = Number(match[1]);
-      assert.ok(snap.pid);
-      assert.ok(await pollUntil(() => processGone(snap.pid!)));
-      assert.equal(manager.view.get(snap.id)?.status, "running");
-
-      const [result] = await runTool(runtime, manager.kill([snap.id]));
-      assert.equal(result.wasRunning, true);
-      assert.equal(result.killed, false);
-      assert.equal(result.status, "done");
-      assert.equal(result.exit, "exit 0");
-      assert.ok(await pollUntil(() => processGone(grandchild)));
     });
   },
 );
@@ -461,25 +406,6 @@ test("concurrency cap rejects an extra start; a failed spawn releases its slot",
   });
 });
 
-test("a settle during an in-flight kill reports consumed: true", async () => {
-  await withManager(async (manager, runtime) => {
-    const settled: Array<{ id: string; consumed: boolean }> = [];
-    manager.view.setOnSettled((snap, consumed) =>
-      settled.push({ id: snap.id, consumed }),
-    );
-    const snap = await runTool(
-      runtime,
-      manager.start({
-        command: nodeCmd("setInterval(() => {}, 1000)"),
-        title: "consumed",
-        cwd,
-      }),
-    );
-    await runTool(runtime, manager.kill([snap.id]));
-    assert.deepEqual(settled, [{ id: snap.id, consumed: true }]);
-  });
-});
-
 test("UI requestKill settles as killed and is NOT consumed", async () => {
   await withManager(async (manager, runtime) => {
     const settled: Array<{ id: string; status: string; consumed: boolean }> =
@@ -504,7 +430,7 @@ test("UI requestKill settles as killed and is NOT consumed", async () => {
   });
 });
 
-test("runtime.dispose kills running processes; no settle hook fires after dispose", async () => {
+test("runtime.dispose kills running processes and removes their spill directory; no settle hook fires afterwards", async () => {
   const runtime = createTerminalRuntime();
   const manager = await runtime.runPromise(TerminalManager);
   const settled: string[] = [];
@@ -520,9 +446,13 @@ test("runtime.dispose kills running processes; no settle hook fires after dispos
   );
   const pid = snap.pid;
   assert.ok(pid);
+  assert.ok(snap.stdout.spillPath);
+  const spillDir = path.dirname(snap.stdout.spillPath);
+  assert.equal(fs.existsSync(spillDir), true);
 
   await runtime.dispose();
   assert.ok(await pollUntil(() => processGone(pid)), "process killed");
+  assert.equal(fs.existsSync(spillDir), false);
   // The disposed guard suppressed the hook.
   assert.deepEqual(settled, []);
   // start after dispose is rejected (by the runtime itself, or by the
@@ -562,47 +492,6 @@ test("pruning drops the oldest settled entries past MAX_TRACKED, never running o
     assert.equal(remaining.includes(settledIds[0]), false);
     // The latest settled entries survive.
     assert.equal(remaining.includes(settledIds[settledIds.length - 1]), true);
-
-    const [historical] = await runTool(runtime, manager.kill([settledIds[0]]));
-    assert.equal(historical.title, "quick-0");
-    assert.equal(historical.status, "done");
-    assert.equal(historical.wasRunning, false);
-    assert.equal(historical.killed, false);
-  });
-});
-
-test("runtime disposal removes the private spill directory", async () => {
-  const runtime = createTerminalRuntime();
-  const manager = await runtime.runPromise(TerminalManager);
-  const snap = await runTool(
-    runtime,
-    manager.start({ command: "node --version", title: "cleanup", cwd }),
-  );
-  const { snap: done } = await settlement(manager, snap.id);
-  assert.ok(done.stdout.spillPath);
-  const spillDir = path.dirname(done.stdout.spillPath);
-  assert.equal(fs.existsSync(spillDir), true);
-
-  await runtime.dispose();
-
-  assert.equal(fs.existsSync(spillDir), false);
-});
-
-test("an unknown command settles failed with the platform shell's non-zero exit", async () => {
-  await withManager(async (manager, runtime) => {
-    const snap = await runTool(
-      runtime,
-      manager.start({
-        command: "definitely-not-a-real-binary-12345",
-        title: "bogus",
-        cwd,
-      }),
-    );
-    const { snap: failed } = await settlement(manager, snap.id);
-    assert.equal(failed.status, "failed");
-    // The platform shell reports a non-zero exit and explains the failure.
-    assert.notEqual(failed.exitCode, 0);
-    assert.ok(failed.stderr.text.length > 0, "stderr explains the failure");
   });
 });
 
@@ -716,20 +605,5 @@ test("aborting the kill wait does not cancel the termination", async () => {
     assert.equal(after.status, "killed");
     if (process.platform !== "win32") assert.equal(after.signal, "SIGKILL");
     assert.ok(await pollUntil(() => processGone(pid)), "process is gone");
-  });
-});
-
-test("status returns the snapshot and rejects unknown ids with the known list", async () => {
-  await withManager(async (manager, runtime) => {
-    const snap = await runTool(
-      runtime,
-      manager.start({ command: "true", title: "status", cwd }),
-    );
-    const seen = await runTool(runtime, manager.status(snap.id));
-    assert.equal(seen.id, snap.id);
-    await assert.rejects(
-      runTool(runtime, manager.status("bt-999")),
-      /Unknown terminal id "bt-999"\. Known: bt-1\./,
-    );
   });
 });

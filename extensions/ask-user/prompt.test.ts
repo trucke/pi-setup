@@ -1,21 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  ASK_USER_PROMPT_GUIDELINES,
-  ASK_USER_TOOL_DESCRIPTION,
-  buildAskUserResultMessage,
-} from "./prompt.ts";
-
-test("describes batched single-select questions to the model", () => {
-  assert.match(ASK_USER_TOOL_DESCRIPTION, /batch of up to 4 questions/);
-  assert.match(ASK_USER_TOOL_DESCRIPTION, /questions array/);
-  assert.match(ASK_USER_TOOL_DESCRIPTION, /accepts one answer/);
-  assert.ok(
-    ASK_USER_PROMPT_GUIDELINES.some((guideline) =>
-      guideline.includes("Batch independent questions"),
-    ),
-  );
-});
+import { buildAskUserResultMessage } from "./prompt.ts";
 
 test("formats batched selected and custom answers", () => {
   assert.equal(

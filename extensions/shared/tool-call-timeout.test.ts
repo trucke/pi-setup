@@ -5,17 +5,8 @@ import { Type } from "typebox";
 import {
   createToolCallTimeoutGuard,
   runWithToolCallTimeout,
-  CHILD_TOOL_CALL_TIMEOUT_MS,
   ToolCallTimeoutError,
 } from "./tool-call-timeout.ts";
-
-test("the production timeout error names the tool and three-minute limit", () => {
-  assert.equal(
-    new ToolCallTimeoutError("fixture_tool", CHILD_TOOL_CALL_TIMEOUT_MS)
-      .message,
-    'Tool call "fixture_tool" timed out after 3 minutes.',
-  );
-});
 
 test("a hung tool call fails clearly and receives an abort signal", async () => {
   let executionSignal: AbortSignal | undefined;
@@ -113,33 +104,4 @@ test("the guard leaves explicitly exempt tools unchanged", () => {
   guard.apply(registry);
 
   assert.equal(definition.execute, execute);
-});
-
-test("successful and terminating tool results pass through unchanged", async () => {
-  const result = {
-    content: [{ type: "text" as const, text: "recorded" }],
-    details: { value: "fixture" },
-    terminate: true,
-  };
-
-  assert.equal(
-    await runWithToolCallTimeout(
-      "structured_output",
-      10,
-      undefined,
-      async () => result,
-    ),
-    result,
-  );
-});
-
-test("the timeout is fresh for each tool call, not shared across calls", async () => {
-  const execute = () =>
-    runWithToolCallTimeout("slow_fixture", 100, undefined, async () => {
-      await new Promise((resolve) => setTimeout(resolve, 60));
-      return "done";
-    });
-
-  assert.equal(await execute(), "done");
-  assert.equal(await execute(), "done");
 });

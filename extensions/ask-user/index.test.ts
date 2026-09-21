@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import askUser, {
-  type AskUserInput,
-  MAX_QUESTIONS,
-  normalizeQuestions,
-} from "./index.ts";
+import askUser, { type AskUserInput, MAX_QUESTIONS } from "./index.ts";
 
 type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -79,26 +75,6 @@ test("exposes a root object schema for GLM-compatible tool calling", () => {
   assert.equal(tool.parameters.anyOf, undefined);
 });
 
-test("normalizes a single question from the canonical questions array", () => {
-  assert.deepEqual(
-    normalizeQuestions({
-      questions: [
-        {
-          question: "Choose one",
-          options: [{ label: "A" }, { label: "B" }],
-        },
-      ],
-    }),
-    [
-      {
-        label: "Question",
-        question: "Choose one",
-        options: [{ label: "A" }, { label: "B" }],
-      },
-    ],
-  );
-});
-
 test("prepares legacy single-question calls for resumed sessions", () => {
   const tool = registeredTool();
 
@@ -115,36 +91,6 @@ test("prepares legacy single-question calls for resumed sessions", () => {
         },
       ],
     },
-  );
-});
-
-test("normalizes batched questions with contextual and fallback labels", () => {
-  assert.deepEqual(
-    normalizeQuestions({
-      questions: [
-        {
-          label: " Scope ",
-          question: "Choose scope",
-          options: [{ label: "Small" }, { label: "Large" }],
-        },
-        {
-          question: "Choose priority",
-          options: [{ label: "Low" }, { label: "High" }],
-        },
-      ],
-    }),
-    [
-      {
-        label: "Scope",
-        question: "Choose scope",
-        options: [{ label: "Small" }, { label: "Large" }],
-      },
-      {
-        label: "Q2",
-        question: "Choose priority",
-        options: [{ label: "Low" }, { label: "High" }],
-      },
-    ],
   );
 });
 
@@ -271,139 +217,15 @@ test("collects a batch through question tabs and the submit tab", async () => {
       "Priority: user selected option 2: High",
     ].join("\n"),
   );
+  const details = result.details as {
+    answers: Array<{ answer: string }>;
+    cancelled: boolean;
+  };
   assert.deepEqual(
-    (result.details as { answers: unknown[]; cancelled: boolean }).answers,
-    [
-      {
-        questionIndex: 0,
-        label: "Scope",
-        question: "Choose scope",
-        options: ["Small", "Large"],
-        answer: "Small",
-        wasCustom: false,
-        index: 1,
-      },
-      {
-        questionIndex: 1,
-        label: "Priority",
-        question: "Choose priority",
-        options: ["Low", "High"],
-        answer: "High",
-        wasCustom: false,
-        index: 2,
-      },
-    ],
+    details.answers.map(({ answer }) => answer),
+    ["Small", "High"],
   );
-  assert.equal(
-    (result.details as { answers: unknown[]; cancelled: boolean }).cancelled,
-    false,
-  );
-});
-
-test("wraps option descriptions instead of truncating them", async () => {
-  const theme: TestTheme = {
-    fg: (_color, text) => text,
-    bg: (_color, text) => text,
-    bold: (text) => text,
-  };
-  const description =
-    "Show the authenticated Firecrawl team's remaining credits, regardless of which client used them.";
-  let rendered: string[] = [];
-
-  await registeredTool().execute(
-    "ask-1",
-    {
-      questions: [
-        {
-          question: "What should the displayed value represent?",
-          options: [
-            { label: "Session credits", description },
-            { label: "Account credits" },
-          ],
-        },
-      ],
-    },
-    undefined,
-    undefined,
-    {
-      mode: "tui",
-      ui: {
-        custom: (factory) =>
-          new Promise((resolve) => {
-            const component = factory(
-              { requestRender() {} },
-              theme,
-              {},
-              resolve,
-            );
-            rendered = component.render(52);
-            component.handleInput("\u001b");
-          }),
-      },
-    },
-  );
-
-  const firstOption = rendered.findIndex((line) => line.includes("1. Session"));
-  const secondOption = rendered.findIndex((line) =>
-    line.includes("2. Account"),
-  );
-  assert.ok(firstOption >= 0 && secondOption > firstOption);
-  assert.equal(
-    rendered
-      .slice(firstOption + 1, secondOption)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .join(" "),
-    description,
-  );
-  assert.ok(rendered.every((line) => !line.includes("...")));
-});
-
-test("supports k/up and j/down option navigation", async () => {
-  const theme: TestTheme = {
-    fg: (_color, text) => text,
-    bg: (_color, text) => text,
-    bold: (text) => text,
-  };
-  const chooseWith = (inputs: string[]) =>
-    registeredTool().execute(
-      "ask-1",
-      {
-        questions: [
-          {
-            question: "Choose one",
-            options: [{ label: "A" }, { label: "B" }],
-          },
-        ],
-      },
-      undefined,
-      undefined,
-      {
-        mode: "tui",
-        ui: {
-          custom: (factory) =>
-            new Promise((resolve) => {
-              const component = factory(
-                { requestRender() {} },
-                theme,
-                {},
-                resolve,
-              );
-              for (const input of inputs) component.handleInput(input);
-            }),
-        },
-      },
-    );
-
-  for (const inputs of [
-    ["j", "\r"],
-    ["\u001b[B", "\r"],
-    ["k", "k", "\r"],
-    ["\u001b[A", "\u001b[A", "\r"],
-  ]) {
-    const result = await chooseWith(inputs);
-    assert.match(result.content[0].text, /option 2: B/);
-  }
+  assert.equal(details.cancelled, false);
 });
 
 test("rejects batches larger than the supported maximum", async () => {

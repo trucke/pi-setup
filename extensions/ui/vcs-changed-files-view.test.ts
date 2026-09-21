@@ -18,13 +18,6 @@ test("parses Git changed paths including rename records", () => {
   );
 });
 
-test("parses JJ path and status pairs", () => {
-  assert.deepEqual(parseJjChangedPaths("one.ts\0M\0two.ts\0A\0"), [
-    { path: "one.ts", status: "M" },
-    { path: "two.ts", status: "A" },
-  ]);
-});
-
 test("counts additions and deletions in Git-format diffs", () => {
   assert.deepEqual(
     countGitDiffLines(

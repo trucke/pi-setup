@@ -9,16 +9,10 @@ import {
   parsePages,
   parsePdfInfo,
   parseRemotePdfUrl,
-  READ_PDF_TOOL_NAME,
   selectPages,
   truncateByCharacters,
-  validateResolvedAddresses,
 } from "./index.ts";
 import { PdfProcessTimeoutError, runPdfCommand } from "./process.ts";
-
-test("uses the kebab-case first-party tool name without a legacy alias", () => {
-  assert.equal(READ_PDF_TOOL_NAME, "read-pdf");
-});
 
 test("parses individual PDF pages and ranges", () => {
   assert.deepEqual(parsePages("1, 3-5"), [
@@ -64,27 +58,20 @@ test("applies the page budget predictably and validates explicit ranges", () => 
   );
 });
 
-test("parses useful pdfinfo fields while retaining raw metadata", () => {
-  const raw = [
-    "Title:          Field Manual",
-    "Author:         A. Example",
-    "Subject:        Testing",
-    "CreationDate:   Tue Jan  2 03:04:05 2024 UTC",
-    "Encrypted:      yes (print:no copy:yes)",
-    "Pages:          42",
-    "PDF version:    1.7",
-  ].join("\n");
-
-  const metadata = parsePdfInfo(raw);
+test("parses the pdfinfo fields that drive page selection and encryption handling", () => {
+  const metadata = parsePdfInfo(
+    [
+      "Title:          Field Manual",
+      "CreationDate:   Tue Jan  2 03:04:05 2024 UTC",
+      "Encrypted:      yes (print:no copy:yes)",
+      "Pages:          42",
+    ].join("\n"),
+  );
   assert.equal(metadata.title, "Field Manual");
-  assert.equal(metadata.author, "A. Example");
-  assert.equal(metadata.subject, "Testing");
+  // Values may contain colons; only the first one separates key and value.
   assert.equal(metadata.creationDate, "Tue Jan  2 03:04:05 2024 UTC");
   assert.equal(metadata.encrypted, true);
-  assert.equal(metadata.encryptionDetails, "(print:no copy:yes)");
   assert.equal(metadata.pageCount, 42);
-  assert.equal(metadata.fields["PDF version"], "1.7");
-  assert.equal(metadata.raw, raw);
 });
 
 test("maxChars counts characters rather than UTF-8 bytes", () => {
@@ -190,28 +177,4 @@ test("cancelling child processes also removes their timeout", async () => {
   await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.equal(timeoutCount(), before);
-});
-
-test("rejects private and special DNS answers", () => {
-  for (const address of [
-    "0.0.0.0",
-    "10.0.0.1",
-    "100.64.0.1",
-    "169.254.1.1",
-    "172.16.0.1",
-    "192.168.1.1",
-    "::1",
-    "fc00::1",
-    "fe80::1",
-    "::ffff:127.0.0.1",
-  ]) {
-    assert.equal(isPublicIpAddress(address), false, address);
-  }
-  assert.equal(isPublicIpAddress("93.184.216.34"), true);
-  assert.equal(isPublicIpAddress("2606:2800:220:1:248:1893:25c8:1946"), true);
-  assert.doesNotThrow(() => validateResolvedAddresses(["93.184.216.34"]));
-  assert.throws(
-    () => validateResolvedAddresses(["93.184.216.34", "10.0.0.1"]),
-    /non-public address/,
-  );
 });

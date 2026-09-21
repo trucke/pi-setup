@@ -3,11 +3,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import test from "node:test";
 import { terminateChild } from "./src/backends/codex.ts";
 
-const READINESS_TIMEOUT_MS = 2_000;
 const CHILD_PID_MARKER = "child-pid:";
-const CHILD_PID_PATTERN = new RegExp(
-  `(?:^|\\n)${CHILD_PID_MARKER}(\\d+)\\r?\\n`,
-);
 
 const processExists = (pid: number) => {
   try {
@@ -18,52 +14,28 @@ const processExists = (pid: number) => {
   }
 };
 
-const waitForChildPid = (
-  child: ChildProcessWithoutNullStreams,
-  timeoutMs = READINESS_TIMEOUT_MS,
-) =>
+const waitForChildPid = (child: ChildProcessWithoutNullStreams) =>
   new Promise<number>((resolve, reject) => {
     let output = "";
-    let settled = false;
-    const cleanup = () => {
-      clearTimeout(timer);
-      child.stdout.off("data", onData);
-      child.off("error", onError);
-      child.off("close", onClose);
-    };
-    const finish = (result: { pid: number } | { error: Error }) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      if ("pid" in result) resolve(result.pid);
-      else reject(result.error);
-    };
-    const onData = (chunk: string) => {
+    const timer = setTimeout(
+      () => reject(new Error("Timed out waiting for the leader's child PID")),
+      2_000,
+    );
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
       output += chunk;
-      const match = output.match(CHILD_PID_PATTERN);
-      if (match?.[1]) finish({ pid: Number(match[1]) });
-    };
-    const onError = (error: Error) => finish({ error });
-    const onClose = (code: number | null, signal: NodeJS.Signals | null) =>
-      finish({
-        error: new Error(
+      const match = new RegExp(`${CHILD_PID_MARKER}(\\d+)\\r?\\n`).exec(output);
+      if (!match) return;
+      clearTimeout(timer);
+      resolve(Number(match[1]));
+    });
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      reject(
+        new Error(
           `Leader closed before reporting its child PID (code=${code}, signal=${signal})`,
         ),
-      });
-    const timer = setTimeout(
-      () =>
-        finish({
-          error: new Error(
-            "Timed out waiting for leader to report its child PID",
-          ),
-        }),
-      timeoutMs,
-    );
-
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", onData);
-    child.once("error", onError);
-    child.once("close", onClose);
+      );
+    });
   });
 
 test(

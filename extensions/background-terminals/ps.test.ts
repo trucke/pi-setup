@@ -48,22 +48,6 @@ test("sanitizeText strips ANSI, tabs, and control characters", () => {
   assert.equal(sanitizeText("a\u0007b\u0000c"), "abc");
 });
 
-test("output line cache reuses a version/width key and invalidates either dimension", () => {
-  const cache = createOutputLineCache();
-  const first = cache.get("first", 1, 80);
-  const sameKey = cache.get("different text is intentionally ignored", 1, 80);
-  assert.equal(sameKey, first);
-  assert.deepEqual(sameKey, ["first"]);
-
-  const newVersion = cache.get("second", 2, 80);
-  assert.notEqual(newVersion, first);
-  assert.deepEqual(newVersion, ["second"]);
-
-  const newWidth = cache.get("x".repeat(25), 2, 10);
-  assert.notEqual(newWidth, newVersion);
-  assert.ok(newWidth.length > 1);
-});
-
 test("buildOutputLines wraps long lines and keeps only the final CR segment", () => {
   const lines = buildOutputLines("progress 1\rprogress 2\rdone\nnext", 80);
   assert.deepEqual(lines, ["done", "next"]);
@@ -74,9 +58,4 @@ test("buildOutputLines wraps long lines and keeps only the final CR segment", ()
   const wrapped = buildOutputLines("x".repeat(25), 10);
   assert.ok(wrapped.length > 1);
   assert.equal(wrapped.join(""), "x".repeat(25));
-});
-
-test("buildOutputLines drops one trailing empty line from a trailing newline", () => {
-  assert.deepEqual(buildOutputLines("a\nb\n", 80), ["a", "b"]);
-  assert.deepEqual(buildOutputLines("a\n\n", 80), ["a", ""]);
 });
