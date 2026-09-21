@@ -56,7 +56,7 @@ export const EXECUTION_PROFILES = {
     execution: {
       harness: "pi",
       model: "openai-codex/gpt-6-astra",
-      reasoningEffort: "high",
+      reasoningEffort: "medium",
       runMode: "agent",
     },
     instructions:
@@ -90,7 +90,7 @@ export const EXECUTION_PROFILES = {
     execution: {
       harness: "pi",
       model: "openai-codex/gpt-6-astra",
-      reasoningEffort: "high",
+      reasoningEffort: "medium",
       runMode: "agent",
     },
     instructions:
@@ -102,7 +102,7 @@ export const EXECUTION_PROFILES = {
     execution: {
       harness: "claude",
       model: "claude-fable-5-1",
-      reasoningEffort: "high",
+      reasoningEffort: "medium",
       runMode: "agent",
     },
     instructions:
