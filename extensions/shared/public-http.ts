@@ -91,7 +91,9 @@ export async function readPublicHttp(
         },
         resolve,
       );
-      request.once("error", reject);
+      // Bun can emit another request error after a pinned connection fails.
+      // Keep it handled even after the promise has already rejected.
+      request.on("error", reject);
       request.end();
     });
     try {

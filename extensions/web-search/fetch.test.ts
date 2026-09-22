@@ -6,7 +6,7 @@ import {
   type RequestOptions,
   type ServerResponse,
 } from "node:http";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import test, { type TestContext } from "node:test";
 import {
   readPublicHttp,
@@ -183,6 +183,29 @@ test("bounds declared and streamed bodies and rejects compressed responses", asy
       reason,
     );
   }
+});
+
+test("request errors reject the fetch without leaving later errors unhandled", async () => {
+  const failedRequest = Object.assign(new EventEmitter(), {
+    end() {
+      failedRequest.emit("error", new Error("ECONNREFUSED"));
+    },
+  });
+  await assert.rejects(
+    fetchLocal(
+      "http://public.example",
+      {},
+      {
+        resolve: async () => [PUBLIC],
+        request: (() => failedRequest) as unknown as typeof request,
+      },
+    ),
+    /^Error: ECONNREFUSED$/,
+  );
+  // Bun 1.3.14 can emit a second request error after a pinned connection fails.
+  assert.doesNotThrow(() =>
+    failedRequest.emit("error", new Error("connect ECONNREFUSED")),
+  );
 });
 
 test("timeout and cancellation end stalled bodies and stalled DNS", async (t) => {
