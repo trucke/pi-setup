@@ -150,40 +150,6 @@ async function shutdownAndDisposeChildSession(session: AgentSession) {
 
 // --- Event translation ----------------------------------------------------------
 
-function messageRole(msg: unknown): Message["role"] | undefined {
-  const role = (msg as { role?: string } | undefined)?.role;
-  if (role === "user" || role === "assistant" || role === "toolResult")
-    return role;
-  return undefined;
-}
-
-function lastAssistantMessage(
-  session: AgentSession,
-): AssistantMessage | undefined {
-  const messages = session.messages;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (messageRole(msg) === "assistant") return msg as AssistantMessage;
-  }
-  return undefined;
-}
-
-/** Final assistant text output (last assistant message with text), v1 semantics. */
-function finalOutput(session: AgentSession): string {
-  const messages = session.messages;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (messageRole(msg) !== "assistant") continue;
-    const text = (msg as AssistantMessage).content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n")
-      .trim();
-    if (text) return text;
-  }
-  return "";
-}
-
 function safeJson(value: unknown): string | undefined {
   try {
     const text = JSON.stringify(value);
@@ -328,9 +294,20 @@ const makePiSession = (
       closed: false,
       /** prompt() rejection for the active run; folded into RunSettled. */
       runError: undefined as string | undefined,
+      /** Recovery can omit responses from session.messages, but their outcome
+       * and partial output must survive until a new response supersedes them. */
+      lastAssistant: undefined as AssistantMessage | undefined,
+      output: "",
       /** One terminal event per run: lifecycle, prompt-rejection, and abort
        * fallbacks can all race to settle; the first wins. */
       settled: false,
+    };
+
+    const resetRun = () => {
+      state.runError = undefined;
+      state.lastAssistant = undefined;
+      state.output = "";
+      state.settled = false;
     };
 
     const events = yield* Queue.make<SubagentEvent, Cause.Done>();
@@ -343,7 +320,7 @@ const makePiSession = (
 
     const activeModel = (): Model<any> | undefined => {
       const sessionModel = session.model;
-      const last = lastAssistantMessage(session);
+      const last = state.lastAssistant;
       if (!last) return sessionModel;
       if (
         sessionModel &&
@@ -389,8 +366,8 @@ const makePiSession = (
     const settle = () => {
       if (state.settled) return;
       state.settled = true;
-      const last = lastAssistantMessage(session);
-      const partialText = finalOutput(session) || undefined;
+      const last = state.lastAssistant;
+      const partialText = state.output || undefined;
       if (last?.stopReason === "aborted") {
         emit({
           _tag: "RunSettled",
@@ -402,7 +379,9 @@ const makePiSession = (
         state.runError ??
         (last?.stopReason === "error"
           ? (last.errorMessage ?? "Run failed")
-          : undefined);
+          : !last
+            ? "Run ended without an assistant response"
+            : undefined);
       if (errorText !== undefined) {
         emit({
           _tag: "RunSettled",
@@ -416,7 +395,7 @@ const makePiSession = (
       }
       emit({
         _tag: "RunSettled",
-        outcome: { _tag: "Completed", finalText: finalOutput(session) },
+        outcome: { _tag: "Completed", finalText: state.output },
       });
     };
 
@@ -424,6 +403,9 @@ const makePiSession = (
       if (state.closed) return;
       switch (event.type) {
         case "agent_start":
+          // A retry is part of the same run. Only reset here for a fresh run
+          // started by an extension after settlement, rather than by startRun().
+          if (state.settled) resetRun();
           // Extensions may register tools between runs; guard new ones too.
           toolTimeout.apply(session);
           state.settled = false;
@@ -447,14 +429,20 @@ const makePiSession = (
           break;
         }
         case "message_end": {
-          const role = messageRole(event.message);
-          if (role === "user") {
-            const text = userText(event.message as Message);
+          if (event.message.role === "user") {
+            const text = userText(event.message);
             if (text.trim()) emit({ _tag: "UserMessage", text });
-          } else if (role === "assistant") {
+          } else if (event.message.role === "assistant") {
+            state.lastAssistant = event.message;
+            const text = event.message.content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n")
+              .trim();
+            if (text) state.output = text;
             emit({
               _tag: "AssistantMessage",
-              parts: assistantParts(event.message as AssistantMessage),
+              parts: assistantParts(event.message),
             });
             emitUsage();
             emit({ _tag: "MetaChanged", meta: currentMeta() });
@@ -528,8 +516,7 @@ const makePiSession = (
 
     /** Start a fresh run (v1 manager.run): fire-and-forget, errors -> events. */
     const startRun = (text: string) => {
-      state.runError = undefined;
-      state.settled = false;
+      resetRun();
       emit({ _tag: "RunStarted" });
       void session.prompt(text).catch((error) => {
         state.runError = boundedError(error);

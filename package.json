@@ -10,9 +10,9 @@
     "turndown": "^7.2.4"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.86.1",
-    "@earendil-works/pi-coding-agent": "^0.86.1",
-    "@earendil-works/pi-tui": "^0.86.1",
+    "@earendil-works/pi-ai": "^0.87.0",
+    "@earendil-works/pi-coding-agent": "^0.87.0",
+    "@earendil-works/pi-tui": "^0.87.0",
     "@effect/vitest": "4.0.0-beta.98",
     "@types/node": "^26.1.1",
     "@types/turndown": "^5.0.6",
@@ -36,7 +36,7 @@
     "typebox": "*"
   },
   "name": "@trucke/pi-setup",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "packageManager": "pnpm@11.24.0",
   "keywords": [
     "pi-package"
