@@ -253,9 +253,8 @@ These are the "leave it mostly plain" cases.
 - `ask-user` is a TUI popup that resolves a Promise when the user picks. That Promise already
   models the one async thing. Effect adds nothing; if you want uniformity, wrap the final
   await in `Effect.tryPromise` at the boundary and stop there. Do **not** build a service.
-- `ui` is a renderer and event bookkeeper driven by `pi.on(...)` plus the VCS and
-  Firecrawl channels in `shared/dashboard-state.ts`. State counting and formatting stay
-  synchronous TypeScript.
+- `ui` is a renderer and event bookkeeper driven by `pi.on(...)` and VCS state
+  updates. State counting and formatting stay synchronous TypeScript.
 
 The migration bar for these: adopt the toolchain (§1) so they typecheck under TS7 + the
 Effect LS, and only touch runtime code that has a real async/resource concern.

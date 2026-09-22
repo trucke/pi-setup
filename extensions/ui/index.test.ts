@@ -7,7 +7,6 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { FIRECRAWL_USAGE_CHANNEL } from "../shared/dashboard-state.ts";
 import ui from "./index.ts";
 import type { VcsInfoState } from "./vcs/state.ts";
 
@@ -16,7 +15,6 @@ function createFooter(initialVcsState?: VcsInfoState) {
     string,
     (event: Record<string, unknown>, ctx: ExtensionContext) => void
   >();
-  const eventHandlers = new Map<string, (value: unknown) => void>();
   let updateVcs: ((state: VcsInfoState) => void) | undefined;
   let footerFactory:
     | ((
@@ -36,15 +34,7 @@ function createFooter(initialVcsState?: VcsInfoState) {
     ) {
       handlers.set(name, handler);
     },
-    events: {
-      on(name: string, handler: (value: unknown) => void) {
-        eventHandlers.set(name, handler);
-        return () => eventHandlers.delete(name);
-      },
-      emit(name: string, value: unknown) {
-        eventHandlers.get(name)?.(value);
-      },
-    },
+    events: { emit() {} },
   } as unknown as ExtensionAPI;
 
   const ctx = {
@@ -94,7 +84,6 @@ function createFooter(initialVcsState?: VcsInfoState) {
   } as unknown as ReadonlyFooterDataProvider);
 
   return {
-    emit: (name: string, value: unknown) => eventHandlers.get(name)?.(value),
     setVcs: (state: VcsInfoState) => updateVcs?.(state),
     render: (width: number) => footer.render(width),
   };
@@ -108,39 +97,22 @@ const vcsState = {
   pullRequest: null,
 };
 
-test("renders a stable one-line dashboard with conditional usage", () => {
+test("renders a stable one-line dashboard with VCS and model context", () => {
   // VCS state arrives before session_start and must survive it.
   const footer = createFooter(vcsState);
-
-  const beforeFirecrawl = footer.render(160);
-  assert.equal(beforeFirecrawl.length, 1);
-  assert.match(beforeFirecrawl[0] ?? "", /\/tmp\/project/);
-  assert.match(beforeFirecrawl[0] ?? "", /jj change-123/);
-  assert.match(beforeFirecrawl[0] ?? "", /3 files changed/);
-  assert.match(beforeFirecrawl[0] ?? "", /opencode\/claude-fable-5/);
-  assert.match(beforeFirecrawl[0] ?? "", /medium · ctx 38% · \$1\.23/);
-  assert.doesNotMatch(beforeFirecrawl[0] ?? "", /Dev|tok\/s/);
-
-  footer.emit(FIRECRAWL_USAGE_CHANNEL, {
-    unitsUsed: 4,
-    anonymousUnits: 2,
-    accountCredits: 2,
-    budget: 20,
-    unlimited: false,
-  });
-  assert.match(footer.render(200)[0] ?? "", /Dev 4\/20 est \(2 anon, 2 acct\)/);
+  const lines = footer.render(160);
+  assert.equal(lines.length, 1);
+  const line = lines[0] ?? "";
+  assert.match(line, /\/tmp\/project/);
+  assert.match(line, /jj change-123/);
+  assert.match(line, /3 files changed/);
+  assert.match(line, /opencode\/claude-fable-5/);
+  assert.match(line, /medium · ctx 38% · \$1\.23/);
 });
 
 test("compacts low-priority fields instead of splitting the line", () => {
   const footer = createFooter();
   footer.setVcs(vcsState);
-  footer.emit(FIRECRAWL_USAGE_CHANNEL, {
-    unitsUsed: 4,
-    anonymousUnits: 4,
-    accountCredits: 0,
-    budget: 20,
-    unlimited: false,
-  });
 
   const [line = ""] = footer.render(50);
   assert.ok(visibleWidth(line) <= 50);
@@ -149,5 +121,5 @@ test("compacts low-priority fields instead of splitting the line", () => {
   assert.match(line, /38%/);
   assert.match(line, /\$1\.23/);
   assert.match(line, /\+3/);
-  assert.doesNotMatch(line, /\/tmp\/project|opencode\/|change-123|Dev/);
+  assert.doesNotMatch(line, /\/tmp\/project|opencode\/|change-123/);
 });

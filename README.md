@@ -8,7 +8,7 @@ Personal [Pi](https://pi.dev/) package based on
 Install a reviewed release globally:
 
 ```sh
-pi install git:github.com/trucke/pi-setup@v0.5.0
+pi install git:github.com/trucke/pi-setup@v0.5.1
 ```
 
 Pi manages the checkout and runtime dependencies. Do not clone this repository
@@ -91,7 +91,7 @@ the process environment before starting Pi. It sends URLs to third parties;
 use it only when disclosure is appropriate, never to bypass declined consent.
 This setting is not needed for consent-based recovery.
 
-### Developer Index and budget
+### Developer Index
 
 `developer-search` searches library docs, upstream issues, merged pull requests
 and READMEs through Firecrawl's Developer Index. Scope queries with `types`,
@@ -100,13 +100,6 @@ and READMEs through Firecrawl's Developer Index. Scope queries with `types`,
 Only this tool reads optional `FIRECRAWL_API_KEY`, first from the process
 environment, then from `~/.pi/agent/.env`. A configured key uses account limits.
 See [`.env.example`](.env.example). Never commit credentials.
-
-The default session budget is 20 estimated units, at 2 units per 10 requested
-results, rounded up. Dispatched failures count; requests rejected before
-dispatch do not. Anonymous usage is tracked separately from estimated account
-credits. These are estimates, not billing receipts. Hosted MCP calls are not
-included. Interactive sessions can approve budget increases; headless sessions
-block overruns. Usage and approvals survive session reloads.
 
 ## Subagents
 

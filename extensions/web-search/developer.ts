@@ -19,8 +19,8 @@ export const DEVELOPER_SEARCH_URL =
 export const DEVELOPER_SEARCH_TIMEOUT_MS = 60_000;
 
 export const DEFAULT_DEVELOPER_SEARCH_LIMIT = 10;
-/** Upstream `k` allows 100; 20 keeps one call within the session budget scale. */
-export const MAX_DEVELOPER_SEARCH_LIMIT = 20;
+/** Matches the upstream `k` limit. */
+export const MAX_DEVELOPER_SEARCH_LIMIT = 100;
 const MAX_PASSAGES_PER_RESULT = 5;
 
 /** Bounds persisted evidence even if the upstream response exceeds the request. */
@@ -85,7 +85,7 @@ export interface DeveloperSearchOptions {
 
 /**
  * Builds the Developer Index request. The model-facing `limit` maps to
- * upstream `k`, capped at 20 to keep one call within the session budget scale.
+ * upstream `k` with the same result limit.
  * Optional filters are omitted so upstream defaults (all types, one passage)
  * stay authoritative.
  */
@@ -163,7 +163,6 @@ function developerSearchRequest(
   body: unknown,
   apiKey: string | undefined,
   transport: DeveloperSearchTransport,
-  onDispatch?: () => void,
 ): Effect.Effect<DeveloperApiResponse, DeveloperSearchError> {
   const doFetch = transport.fetch ?? fetch;
   const requestTimeoutMs = transport.timeoutMs ?? DEVELOPER_SEARCH_TIMEOUT_MS;
@@ -175,7 +174,6 @@ function developerSearchRequest(
 
       try {
         combined.throwIfAborted();
-        onDispatch?.();
         const response = await doFetch(DEVELOPER_SEARCH_URL, {
           method: "POST",
           headers: {
@@ -394,13 +392,12 @@ async function developerSearch(
   options: DeveloperSearchOptions,
   signal?: AbortSignal,
   transport: DeveloperSearchTransport = {},
-  onDispatch?: () => void,
 ): Promise<DeveloperSearchDetails> {
   if (signal?.aborted) throw new Error("Firecrawl developer search cancelled");
   const request = buildDeveloperSearchRequest(options);
   const program = Effect.sync(getApiKey).pipe(
     Effect.flatMap((apiKey) =>
-      developerSearchRequest(request, apiKey, transport, onDispatch),
+      developerSearchRequest(request, apiKey, transport),
     ),
     Effect.map(developerSearchDetails),
   );
@@ -420,12 +417,11 @@ async function developerSearch(
 export interface DeveloperSearchToolDependencies {
   getApiKey: OptionalFirecrawlKeyProvider;
   transport?: DeveloperSearchTransport;
-  onDispatch?: (toolCallId: string, auth: "anonymous" | "account") => void;
 }
 
 export function registerDeveloperSearchTool(
   pi: ExtensionAPI,
-  { getApiKey, transport, onDispatch }: DeveloperSearchToolDependencies,
+  { getApiKey, transport }: DeveloperSearchToolDependencies,
 ) {
   pi.registerTool({
     name: "developer-search",
@@ -472,7 +468,7 @@ export function registerDeveloperSearchTool(
         }),
       ),
     }),
-    execute: async (toolCallId, params, signal, onUpdate) => {
+    execute: async (_toolCallId, params, signal, onUpdate) => {
       if (signal?.aborted)
         throw new Error("Firecrawl developer search cancelled");
       onUpdate?.({
@@ -498,7 +494,6 @@ export function registerDeveloperSearchTool(
         },
         signal,
         transport,
-        () => onDispatch?.(toolCallId, apiKey ? "account" : "anonymous"),
       );
 
       const output = await boundedOutput(

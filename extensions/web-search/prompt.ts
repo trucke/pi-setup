@@ -7,7 +7,7 @@ export const WEB_ROUTING_GUIDELINES = [
 ];
 
 export const DEVELOPER_SEARCH_TOOL_DESCRIPTION =
-  "Search Firecrawl's Developer Index of library documentation, GitHub issues, merged pull requests and READMEs, returning ranked passages and coverage health. Keyless by default; optional FIRECRAWL_API_KEY uses account limits. The local session budget estimates 2 units per 10 requested results, rounded up; anonymous units are not billed account credits. Inline output is limited to 16KB or 400 lines, with complete truncated output saved to a temp file; use read for more.";
+  "Search Firecrawl's Developer Index of library documentation, GitHub issues, merged pull requests and READMEs, returning ranked passages and coverage health. Keyless by default; optional FIRECRAWL_API_KEY uses account limits. Inline output is limited to 16KB or 400 lines, with complete truncated output saved to a temp file; use read for more.";
 export const DEVELOPER_SEARCH_PROMPT_SNIPPET =
   "Search external library docs, issues, merged PRs and READMEs via the Developer Index.";
 export const DEVELOPER_SEARCH_PROMPT_GUIDELINES = [
@@ -18,8 +18,7 @@ export const DEVELOPER_SEARCH_PROMPT_GUIDELINES = [
 export const DEVELOPER_SEARCH_PARAMETER_DESCRIPTIONS = {
   query:
     "Developer query: an API question, error message or feature/bug description.",
-  limit:
-    "Maximum results. Default 10 (2 estimated budget units); maximum 20 (4 units).",
+  limit: "Maximum results. Default 10; maximum 100.",
   types: "Restrict to doc, issue, pull_request or readme. Default all types.",
   repos:
     "Repository slugs like owner/name. Scopes issues, pull requests and READMEs. Maximum 20.",

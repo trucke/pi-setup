@@ -42,9 +42,8 @@ function developerTool(
   return tool;
 }
 
-test("developer search is keyless by default and accounts only for dispatched requests", async () => {
+test("developer search supports optional authentication and validates before dispatch", async () => {
   for (const apiKey of [undefined, "fc-key"]) {
-    const dispatched: string[] = [];
     let requests = 0;
     const tool = developerTool(
       async (url, init) => {
@@ -69,7 +68,7 @@ test("developer search is keyless by default and accounts only for dispatched re
           ],
         });
       },
-      { getApiKey: () => apiKey, onDispatch: (id) => dispatched.push(id) },
+      { getApiKey: () => apiKey },
     );
     await assert.rejects(
       tool.execute("invalid", { query: "q", types: ["doc"], repos: ["a/b"] }),
@@ -78,13 +77,11 @@ test("developer search is keyless by default and accounts only for dispatched re
       tool.execute("cancelled", { query: "q" }, AbortSignal.abort()),
     );
     assert.equal(requests, 0);
-    assert.deepEqual(dispatched, []);
     const result = await tool.execute("sent", {
       query: "hydration",
       types: ["issue"],
     });
     assert.equal(requests, 1);
-    assert.deepEqual(dispatched, ["sent"]);
     assert.equal(result.details.auth, apiKey ? "account" : "anonymous");
     assert.match(result.content[0].text, /Relevant \*\*passage\*\*/);
   }

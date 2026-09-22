@@ -11,12 +11,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import {
-  emptyFirecrawlUsageState,
-  FIRECRAWL_USAGE_CHANNEL,
-  REFRESH_CHANNEL,
-  isFirecrawlUsageState,
-} from "../shared/dashboard-state.ts";
+import { REFRESH_CHANNEL } from "../shared/dashboard-state.ts";
 import { fitFooterLine, type FooterSegment } from "./footer-layout.ts";
 import { registerVcsInfo } from "./vcs/index.ts";
 import { emptyVcsInfoState, type VcsInfoState } from "./vcs/state.ts";
@@ -157,7 +152,6 @@ export default function ui(
     cost: 0,
   };
   let vcsInfo = emptyVcsInfoState();
-  let firecrawlUsage = emptyFirecrawlUsageState();
   let requestRender: (() => void) | undefined;
 
   function refreshModelInfo(ctx: ExtensionContext) {
@@ -189,24 +183,6 @@ export default function ui(
     vcsInfo = value;
     requestRender?.();
   });
-
-  const stopFirecrawlUsageListener = pi.events.on(
-    FIRECRAWL_USAGE_CHANNEL,
-    (value) => {
-      if (!isFirecrawlUsageState(value)) return;
-      if (
-        firecrawlUsage.unitsUsed === value.unitsUsed &&
-        firecrawlUsage.anonymousUnits === value.anonymousUnits &&
-        firecrawlUsage.accountCredits === value.accountCredits &&
-        firecrawlUsage.budget === value.budget &&
-        firecrawlUsage.unlimited === value.unlimited
-      ) {
-        return;
-      }
-      firecrawlUsage = value;
-      requestRender?.();
-    },
-  );
 
   function install(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
@@ -328,23 +304,6 @@ export default function ui(
               dropAt: 80,
             });
           }
-          if (firecrawlUsage.unitsUsed > 0) {
-            const budget = firecrawlUsage.unlimited
-              ? "∞"
-              : firecrawlUsage.budget;
-            right.push({
-              text: theme.fg(
-                "muted",
-                `Dev ${firecrawlUsage.unitsUsed}/${budget} est (${firecrawlUsage.anonymousUnits} anon, ${firecrawlUsage.accountCredits} acct)`,
-              ),
-              compactText: theme.fg(
-                "muted",
-                `Dev ${firecrawlUsage.unitsUsed}/${budget} est`,
-              ),
-              compactAt: 5,
-              dropAt: 10,
-            });
-          }
 
           const lines = [fitFooterLine(left, right, width, separator)];
           const statusText = Array.from(statuses.entries())
@@ -382,7 +341,6 @@ export default function ui(
   pi.on("agent_settled", (_event, ctx) => refreshModelInfo(ctx));
 
   pi.on("session_shutdown", (_event, ctx) => {
-    stopFirecrawlUsageListener();
     requestRender = undefined;
     if (ctx.mode === "tui") {
       ctx.ui.setHeader(undefined);
