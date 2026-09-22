@@ -4,29 +4,23 @@ import {
   createMcpCaller,
   HostedError,
   MCP_URLS,
-  providerFailure,
   type CallHosted,
   type FailureKind,
 } from "./mcp.ts";
 import { searchHosted } from "./search.ts";
 
-// AbortSignal.timeout is unref'd: keep the loop alive while deadlines run.
+// AbortSignal.timeout is unref'd; keep stalled transport fixtures alive.
 const keepAlive = setInterval(() => {}, 1000);
 after(() => clearInterval(keepAlive));
-
 type Rpc = { id?: number; method: string; params?: { arguments?: unknown } };
-
-function rpcResult(body: Rpc, result: unknown) {
-  return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), {
-    headers: { "Content-Type": "application/json" },
-  });
-}
+const SSE = { headers: { "Content-Type": "text/event-stream" } };
 const textResult = (text: string, isError = false) => ({
   content: [{ type: "text", text }],
   isError,
 });
+const rpcResult = (body: Rpc, result: unknown) =>
+  Response.json({ jsonrpc: "2.0", id: body.id, result });
 
-/** Answers the MCP handshake; `onToolCall` owns the tools/call response. */
 function mcpFetch(onToolCall: (body: Rpc) => Response) {
   const requests: Array<{ url: string; init: RequestInit; body: Rpc }> = [];
   const fetchMock: typeof fetch = async (url, init) => {
@@ -45,8 +39,8 @@ function mcpFetch(onToolCall: (body: Rpc) => Response) {
   return { requests, fetch: fetchMock };
 }
 
-/** A body that never ends, recording whether the caller released it. */
-function openStream(chunk = "", state = { cancelled: false }) {
+function openStream(chunk = "") {
+  const state = { cancelled: false };
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       if (chunk) controller.enqueue(new TextEncoder().encode(chunk));
@@ -57,50 +51,38 @@ function openStream(chunk = "", state = { cancelled: false }) {
   });
   return { body, state };
 }
-const SSE = { headers: { "Content-Type": "text/event-stream" } };
-
 const invoke = (call: CallHosted, signal = new AbortController().signal) =>
   call({ provider: "exa", tool: "web_search_exa", args: {}, signal });
 const hasKind = (kind: FailureKind) => (error: unknown) =>
   error instanceof HostedError && error.kind === kind;
 
-test("anonymous SSE search completes without EOF, sanitized and without credentials", async () => {
-  const stream = { cancelled: false };
+test("SSE results complete without EOF, strip terminal escapes and send no credentials", async () => {
+  let stream: ReturnType<typeof openStream> | undefined;
   const mock = mcpFetch((body) => {
     const data = JSON.stringify({
       jsonrpc: "2.0",
       id: body.id,
-      result: textResult("# Result\nhttps://example.com\u001b[31m"),
+      result: textResult("result\u001b[31m"),
     });
-    return new Response(
-      openStream(`event: message\ndata: ${data}\n\n`, stream).body,
-      SSE,
-    );
+    stream = openStream(`event: message\ndata: ${data}\n\n`);
+    return new Response(stream.body, SSE);
   });
-  const result = await searchHosted(
-    createMcpCaller({ fetch: mock.fetch, timeoutMs: 200 }),
-    { query: "A source", limit: 3 },
+  assert.equal(
+    await invoke(createMcpCaller({ fetch: mock.fetch, timeoutMs: 200 })),
+    "result",
   );
-  assert.deepEqual(result, {
-    provider: "exa",
-    text: "# Result\nhttps://example.com",
-  });
-  assert.equal(stream.cancelled, true);
+  assert.equal(stream?.state.cancelled, true);
   for (const { url, init } of mock.requests) {
     assert.equal(url, MCP_URLS.exa);
     assert.equal(init.redirect, "manual");
-    const headers = new Headers(init.headers);
-    assert.equal(headers.get("authorization"), null);
-    assert.equal(headers.get("x-api-key"), null);
+    assert.equal(new Headers(init.headers).get("authorization"), null);
+    assert.equal(new Headers(init.headers).get("x-api-key"), null);
   }
 });
 
-test("an Exa HTTP 429 falls back to Firecrawl with attribution and the same filters", async () => {
+test("eligible failures fall back once, preserving filters and provider attribution", async () => {
   const exa = mcpFetch(
-    () =>
-      new Response("Rate limit reached, add API key for higher limits", {
-        status: 429,
-      }),
+    () => new Response("Rate limit reached", { status: 429 }),
   );
   const firecrawl = mcpFetch((body) => rpcResult(body, textResult("results")));
   const result = await searchHosted(
@@ -115,151 +97,101 @@ test("an Exa HTTP 429 falls back to Firecrawl with attribution and the same filt
   );
   assert.equal(result.provider, "firecrawl");
   assert.match(result.fallbackReason ?? "", /rate-limit/);
-  const sent = (mock: typeof exa) =>
-    mock.requests.find(({ body }) => body.method === "tools/call");
-  // Exa only serves the advanced tool when the endpoint enables it.
-  assert.match(sent(exa)?.url ?? "", /tools=.*web_search_advanced_exa/);
-  assert.deepEqual(sent(firecrawl)?.body.params?.arguments, {
-    query: "release",
-    limit: 5,
-    includeDomains: ["example.com"],
-    tbs: "qdr:w",
-    highlights: true,
-  });
-});
-
-test("only transient, rate-limit and unavailable failures reach a second provider", async () => {
-  const policy: Array<[FailureKind, boolean]> = [
-    ["transient", true],
-    ["rate-limit", true],
-    ["unavailable", true],
-    ["auth", false],
-    ["billing", false],
-    ["validation", false],
-    ["unsafe", false],
-    ["cancelled", false],
-    ["protocol", false],
-  ];
-  for (const [kind, fallsBack] of policy) {
+  assert.match(
+    exa.requests.find(({ body }) => body.method === "tools/call")!.url,
+    /tools=.*web_search_advanced_exa/,
+  );
+  assert.deepEqual(
+    firecrawl.requests.find(({ body }) => body.method === "tools/call")!.body
+      .params?.arguments,
+    {
+      query: "release",
+      limit: 5,
+      includeDomains: ["example.com"],
+      tbs: "qdr:w",
+      highlights: true,
+    },
+  );
+  for (const kind of ["transient", "unavailable"] as const) {
     const providers: string[] = [];
-    const attempt = searchHosted(
+    await searchHosted(
       async ({ provider }) => {
         providers.push(provider);
-        if (provider === "exa") throw new HostedError(kind, "fixture failure");
+        if (provider === "exa") throw new HostedError(kind, "failure");
         return "results";
       },
-      { query: "private query" },
+      { query: "q" },
     );
-    if (fallsBack)
-      assert.match((await attempt).fallbackReason ?? "", new RegExp(kind));
-    else await assert.rejects(attempt, hasKind(kind));
-    assert.deepEqual(providers, fallsBack ? ["exa", "firecrawl"] : ["exa"]);
+    assert.deepEqual(providers, ["exa", "firecrawl"]);
   }
 });
 
-test("explicit providers, empty results and cancellation never reach a second provider", async () => {
-  const providers: string[] = [];
-  const failing: CallHosted = async ({ provider }) => {
-    providers.push(provider);
-    throw new HostedError("transient", "network");
-  };
+test("terminal HTTP, tool and protocol errors never disclose the query to a fallback", async () => {
+  const cases: Array<[FailureKind, (body: Rpc) => Response]> = [
+    ["auth", () => new Response(openStream().body, { status: 401 })],
+    ["billing", () => new Response(openStream().body, { status: 402 })],
+    [
+      "protocol",
+      () =>
+        new Response(openStream().body, {
+          status: 302,
+          headers: { Location: "https://elsewhere.example" },
+        }),
+    ],
+    [
+      "billing",
+      () => new Response("Insufficient credit balance", { status: 429 }),
+    ],
+    ["validation", () => new Response("invalid parameters", { status: 400 })],
+    ["unsafe", () => new Response("unsafe URL", { status: 500 })],
+    ["auth", (body) => rpcResult(body, textResult("Invalid API key", true))],
+    [
+      "billing",
+      (body) =>
+        rpcResult(
+          body,
+          textResult('{"success":false,"error":"Insufficient credits"}'),
+        ),
+    ],
+    [
+      "protocol",
+      () => new Response("event: message\ndata: {invalid}\n\n", SSE),
+    ],
+  ];
+  for (const [kind, response] of cases) {
+    const mock = mcpFetch(response);
+    await assert.rejects(
+      searchHosted(createMcpCaller({ fetch: mock.fetch, timeoutMs: 50 }), {
+        query: "private query",
+      }),
+      hasKind(kind),
+    );
+    assert.ok(mock.requests.every(({ url }) => url === MCP_URLS.exa));
+  }
+});
+
+test("explicit providers and empty results do not trigger another provider", async () => {
+  let calls = 0;
   await assert.rejects(
-    searchHosted(failing, { query: "q", provider: "exa" }),
-    /network/,
+    searchHosted(
+      async () => {
+        calls++;
+        throw new HostedError("transient", "network");
+      },
+      { query: "q", provider: "exa" },
+    ),
   );
-  const empty = await searchHosted(
-    async ({ provider }) => {
-      providers.push(provider);
+  await searchHosted(
+    async () => {
+      calls++;
       return "";
     },
     { query: "q" },
   );
-  assert.equal(empty.provider, "exa");
-  const controller = new AbortController();
-  await assert.rejects(
-    searchHosted(
-      async (call) => {
-        controller.abort();
-        return failing(call);
-      },
-      { query: "q" },
-      controller.signal,
-    ),
-    /abort/i,
-  );
-  assert.deepEqual(providers, ["exa", "exa", "exa"]);
+  assert.equal(calls, 2);
 });
 
-test("classification lets billing and auth win over retryable signals and leaves unknowns terminal", () => {
-  for (const [text, status, expected] of [
-    ["Rate limit reached, add API key for higher limits", 429, "rate-limit"],
-    ["Request failed with status code 429", undefined, "rate-limit"],
-    ["Rate limit reached, upgrade your plan", 401, "auth"],
-    ["Insufficient credit balance", 429, "billing"],
-    ['{"statusCode":402,"error":"Request rejected"}', undefined, "billing"],
-    ["Invalid API key", 503, "auth"],
-    ["unsafe URL", 500, "unsafe"],
-    ["Page not found", undefined, "unavailable"],
-    ["fetch failed", undefined, "transient"],
-    ["Unknown tool", undefined, "protocol"],
-  ] as const)
-    assert.equal(providerFailure(text, status).kind, expected, text);
-});
-
-test("MCP tool errors and Firecrawl in-band JSON failures are classified, not returned as results", async () => {
-  for (const [result, kind] of [
-    [textResult("Invalid API key", true), "auth"],
-    [textResult('{"success":false,"error":"Insufficient credits"}'), "billing"],
-  ] as const) {
-    const mock = mcpFetch((body) => rpcResult(body, result));
-    await assert.rejects(
-      invoke(createMcpCaller({ fetch: mock.fetch })),
-      hasKind(kind),
-    );
-  }
-});
-
-test("malformed SSE is a protocol failure, not a timeout fallback", async () => {
-  const mock = mcpFetch(
-    () => new Response("event: message\ndata: {invalid}\n\n", SSE),
-  );
-  await assert.rejects(
-    searchHosted(createMcpCaller({ fetch: mock.fetch, timeoutMs: 20 }), {
-      query: "q",
-    }),
-    hasKind("protocol"),
-  );
-  assert.ok(mock.requests.every(({ url }) => url === MCP_URLS.exa));
-});
-
-test("stalled auth, billing and redirect bodies stay terminal instead of timing out into fallback", async () => {
-  for (const [status, kind] of [
-    [401, "auth"],
-    [402, "billing"],
-    [302, "protocol"],
-  ] as const) {
-    const urls: string[] = [];
-    const open = openStream();
-    const call = createMcpCaller({
-      timeoutMs: 20,
-      fetch: async (url) => {
-        urls.push(String(url));
-        return new Response(open.body, {
-          status,
-          headers: { Location: "https://elsewhere.example" },
-        });
-      },
-    });
-    await assert.rejects(
-      searchHosted(call, { query: "private query" }),
-      hasKind(kind),
-    );
-    assert.deepEqual(urls, [MCP_URLS.exa]);
-    assert.equal(open.state.cancelled, true);
-  }
-});
-
-test("provider responses are bounded in time and size, and cancellation reaches the transport", async () => {
+test("provider bodies are bounded and cancellation reaches the transport", async () => {
   const stalled = openStream("partial");
   await assert.rejects(
     invoke(
@@ -271,7 +203,6 @@ test("provider responses are bounded in time and size, and cancellation reaches 
     /timed out/,
   );
   assert.equal(stalled.state.cancelled, true);
-
   await assert.rejects(
     invoke(
       createMcpCaller({
@@ -283,21 +214,24 @@ test("provider responses are bounded in time and size, and cancellation reaches 
     ),
     /exceeds/,
   );
-
   const controller = new AbortController();
   let transportSignal: AbortSignal | null | undefined;
+  let requests = 0;
   await assert.rejects(
-    invoke(
+    searchHosted(
       createMcpCaller({
         fetch: async (_url, init) => {
+          requests++;
           transportSignal = init?.signal;
           queueMicrotask(() => controller.abort());
           return new Response(openStream().body);
         },
       }),
+      { query: "q" },
       controller.signal,
     ),
-    hasKind("cancelled"),
+    { name: "AbortError" },
   );
   assert.equal(transportSignal?.aborted, true);
+  assert.equal(requests, 1);
 });

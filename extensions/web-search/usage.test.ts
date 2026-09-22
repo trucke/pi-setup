@@ -19,10 +19,9 @@ type Handler = (
   event: Event,
   ctx: ExtensionContext,
 ) => Promise<unknown> | unknown;
-function harness(account = false) {
+function harness() {
   const handlers = new Map<string, Handler>();
   const published: unknown[] = [];
-  const entries: SessionEntry[] = [];
   const pi = {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
     appendEntry: () => {},
@@ -33,15 +32,11 @@ function harness(account = false) {
       },
     },
   } as unknown as ExtensionAPI;
-  const ctx = {
-    hasUI: false,
-    sessionManager: { getEntries: () => entries },
-  } as unknown as ExtensionContext;
+  const ctx = { hasUI: false } as ExtensionContext;
   const dispatch = registerUsageTracking(pi);
   return {
     published,
-    entries,
-    dispatch: (id: string) => dispatch(id, account ? "account" : "anonymous"),
+    dispatch,
     async emit(name: string, event: Event) {
       return handlers.get(name)?.(event, ctx);
     },
@@ -53,15 +48,20 @@ const call = (id: string, limit = 10): Event => ({
   input: { limit },
 });
 
-test("reserves concurrent attempts, blocks headless overruns and separates anonymous/account usage", async () => {
+test("reserves concurrent attempts, releases unsent calls and accounts dispatched calls once", async () => {
   for (const account of [false, true]) {
-    const h = harness(account);
+    const h = harness();
+    await h.emit("tool_call", call("invalid", 20));
+    assert.equal(
+      await h.emit("tool_result", { ...call("invalid"), isError: true }),
+      undefined,
+    );
     for (let i = 0; i < 5; i++)
       assert.equal(await h.emit("tool_call", call(`${i}`, 20)), undefined);
     const blocked = await h.emit("tool_call", call("blocked"));
     assert.equal((blocked as { block: boolean }).block, true);
     await h.emit("tool_result", { ...call("blocked"), isError: true });
-    h.dispatch("0");
+    h.dispatch("0", account ? "account" : "anonymous");
     const result = await h.emit("tool_result", {
       ...call("0", 20),
       isError: true,
@@ -80,24 +80,6 @@ test("reserves concurrent attempts, blocks headless overruns and separates anony
       unlimited: false,
     });
   }
-});
-
-test("unsubmitted validation failures and cancellation release reservations without usage", async () => {
-  const h = harness();
-  await h.emit("tool_call", call("invalid", 20));
-  assert.equal(
-    await h.emit("tool_result", { ...call("invalid"), isError: true }),
-    undefined,
-  );
-  for (let i = 0; i < 5; i++)
-    assert.equal(await h.emit("tool_call", call(`${i}`, 20)), undefined);
-  assert.deepEqual(h.published.at(-1), {
-    unitsUsed: 0,
-    anonymousUnits: 0,
-    accountCredits: 0,
-    budget: 20,
-    unlimited: false,
-  });
 });
 
 test("restores attributed attempts across branches, without guessing old billing", () => {

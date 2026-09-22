@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { FetchError } from "./fetch-error.ts";
 
 function parseIpv4(address: string) {
   if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(address)) return undefined;
@@ -111,10 +112,14 @@ export function isPublicIpAddress(address: string) {
 }
 
 export function validateResolvedAddresses(addresses: readonly string[]) {
-  if (addresses.length === 0) throw new Error("URL hostname did not resolve.");
+  if (addresses.length === 0)
+    throw new FetchError("URL hostname did not resolve.", "network");
   const blocked = addresses.find((address) => !isPublicIpAddress(address));
   if (blocked)
-    throw new Error(`URL resolved to a non-public address: ${blocked}`);
+    throw new FetchError(
+      `URL resolved to a non-public address: ${blocked}`,
+      "unsafe",
+    );
 }
 
 export function parsePublicHttpUrl(input: string, label = "URL") {
@@ -122,14 +127,17 @@ export function parsePublicHttpUrl(input: string, label = "URL") {
   try {
     url = new URL(input);
   } catch {
-    throw new Error(`Invalid ${label}.`);
+    throw new FetchError(`Invalid ${label}.`, "invalid");
   }
 
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`${label} must use HTTP or HTTPS.`);
+    throw new FetchError(`${label} must use HTTP or HTTPS.`, "invalid");
   }
   if (url.username || url.password) {
-    throw new Error(`${label} must not contain embedded credentials.`);
+    throw new FetchError(
+      `${label} must not contain embedded credentials.`,
+      "invalid",
+    );
   }
 
   const hostname = url.hostname
@@ -146,7 +154,10 @@ export function parsePublicHttpUrl(input: string, label = "URL") {
     hostname.endsWith(".home.arpa") ||
     hostname === "metadata.google.internal";
   if (blockedName || (isIP(hostname) && !isPublicIpAddress(hostname))) {
-    throw new Error(`${label} destination is not public: ${url.hostname}`);
+    throw new FetchError(
+      `${label} destination is not public: ${url.hostname}`,
+      "unsafe",
+    );
   }
 
   return url;

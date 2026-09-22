@@ -15,6 +15,9 @@ import {
 } from "../shared/public-http.ts";
 import { isPublicIpAddress, parsePublicHttpUrl } from "../shared/public-url.ts";
 import { fetchLocal } from "./fetch.ts";
+import { FetchError } from "../shared/fetch-error.ts";
+import { fetchHosted, normalizeHostedPage } from "./hosted-fetch.ts";
+import type { HostedCall } from "./mcp.ts";
 
 const PUBLIC = { address: "93.184.216.34", family: 4 };
 const PRIVATE = { address: "10.0.0.1", family: 4 };
@@ -138,7 +141,15 @@ test("blocks private redirects, DNS rebinding and redirect loops without drainin
     );
     await assert.rejects(
       fetchLocal("http://public.example/start", { timeout: 500 }, f.transport),
-      reason,
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.equal(
+          error.category,
+          destination === "/loop" ? "redirect" : "unsafe",
+        );
+        assert.match(error.message, reason);
+        return true;
+      },
     );
     assert.equal(f.calls.length, requests);
   }
@@ -208,6 +219,25 @@ test("request errors reject the fetch without leaving later errors unhandled", a
   );
 });
 
+test("HTTP failures carry structured status; auth failures remain terminal even with stalled bodies", async (t) => {
+  for (const status of [401, 403, 429, 503]) {
+    const f = await fixture(t, (_req, res) => {
+      res.writeHead(status);
+      res.flushHeaders();
+    });
+    await assert.rejects(
+      fetchLocal("http://public.example", { timeout: 100 }, f.transport),
+      (error) => {
+        assert.ok(error instanceof FetchError);
+        assert.equal(error.category, "http");
+        assert.equal(error.status, status);
+        assert.equal(error.recoverable, status !== 401 && status !== 403);
+        return true;
+      },
+    );
+  }
+});
+
 test("timeout and cancellation end stalled bodies and stalled DNS", async (t) => {
   const f = await fixture(t, (_req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain" });
@@ -235,4 +265,42 @@ test("timeout and cancellation end stalled bodies and stalled DNS", async (t) =>
     ),
     /timed out/,
   );
+});
+
+test("hosted fetching validates destinations before disclosure and extracts provider page content", async () => {
+  const calls: HostedCall[] = [];
+  const page = {
+    markdown: "# Page",
+    metadata: {
+      title: "Page",
+      sourceURL: "https://example.com/",
+      scrapeId: "private-id",
+    },
+  };
+  const call = async (input: HostedCall) => {
+    calls.push(input);
+    return JSON.stringify({ success: true, data: page });
+  };
+  const signal = new AbortController().signal;
+  await assert.rejects(
+    fetchHosted(call, { url: "http://127.0.0.1/private" }, signal),
+  );
+  await assert.rejects(
+    fetchHosted(call, { url: "https://private.example" }, signal, async () => [
+      PRIVATE,
+    ]),
+  );
+  assert.equal(calls.length, 0);
+  const result = await fetchHosted(
+    call,
+    { url: "https://example.com", provider: "firecrawl" },
+    signal,
+    async () => [PUBLIC],
+  );
+  assert.equal(calls[0].tool, "firecrawl_scrape");
+  assert.equal(calls[0].args.url, "https://example.com/");
+  assert.deepEqual(normalizeHostedPage(result.provider, result.text), {
+    text: "# Page",
+    details: { title: "Page", url: "https://example.com/" },
+  });
 });

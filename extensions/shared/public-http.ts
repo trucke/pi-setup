@@ -1,8 +1,11 @@
 import { lookup } from "node:dns/promises";
+import { FetchError } from "./fetch-error.ts";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP, type LookupFunction } from "node:net";
 import { parsePublicHttpUrl, validateResolvedAddresses } from "./public-url.ts";
+
+export const PUBLIC_HTTP_USER_AGENT = "pi-web-fetch/1";
 
 /** Stop waiting on non-cancellable work (notably DNS), without leaking listeners. */
 export async function abortable<T>(
@@ -86,7 +89,7 @@ export async function readPublicHttp(
           headers: {
             Accept: options.accept,
             "Accept-Encoding": "identity",
-            "User-Agent": "pi-web-fetch/1",
+            "User-Agent": PUBLIC_HTTP_USER_AGENT,
           },
         },
         resolve,
@@ -100,20 +103,35 @@ export async function readPublicHttp(
       const status = response.statusCode ?? 0;
       if ([301, 302, 303, 307, 308].includes(status)) {
         const location = response.headers.location;
-        if (!location) throw new Error("Redirect has no Location header.");
+        if (!location)
+          throw new FetchError("Redirect has no Location header.", "redirect");
         // Validate before even resolving the next destination.
-        url = parsePublicHttpUrl(new URL(location, url).href);
+        let destination: URL;
+        try {
+          destination = new URL(location, url);
+        } catch {
+          throw new FetchError(
+            "Redirect has an invalid Location header.",
+            "invalid",
+          );
+        }
+        url = parsePublicHttpUrl(destination.href);
         continue;
       }
       if (status < 200 || status >= 300)
-        throw new Error(
+        throw new FetchError(
           `HTTP ${status}. Local fetch did not use a hosted provider.`,
+          "http",
+          status,
         );
       const encoding = response.headers["content-encoding"];
       if (encoding && encoding.toLowerCase() !== "identity")
-        throw new Error(`Unsupported content encoding: ${encoding}`);
+        throw new FetchError(
+          `Unsupported content encoding: ${encoding}`,
+          "content",
+        );
       if (Number(response.headers["content-length"]) > maxBytes)
-        throw new Error(`Response exceeds ${maxBytes} bytes.`);
+        throw new FetchError(`Response exceeds ${maxBytes} bytes.`, "content");
       let bytes = 0;
       const chunks: Buffer[] = [];
       for await (const chunk of response) {
@@ -121,7 +139,10 @@ export async function readPublicHttp(
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         bytes += buffer.length;
         if (bytes > maxBytes)
-          throw new Error(`Response exceeds ${maxBytes} bytes.`);
+          throw new FetchError(
+            `Response exceeds ${maxBytes} bytes.`,
+            "content",
+          );
         chunks.push(buffer);
       }
       signal.throwIfAborted();
@@ -136,7 +157,7 @@ export async function readPublicHttp(
       response.destroy();
     }
   }
-  throw new Error("Fetch exceeded 5 redirects.");
+  throw new FetchError("Fetch exceeded 5 redirects.", "redirect");
 }
 
 /** Bounds provider response bodies before JSON parsing, including stalled streams. */

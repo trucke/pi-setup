@@ -77,7 +77,7 @@ export function registerHostedFetchTool(pi: ExtensionAPI, call: CallHosted) {
     label: "Fetch Web Page via Hosted Provider",
     ...webRenderers("web-fetch-hosted"),
     description:
-      "Explicitly send a public URL to anonymous hosted MCP extraction. Exa first; Firecrawl scrape is used only after transient failures, rate limits or unavailable pages. May return cached content. Hosted services own redirect and browser behavior. This tool is separate from local web-fetch and is never called automatically by it. Inline output is limited to 16KB or 400 lines, with complete returned content saved to a temp file when truncated; use read for more.",
+      "Explicitly send a public URL to anonymous hosted MCP extraction. Exa first; Firecrawl scrape is used only after transient failures, rate limits or unavailable pages. May return cached content. Hosted services own redirect and browser behavior. This explicit tool sends immediately, unlike web-fetch's per-request consented recovery. Never use it to bypass declined recovery consent. Inline output is limited to 16KB or 400 lines, with complete returned content saved to a temp file when truncated; use read for more.",
     promptSnippet:
       "Explicit third-party extraction of a public page, when local fetching is insufficient.",
     parameters: Type.Object({

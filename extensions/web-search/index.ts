@@ -14,7 +14,7 @@ export default function webSearch(pi: ExtensionAPI) {
   const getApiKey = createOptionalFirecrawlKeyProvider();
   const onDispatch = registerUsageTracking(pi);
   registerSearchTool(pi, call);
-  registerFetchTool(pi);
+  registerFetchTool(pi, call);
   registerDeveloperSearchTool(pi, { getApiKey, onDispatch });
   if (process.env.PI_WEB_HOSTED_FETCH === "1")
     registerHostedFetchTool(pi, call);

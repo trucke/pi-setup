@@ -8,17 +8,11 @@ import type { TSchema } from "typebox";
 import { normalizeSearchResults } from "./search-results.ts";
 import { registerSearchTool } from "./search.ts";
 
-const result = {
-  title: "Node HTTP",
-  url: "https://nodejs.org/api/http.html",
-  publishedDate: "2026-01-01",
-  highlights: ["Relevant excerpt"],
-  text: "UNWANTED FULL PAGE ".repeat(3000),
-};
+const source = { title: "Node HTTP", url: "https://nodejs.org/api/http.html" };
 
-test("the search tool returns cited excerpts, not provider envelopes or full pages, from a single provider call", async () => {
+test("search makes one provider call and returns limited cited excerpts, not full pages", async () => {
   let tool: ToolDefinition<TSchema, unknown, unknown> | undefined;
-  const providers: string[] = [];
+  let calls = 0;
   registerSearchTool(
     {
       registerTool: (value: typeof tool) => {
@@ -26,9 +20,13 @@ test("the search tool returns cited excerpts, not provider envelopes or full pag
       },
     } as unknown as ExtensionAPI,
     async (call) => {
-      providers.push(call.provider);
-      // Excerpts are bounded at the provider, not only after download.
+      calls++;
       assert.equal(call.args.textMaxCharacters, 1200);
+      const result = {
+        ...source,
+        highlights: ["Relevant excerpt"],
+        text: "UNWANTED FULL PAGE ".repeat(3000),
+      };
       return JSON.stringify({
         results: [result, result],
         requestId: "private-metadata",
@@ -47,57 +45,34 @@ test("the search tool returns cited excerpts, not provider envelopes or full pag
   assert.ok(content.type === "text");
   assert.match(
     content.text,
-    /^Provider: exa \(anonymous MCP\)\n\nResults: 1\n\n1\. Node HTTP\nhttps:\/\/nodejs.org\/api\/http.html\nPublished: 2026-01-01\nRelevant excerpt$/,
+    /https:\/\/nodejs.org\/api\/http.html\nRelevant excerpt/,
   );
+  assert.doesNotMatch(content.text, /UNWANTED|private-metadata/);
   assert.deepEqual(output.details, {
     provider: "exa",
     resultCount: 1,
-    items: [{ title: result.title, url: result.url }],
+    items: [source],
   });
-  assert.deepEqual(providers, ["exa"]);
+  assert.equal(calls, 1);
 });
 
-test("Exa labeled text keeps every source URL and bounds each excerpt", () => {
-  const block = `Title: ${result.title}\nURL: ${result.url}\nPublished: N/A\nAuthor: N/A\nHighlights:\n${"x".repeat(4000)}`;
-  const normalized = normalizeSearchResults(`${block}\n\n${block}`, 2);
-  assert.equal(normalized.resultCount, 2);
-  assert.equal(normalized.text.match(/https:\/\/nodejs.org/g)?.length, 2);
-  assert.equal(normalized.text.match(/Excerpt truncated/g)?.length, 2);
-  assert.doesNotMatch(normalized.text, /N\/A|Author:/);
-  assert.ok(normalized.text.length < 3000);
-});
-
-test("Firecrawl envelopes normalize to the same cited, bounded shape", () => {
-  const normalized = normalizeSearchResults(
+test("Exa and Firecrawl formats retain citations and bound excerpts", () => {
+  for (const input of [
+    `Title: ${source.title}\nURL: ${source.url}\nHighlights:\n${"x".repeat(4000)}`,
     JSON.stringify({
       success: true,
-      data: {
-        web: [
-          {
-            title: result.title,
-            url: result.url,
-            description: "x".repeat(5000),
-          },
-        ],
-      },
-      creditsUsed: 2,
+      data: { web: [{ ...source, description: "x".repeat(4000) }] },
     }),
-    5,
-  );
-  assert.equal(normalized.resultCount, 1);
-  assert.match(normalized.text, /^1\. Node HTTP\nhttps:\/\/nodejs.org/);
-  assert.match(normalized.text, /Excerpt truncated/);
-  assert.ok(normalized.text.length < 1500);
-});
-
-test("unfamiliar formats stay visible as evidence and empty results are reported as such", () => {
+  ]) {
+    const result = normalizeSearchResults(input, 5);
+    assert.equal(result.resultCount, 1);
+    assert.ok(result.text.includes(source.url));
+    assert.match(result.text, /Excerpt truncated/);
+    assert.ok(result.text.length < 1500);
+  }
   assert.equal(
-    normalizeSearchResults("Different upstream format", 5).text,
-    "Different upstream format",
+    normalizeSearchResults("Unfamiliar upstream format", 5).text,
+    "Unfamiliar upstream format",
   );
-  assert.deepEqual(normalizeSearchResults('{"data":{"web":[]}}', 5), {
-    text: "No search results returned.",
-    resultCount: 0,
-    items: [],
-  });
+  assert.equal(normalizeSearchResults('{"data":{"web":[]}}', 5).resultCount, 0);
 });

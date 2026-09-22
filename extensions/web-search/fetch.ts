@@ -6,6 +6,10 @@ import {
   type PublicHttpOptions,
 } from "../shared/public-http.ts";
 import { boundedOutput, errorMessage } from "./output.ts";
+import { FetchError, NETWORK_CODES } from "../shared/fetch-error.ts";
+import { fetchHosted, normalizeHostedPage } from "./hosted-fetch.ts";
+import type { CallHosted } from "./mcp.ts";
+import { createRecoveryQueue, recoverFetch } from "./recovery.ts";
 import { webRenderers } from "./render.ts";
 import { sanitizeText } from "./sanitize.ts";
 
@@ -80,7 +84,10 @@ export async function fetchLocal(
 ) {
   const timeoutMs = options.timeout ?? 30_000;
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000)
-    throw new Error("timeout must be between 1 and 120000 milliseconds.");
+    throw new FetchError(
+      "timeout must be between 1 and 120000 milliseconds.",
+      "invalid",
+    );
   const deadline = Date.now() + timeoutMs;
   const timeout = AbortSignal.timeout(timeoutMs);
   const signal = options.signal
@@ -115,8 +122,9 @@ export async function fetchLocal(
     ) {
       text = sanitizeText(body);
     } else {
-      throw new Error(
+      throw new FetchError(
         `Unsupported content type: ${mediaType || "missing"}. Use read-pdf for PDFs. No hosted request was made.`,
+        "content",
       );
     }
     signal.throwIfAborted();
@@ -135,27 +143,44 @@ export async function fetchLocal(
       },
     };
   } catch (error) {
-    if (options.signal?.aborted) throw new Error("Local web fetch cancelled.");
+    if (options.signal?.aborted)
+      throw new FetchError("Local web fetch cancelled.", "cancelled");
+    // A discovered unsafe destination remains terminal even near the deadline.
+    if (error instanceof FetchError && !error.recoverable) throw error;
     if (timeout.aborted || Date.now() >= deadline)
-      throw new Error(
+      throw new FetchError(
         `Local web fetch timed out after ${timeoutMs / 1000} seconds. No hosted request was made.`,
+        "timeout",
       );
-    throw new Error(errorMessage(error));
+    if (error instanceof FetchError) throw error;
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? error.code
+        : undefined;
+    if (typeof code === "string" && NETWORK_CODES.has(code))
+      throw new FetchError(
+        `Local web fetch failed (${code}). No hosted request was made.`,
+        "network",
+        undefined,
+        code,
+      );
+    throw new FetchError(errorMessage(error), "unknown");
   }
 }
 
-export function registerFetchTool(pi: ExtensionAPI) {
+export function registerFetchTool(pi: ExtensionAPI, call: CallHosted) {
+  const queue = createRecoveryQueue();
   pi.registerTool({
     name: "web-fetch",
-    label: "Fetch Web Page Locally",
+    label: "Fetch Web Page",
     ...webRenderers("web-fetch"),
     description:
-      "Read one public HTTP(S) URL directly, without a hosted provider. HTML becomes readable Markdown; text, Markdown and JSON are returned directly. No JavaScript, cookies or credentials. Every redirect and DNS answer is validated and connections are pinned. Downloads are limited to 5 MiB and 30 seconds by default. Inline output is limited to 16KB or 400 lines, with complete extracted content saved to a temp file when truncated; use read for more. Never falls back to hosted fetching.",
+      "Read one public HTTP(S) URL locally first. HTML becomes readable Markdown; text, Markdown and JSON are returned directly. No JavaScript, cookies or credentials. Every redirect and DNS answer is validated and connections are pinned. Downloads are limited to 5 MiB and 30 seconds by default. Inline output is limited to 16KB or 400 lines, with complete extracted content saved to a temp file when truncated; use read for more. Eligible local failures offer per-request UI consent for Exa with Firecrawl fallback, plus a separately opt-in public GitHub reproduction report. Headless requests stay local.",
     promptSnippet:
-      "Read a public URL locally as Markdown or text, without sending it to a hosted provider.",
+      "Read a public URL locally, with optional per-request hosted recovery after UI consent.",
     promptGuidelines: [
       "Use web-fetch to read selected known URLs; do not re-fetch content already available unless freshness matters.",
-      "web-fetch does not execute JavaScript or use a hosted fallback. Only explicitly call web-fetch-hosted, when available, if sending that public URL to a third party is appropriate.",
+      "web-fetch never silently discloses URLs to hosted providers. Respect declined consent; do not bypass it with web-fetch-hosted or other tools. Reporting requires the user to supply a non-sensitive public reproduction URL.",
     ],
     parameters: Type.Object({
       url: Type.String({
@@ -168,17 +193,47 @@ export function registerFetchTool(pi: ExtensionAPI) {
           minimum: 1,
           maximum: 120_000,
           description:
-            "End-to-end timeout in milliseconds. Default 30000; maximum 120000.",
+            "Local fetch/extraction timeout in milliseconds, excluding consent, hosted recovery and reporting. Default 30000; maximum 120000.",
         }),
       ),
     }),
-    async execute(_id, params, signal) {
-      const result = await fetchLocal(params.url, {
-        timeout: params.timeout,
-        signal,
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      signal = signal ?? ctx.signal;
+      type Page = {
+        text: string;
+        details: {
+          provider: string;
+          url?: string;
+          title?: string;
+          bytes?: number;
+          contentType?: string;
+          fallbackReason?: string;
+        };
+      };
+      const result = await recoverFetch<Page>({
+        url: params.url,
+        timeout: params.timeout ?? 30_000,
+        ctx,
+        signal: signal ?? new AbortController().signal,
+        queue,
+        local: () =>
+          fetchLocal(params.url, { timeout: params.timeout, signal }),
+        hosted: async () => {
+          const result = await fetchHosted(call, { url: params.url }, signal);
+          const page = normalizeHostedPage(result.provider, result.text);
+          return {
+            text: page.text,
+            details: {
+              ...page.details,
+              provider: result.provider,
+              fallbackReason: result.fallbackReason,
+              url: params.url,
+            },
+          };
+        },
       });
       const output = await boundedOutput(
-        `Source: ${result.details.url}\nProvider: local${result.details.title ? `\nTitle: ${result.details.title}` : ""}\n\n${result.text}`,
+        `Source: ${result.details.url}\nProvider: ${result.details.provider}${result.details.fallbackReason ? `\nFallback: ${result.details.fallbackReason}` : ""}${result.details.title ? `\nTitle: ${result.details.title}` : ""}\n\n${result.text}`,
         "web-fetch",
       );
       return {
