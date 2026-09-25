@@ -7,7 +7,7 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import ui from "./index.ts";
+import ui, { markTranscriptRoles } from "./index.ts";
 import type { VcsInfoState } from "./vcs/state.ts";
 
 function createFooter(initialVcsState?: VcsInfoState) {
@@ -34,6 +34,7 @@ function createFooter(initialVcsState?: VcsInfoState) {
     ) {
       handlers.set(name, handler);
     },
+    registerMarkdownTransformer() {},
     events: { emit() {} },
   } as unknown as ExtensionAPI;
 
@@ -45,7 +46,7 @@ function createFooter(initialVcsState?: VcsInfoState) {
       id: "claude-fable-5",
       reasoning: true,
     },
-    getContextUsage: () => ({ percent: 38 }),
+    getContextUsage: () => ({ tokens: 28_600, percent: 38 }),
     sessionManager: {
       getBranch: () => [
         {
@@ -107,7 +108,20 @@ test("renders a stable one-line dashboard with VCS and model context", () => {
   assert.match(line, /jj change-123/);
   assert.match(line, /3 files changed/);
   assert.match(line, /opencode\/claude-fable-5/);
-  assert.match(line, /medium · ctx 38% · \$1\.23/);
+  assert.match(line, /medium · 28\.6K \(38%\) · \$1\.23/);
+});
+
+test("marks user and thinking Markdown without breaking fences", () => {
+  const context = { isStreaming: false, availableWidth: 80 };
+  const mark = (
+    markdown: string,
+    messageType: "user" | "assistant" | "assistant-thinking",
+  ) => markTranscriptRoles(markdown, { ...context, messageType });
+
+  assert.equal(mark("why?", "user"), "› why?");
+  assert.equal(mark("```ts\nx\n```", "user"), "›\n```ts\nx\n```");
+  assert.equal(mark("hmm", "assistant-thinking"), "_Thinking:_ hmm");
+  assert.equal(mark("answer", "assistant"), "answer");
 });
 
 test("compacts low-priority fields instead of splitting the line", () => {

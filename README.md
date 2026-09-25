@@ -43,8 +43,11 @@ Install these executables on `PATH` for the features you use:
   idle. Priority uses more credits; the dashboard indicator shows the request,
   not confirmation of faster service. Reasoning effort is unchanged.
 
-To use the included theme, set `"theme": "github-dark-default"` in
-`~/.pi/agent/settings.json`.
+To use an included theme, set `"theme"` to `"github-dark-default"` or
+`"dark-mini"` in `~/.pi/agent/settings.json`. `dark-mini` is Pi's `dark` theme
+without backgrounds behind user messages and tool calls, and with one editor
+border color for every thinking level. It pairs with the
+compact transcript markers (`›` for prompts, _Thinking:_ for reasoning).
 
 ## Web tools
 

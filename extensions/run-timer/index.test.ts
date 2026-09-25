@@ -48,7 +48,7 @@ function createHarness() {
     },
   } as unknown as ExtensionAPI;
 
-  const ctx = {} as ExtensionContext;
+  const ctx: { model?: { id: string } } = {};
 
   runTimer(pi, deps);
 
@@ -57,7 +57,10 @@ function createHarness() {
     emit: (name: string) => {
       const handler = handlers.get(name);
       assert.ok(handler, `no handler for ${name}`);
-      handler({ type: name }, ctx);
+      handler({ type: name }, ctx as ExtensionContext);
+    },
+    setModel: (id: string) => {
+      ctx.model = { id };
     },
     advance: (ms: number) => {
       clock += ms;
@@ -97,6 +100,20 @@ test("appends one completion line when the request settles", () => {
 
   harness.advance(10_000);
   assert.deepEqual(harness.entries, [{ durationMs: 42_000 }]);
+});
+
+test("names the model that completed the run", () => {
+  const harness = createHarness();
+  harness.setModel("claude-opus-5-5");
+
+  harness.emit("agent_start");
+  harness.advance(22_000);
+  harness.emit("agent_settled");
+
+  assert.deepEqual(harness.entries, [
+    { durationMs: 22_000, model: "claude-opus-5-5" },
+  ]);
+  assert.equal(harness.renderEntry(0), "✓ claude-opus-5-5 · 22s");
 });
 
 test("keeps one continuous run across repeated agent_start before settle", () => {

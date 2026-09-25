@@ -5,6 +5,8 @@ const ENTRY_TYPE = "run-timer-result";
 
 export interface RunTimerEntryData {
   readonly durationMs: number;
+  /** Absent in entries recorded before the model was tracked. */
+  readonly model?: string;
 }
 
 /**
@@ -42,11 +44,11 @@ export default function (pi: ExtensionAPI, deps: RunTimerDeps = defaultDeps) {
       const duration = entry.data?.durationMs;
       const formatted =
         typeof duration === "number" ? formatDuration(duration) : "unknown";
-      return new Text(
-        `${theme.fg("success", "✓")} ${theme.fg("dim", "Worked for")} ${theme.fg("accent", formatted)}`,
-        1,
-        0,
-      );
+      const model = entry.data?.model;
+      const summary = model
+        ? `${theme.fg("text", model)}${theme.fg("dim", ` · ${formatted}`)}`
+        : `${theme.fg("dim", "Worked for")} ${theme.fg("accent", formatted)}`;
+      return new Text(`${theme.fg("success", "✓")} ${summary}`, 1, 0);
     },
   );
 
@@ -57,11 +59,15 @@ export default function (pi: ExtensionAPI, deps: RunTimerDeps = defaultDeps) {
     startedAt ??= deps.now();
   });
 
-  pi.on("agent_settled", () => {
+  pi.on("agent_settled", (_event, ctx) => {
     if (startedAt === undefined) return;
     const durationMs = elapsed();
     startedAt = undefined;
-    pi.appendEntry<RunTimerEntryData>(ENTRY_TYPE, { durationMs });
+    const model = ctx.model?.id;
+    pi.appendEntry<RunTimerEntryData>(
+      ENTRY_TYPE,
+      model ? { durationMs, model } : { durationMs },
+    );
   });
 
   pi.on("session_shutdown", () => {

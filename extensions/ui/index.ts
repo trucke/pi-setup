@@ -1,49 +1,33 @@
 import { homedir } from "node:os";
 import { basename, relative } from "node:path";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ReadonlyFooterDataProvider,
+import {
+  VERSION,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type MarkdownTransformer,
+  type ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
 import {
   getCapabilities,
   hyperlink,
   truncateToWidth,
-  visibleWidth,
 } from "@earendil-works/pi-tui";
 import { REFRESH_CHANNEL } from "../shared/dashboard-state.ts";
 import { fitFooterLine, type FooterSegment } from "./footer-layout.ts";
 import { registerVcsInfo } from "./vcs/index.ts";
 import { emptyVcsInfoState, type VcsInfoState } from "./vcs/state.ts";
 
-type Rgb = [number, number, number];
-
 interface ModelInfo {
   provider: string;
   modelId: string;
   thinking: string;
+  contextTokens: number | null;
   contextPercent: number | null;
   cost: number;
 }
 
-const RESET = "\x1b[0m";
-const BOLD = "\x1b[1m";
-const PALETTE: Rgb[] = [
-  [22, 83, 189],
-  [48, 129, 247],
-  [93, 171, 255],
-  [151, 205, 255],
-  [93, 171, 255],
-  [48, 129, 247],
-];
-const TITLE_LINES = [
-  "  ██████╗  ██╗ ",
-  "  ██╔══██╗ ██║ ",
-  "  ██████╔╝ ██║ ",
-  "  ██╔═══╝  ██║ ",
-  "  ██║      ██║ ",
-  "  ╚═╝      ╚═╝ ",
-];
+// A fenced block must start on its own line, so the marker cannot share it.
+const FENCE_START = /^\s*(```|~~~)/;
 // eslint-disable-next-line no-control-regex
 const OSC_PATTERN =
   /(?:\u001b\]|\u009d)(?:[^\u0007\u001b\u009c]|\u001b(?!\\))*(?:\u0007|\u001b\\|\u009c)/g;
@@ -60,43 +44,6 @@ function sanitizeTerminalLabel(text: string) {
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
 }
 
-function mix(a: number, b: number, amount: number) {
-  return Math.round(a + (b - a) * amount);
-}
-
-function sampleGradient(position: number) {
-  const wrapped = ((position % 1) + 1) % 1;
-  const scaled = wrapped * PALETTE.length;
-  const index = Math.floor(scaled);
-  const nextIndex = (index + 1) % PALETTE.length;
-  const amount = scaled - index;
-  const start = PALETTE[index]!;
-  const end = PALETTE[nextIndex]!;
-
-  return [
-    mix(start[0], end[0], amount),
-    mix(start[1], end[1], amount),
-    mix(start[2], end[2], amount),
-  ] satisfies Rgb;
-}
-
-function foreground([red, green, blue]: Rgb, text: string) {
-  return `\x1b[38;2;${red};${green};${blue}m${text}${RESET}`;
-}
-
-function gradientText(text: string, phase: number) {
-  const characters = [...text];
-  const span = Math.max(characters.length - 1, 1);
-
-  return characters
-    .map((character, index) =>
-      character === " "
-        ? character
-        : foreground(sampleGradient(index / span + phase), character),
-    )
-    .join("");
-}
-
 function formatDirectory(cwd: string) {
   const home = homedir();
   if (cwd === home) return "~";
@@ -109,10 +56,29 @@ function formatDirectoryCompact(cwd: string) {
   return sanitizeTerminalLabel(basename(cwd) || cwd);
 }
 
-function center(text: string, width: number) {
-  const padding = Math.max(0, Math.floor((width - visibleWidth(text)) / 2));
-  return truncateToWidth(`${" ".repeat(padding)}${text}`, width);
+function formatTokens(tokens: number) {
+  if (tokens < 1000) return `${tokens}`;
+  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(1)}K`;
+  return `${(tokens / 1_000_000).toFixed(1)}M`;
 }
+
+function prefixMarkdown(prefix: string, markdown: string) {
+  return FENCE_START.test(markdown)
+    ? `${prefix}\n${markdown}`
+    : `${prefix} ${markdown}`;
+}
+
+/** Mark transcript roles inline instead of relying on background boxes. */
+export const markTranscriptRoles: MarkdownTransformer = (
+  markdown,
+  { messageType },
+) => {
+  if (messageType === "user") return prefixMarkdown("›", markdown);
+  if (messageType === "assistant-thinking") {
+    return prefixMarkdown("_Thinking:_", markdown);
+  }
+  return markdown;
+};
 
 function getSessionCost(ctx: ExtensionContext) {
   let cost = 0;
@@ -129,6 +95,7 @@ function modelInfoEqual(left: ModelInfo, right: ModelInfo) {
     left.provider === right.provider &&
     left.modelId === right.modelId &&
     left.thinking === right.thinking &&
+    left.contextTokens === right.contextTokens &&
     left.contextPercent === right.contextPercent &&
     left.cost === right.cost
   );
@@ -148,6 +115,7 @@ export default function ui(
     provider: "",
     modelId: "",
     thinking: "off",
+    contextTokens: null,
     contextPercent: null,
     cost: 0,
   };
@@ -156,11 +124,13 @@ export default function ui(
 
   function refreshModelInfo(ctx: ExtensionContext) {
     const model = ctx.model;
+    const usage = ctx.getContextUsage();
     const next: ModelInfo = {
       provider: model?.provider ?? "",
       modelId: model?.id ?? "",
       thinking: model?.reasoning ? pi.getThinkingLevel() : "off",
-      contextPercent: ctx.getContextUsage()?.percent ?? null,
+      contextTokens: usage?.tokens ?? null,
+      contextPercent: usage?.percent ?? null,
       cost: getSessionCost(ctx),
     };
     if (modelInfoEqual(modelInfo, next)) return;
@@ -187,19 +157,13 @@ export default function ui(
   function install(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
 
-    ctx.ui.setHeader((tui) => {
+    ctx.ui.setHeader((tui, theme) => {
       requestRender = () => tui.requestRender();
 
       return {
         render(width: number) {
-          const art = TITLE_LINES.map((line, row) =>
-            center(gradientText(line, row * 0.045), width),
-          );
-          const subtitle = center(
-            `${BOLD}${gradientText(title, 0.18)}${RESET}`,
-            width,
-          );
-          return ["", ...art, subtitle, ""];
+          const header = `${theme.fg("text", "▪ pi")} ${theme.fg("dim", `v${VERSION} · ${title}`)}`;
+          return [truncateToWidth(header, width)];
         },
         invalidate() {},
       };
@@ -292,7 +256,12 @@ export default function ui(
             const color =
               percent >= 90 ? "error" : percent >= 70 ? "warning" : "muted";
             right.push({
-              text: theme.fg(color, `ctx ${percent}%`),
+              text: theme.fg(
+                color,
+                modelInfo.contextTokens === null
+                  ? `ctx ${percent}%`
+                  : `${formatTokens(modelInfo.contextTokens)} (${percent}%)`,
+              ),
               compactText: theme.fg(color, `${percent}%`),
               compactAt: 45,
               dropAt: 95,
@@ -327,6 +296,8 @@ export default function ui(
     ctx.ui.setTitle(`pi · ${title}`);
     pi.events.emit(REFRESH_CHANNEL, undefined);
   }
+
+  pi.registerMarkdownTransformer(markTranscriptRoles);
 
   pi.on("session_start", (_event, ctx) => {
     title = formatDirectory(ctx.cwd);
