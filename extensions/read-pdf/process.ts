@@ -1,5 +1,5 @@
 import { Data, Effect, Result, Stream } from "effect";
-import { ChildProcess } from "effect/unstable/process";
+import { ChildProcess } from "effect/process";
 
 const MAX_STDERR_BYTES = 64 * 1024;
 const DEFAULT_FORCE_KILL_AFTER_MS = 5_000;

@@ -326,10 +326,10 @@ child.once("exit", (code, signal) => {
   spawning an agent in another project; a shell command in another directory is equivalent to
   what the bash tool already allows).
 
-### 6.1 Why not `effect/unstable/process` yet?
+### 6.1 Why not `effect/process` yet?
 
-`ChildProcess.make` + `ChildProcessHandle` is the eventual target, but the current Effect beta
-cannot preserve the current process contract yet:
+`ChildProcess.make` + `ChildProcessHandle` is the eventual target, but Effect `4.0.0-beta.101`
+could not preserve the current process contract yet:
 
 1. `forceKillAfter` does not correctly wait before SIGKILL on POSIX in this pin.
 2. `ChildProcessHandle.exitCode` does not expose the actual terminating signal, while the

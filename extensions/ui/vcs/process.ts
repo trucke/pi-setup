@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Stream } from "effect";
-import { ChildProcess } from "effect/unstable/process";
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
+import { ChildProcess } from "effect/process";
+import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner";
 
 const MAX_STREAM_CHARS = 10 * 1_024 * 1_024;
 const TRUNCATED_MARKER = "\n[command output truncated]\n";

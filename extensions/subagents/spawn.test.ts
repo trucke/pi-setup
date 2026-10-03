@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {
   ExtensionAPI,
-  ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
@@ -13,7 +13,7 @@ function setup() {
   const tools: ToolDefinition[] = [];
   const requests: Parameters<Parameters<typeof registerSpawnTools>[1]>[0][] =
     [];
-  const ctx = { cwd: "/trusted/repo" } as ExtensionContext;
+  const ctx = { cwd: "/trusted/repo" } as ExtensionToolContext;
   const signal = new AbortController().signal;
   registerSpawnTools(
     {

@@ -17,19 +17,19 @@
 ## Install
 
 ```bash
-pnpm add effect@beta @effect/platform-node@beta
+pnpm add --save-exact effect @effect/platform-node
 ```
 
 Big structural facts:
 
-- **One version number for everything.** All ecosystem packages release together at
-  `4.0.0-beta.N`. `@effect/platform-node` must match `effect` exactly.
+- **One version number for everything.** All ecosystem packages release together under
+  one version. `@effect/platform-node` must match `effect` exactly.
 - **`@effect/platform` is gone — merged into core `effect`.** `FileSystem`, `Path`,
   `PlatformError`, `Terminal`, `Stdio` are now top-level `effect` modules.
   `@effect/platform-node` remains as the Node *implementation* package.
-- **`effect/unstable/*` namespace.** Modules that may break in minor releases:
-  `effect/unstable/process` (child processes — the one we need), `http`, `rpc`, `cli`,
-  `ai`, `workers`, etc. Everything outside `unstable/` follows strict semver.
+- **No more `effect/unstable/*`.** During the betas, `process` (child processes, the one
+  we need), `http`, `rpc`, `cli`, `ai`, `workers`, etc. lived under `effect/unstable/`.
+  Since `4.0.0` they are top-level modules such as `effect/process`.
 - **`"type": "module"`**, ESM-first. Works with `moduleResolution: NodeNext` or `Bundler`.
 - Runtime keep-alive is built in now: a fiber suspended on `Deferred.await` etc. keeps
   the Node process alive without `NodeRuntime.runMain` (v3 needed runMain for that).
@@ -54,8 +54,8 @@ Big structural facts:
 | `Stream.async*` (all 4 variants) | `Stream.callback` |
 | `Stream.fromChunk(s)` | `Stream.fromArray` / `Stream.fromArrays` (Chunk de-emphasized; arrays used) |
 | `Schema.TaggedError` | `Schema.TaggedErrorClass` |
-| `@effect/platform/Command` | `effect/unstable/process` → `ChildProcess` |
-| `@effect/platform/CommandExecutor` | `effect/unstable/process` → `ChildProcessSpawner` |
+| `@effect/platform/Command` | `effect/process` → `ChildProcess` |
+| `@effect/platform/CommandExecutor` | `effect/process` → `ChildProcessSpawner` |
 | `@effect/platform/FileSystem` | `effect/FileSystem` |
 | `Runtime.runPromise(runtime)(...)` | gone — use `ManagedRuntime` methods directly |
 | `UnknownException` (tryPromise default) | `Cause.UnknownError` |
@@ -295,16 +295,16 @@ const startJob = Effect.gen(function* () {
 ## 6. Child processes & FileSystem (the important part)
 
 The v3 `@effect/platform` `Command`/`CommandExecutor` modules were redesigned into
-**`effect/unstable/process`** with `ChildProcess` (command builder) and
+**`effect/process`** with `ChildProcess` (command builder) and
 `ChildProcessSpawner` (the service). The Node implementation comes from
 `@effect/platform-node`.
 
-Import gotcha: `import { ChildProcessSpawner } from "effect/unstable/process"` gives you
+Import gotcha: `import { ChildProcessSpawner } from "effect/process"` gives you
 the **module namespace**, not the service class. Import the class from the submodule:
 
 ```ts
-import { ChildProcess } from "effect/unstable/process"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { ChildProcess } from "effect/process"
+import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import { NodeServices, NodeFileSystem } from "@effect/platform-node"
 ```
 
@@ -547,9 +547,9 @@ Tool handlers: async fns calling runtime.runPromise(Effect.gen(...))
 
 ## Surprises & gotchas (learned the hard way)
 
-1. **`effect/unstable/process` exports module namespaces.** The
+1. **`effect/process` exports module namespaces.** The
    `ChildProcessSpawner` class must be imported from
-   `"effect/unstable/process/ChildProcessSpawner"` (or use
+   `"effect/process/ChildProcessSpawner"` (or use
    `ChildProcessSpawner.ChildProcessSpawner` off the namespace).
 2. **`Effect.fork` does not exist** — code (or an LLM) writing v3-style `Effect.fork`
    fails to compile. Use `forkChild` / `forkScoped` / `forkDetach` / `forkIn`.
@@ -565,7 +565,7 @@ Tool handlers: async fns calling runtime.runPromise(Effect.gen(...))
 7. **Chunk → Array**: stream element groups are plain arrays (`Stream.fromArray`,
    `runCollect` returns `Array<A>`), not `Chunk`.
 8. `tryPromise` default error is `Cause.UnknownError` (was `UnknownException`).
-9. `unstable/*` modules can break between v4 minors — pin exact versions
-   (`4.0.0-beta.98`) and keep `effect` and `@effect/platform-node` in lockstep.
+9. Pin exact versions (currently `4.0.0`) and keep `effect` and `@effect/platform-node`
+   in lockstep.
 10. Scratch workspace with all verified test files: `/tmp/effect-v4-scratch`
     (`test1-basics.ts` … `test8-runtime.ts`, `smoke.mts` executed successfully).

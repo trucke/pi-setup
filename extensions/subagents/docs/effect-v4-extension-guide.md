@@ -215,8 +215,8 @@ spawner service:
 
 ```ts
 import { Effect } from "effect";
-import { ChildProcess } from "effect/unstable/process";
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
+import { ChildProcess } from "effect/process";
+import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner";
 
 const gitStatus = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner;
@@ -227,7 +227,7 @@ const gitStatus = Effect.gen(function* () {
 ```
 
 Note the import gotcha: `ChildProcessSpawner` the **class** comes from the
-`.../ChildProcessSpawner` submodule; the `effect/unstable/process` index gives you the
+`.../ChildProcessSpawner` submodule; the `effect/process` index gives you the
 namespace. Provide `NodeServices.layer` (or `ChildProcessSpawner.layer`). Full command
 builder / streaming / kill semantics are in `effect-v4-notes.md §6`.
 
@@ -282,7 +282,7 @@ the rename table in `effect-v4-notes.md`.
 ## 8. Don'ts (keep it lean)
 
 1. **Don't float versions.** Pin `effect` and `@effect/platform-node` to the exact same
-   `4.0.0-beta.98`; `unstable/*` can break between betas.
+   version (currently `4.0.0`).
 2. **Don't Effect-ify pure/UI code.** No service or layer for a clipboard write, a string
    truncation, or a popup. §0 is the test: is there a typed-error / cancellation / resource /
    retry concern? If not, leave it.
