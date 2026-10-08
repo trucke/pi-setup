@@ -54,10 +54,10 @@ function createHarness() {
 
   return {
     entries,
-    emit: (name: string) => {
+    emit: (name: string, data: Record<string, unknown> = {}) => {
       const handler = handlers.get(name);
       assert.ok(handler, `no handler for ${name}`);
-      handler({ type: name }, ctx as ExtensionContext);
+      handler({ type: name, ...data }, ctx as ExtensionContext);
     },
     setModel: (id: string) => {
       ctx.model = { id };
@@ -114,6 +114,27 @@ test("names the model that completed the run", () => {
     { durationMs: 22_000, model: "claude-opus-5-5" },
   ]);
   assert.equal(harness.renderEntry(0), "✓ claude-opus-5-5 · 22s");
+});
+
+test("records cancellation without marking it as completed or affecting the next run", () => {
+  const harness = createHarness();
+  harness.setModel("claude-opus-5-5");
+  harness.emit("agent_start");
+  harness.advance(2_000);
+  harness.emit("agent_settled", { aborted: true });
+
+  assert.deepEqual(harness.entries, [
+    { durationMs: 2_000, model: "claude-opus-5-5", aborted: true },
+  ]);
+  assert.equal(
+    harness.renderEntry(0),
+    "○ claude-opus-5-5 · Cancelled after 2s",
+  );
+
+  harness.emit("agent_start");
+  harness.advance(1_000);
+  harness.emit("agent_settled", { aborted: false });
+  assert.equal(harness.renderEntry(1), "✓ claude-opus-5-5 · 1s");
 });
 
 test("keeps one continuous run across repeated agent_start before settle", () => {

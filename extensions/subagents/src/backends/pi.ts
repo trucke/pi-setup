@@ -363,12 +363,12 @@ const makePiSession = (
       });
     };
 
-    const settle = () => {
+    const settle = (aborted = false) => {
       if (state.settled) return;
       state.settled = true;
       const last = state.lastAssistant;
       const partialText = state.output || undefined;
-      if (last?.stopReason === "aborted") {
+      if (aborted || last?.stopReason === "aborted") {
         emit({
           _tag: "RunSettled",
           outcome: { _tag: "Interrupted", partialText },
@@ -493,7 +493,7 @@ const makePiSession = (
           // message_end listeners run before SDK persistence, so their session
           // totals omit that response. Refresh after persistence before settling.
           emitUsage();
-          settle();
+          settle(event.aborted);
           break;
       }
     };

@@ -245,12 +245,6 @@ export default function ui(
             });
           }
           const statuses = footerData.getExtensionStatuses();
-          if (
-            modelInfo.provider === "openai-codex" &&
-            statuses.get("openai-fast-mode") === "fast: on"
-          ) {
-            right.push({ text: theme.fg("accent", "fast") });
-          }
           if (modelInfo.contextPercent !== null) {
             const percent = Math.round(modelInfo.contextPercent);
             const color =
@@ -276,7 +270,6 @@ export default function ui(
 
           const lines = [fitFooterLine(left, right, width, separator)];
           const statusText = Array.from(statuses.entries())
-            .filter(([key]) => key !== "openai-fast-mode")
             .sort(([a], [b]) => a.localeCompare(b))
             .flatMap(([, text]) => text.split("\n"))
             .map((line) => line.trim())

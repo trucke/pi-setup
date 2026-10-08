@@ -8,6 +8,7 @@ import {
   type AssistantMessage,
 } from "@earendil-works/pi-ai";
 import {
+  AgentSession,
   ModelRegistry,
   ModelRuntime,
   SessionManager,
@@ -21,6 +22,8 @@ type Response = {
   text?: string;
   error?: string;
   usage?: AssistantMessage["usage"];
+  /** Keep this provider request open until cancelled. */
+  blocked?: () => void;
 };
 
 async function fixture(
@@ -64,13 +67,26 @@ async function fixture(
 
   // Only provider responses/auth are replaced. Compaction, retries, persistence,
   // backend event translation and manager settlement all use their real paths.
+  let childSession: AgentSession | undefined;
+  const subscribe = AgentSession.prototype.subscribe;
+  t.mock.method(
+    AgentSession.prototype,
+    "subscribe",
+    function (
+      this: AgentSession,
+      ...args: Parameters<AgentSession["subscribe"]>
+    ) {
+      childSession = this;
+      return subscribe.apply(this, args);
+    },
+  );
   t.mock.method(ModelRuntime.prototype, "hasConfiguredAuth", () => true);
   t.mock.method(ModelRuntime.prototype, "getAuth", async () => undefined);
   let requests = 0;
   t.mock.method(
     ModelRuntime.prototype,
     "streamSimple",
-    (model: Parameters<ModelRuntime["streamSimple"]>[0]) => {
+    (...[model, , options]: Parameters<ModelRuntime["streamSimple"]>) => {
       const response = responses[requests++];
       assert.ok(response, "Unexpected provider request");
       const stream = createAssistantMessageEventStream();
@@ -92,6 +108,19 @@ async function fixture(
         errorMessage: response.error,
         timestamp: Date.now(),
       };
+      if (response.blocked) {
+        const signal = options?.signal;
+        assert.ok(signal);
+        const abort = () => {
+          message.stopReason = "aborted";
+          stream.push({ type: "error", reason: "aborted", error: message });
+          stream.end();
+        };
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort, { once: true });
+        response.blocked();
+        return stream;
+      }
       stream.push(
         response.error
           ? { type: "error", reason: "error", error: message }
@@ -127,6 +156,10 @@ async function fixture(
   };
   return {
     requests: () => requests,
+    async abort() {
+      assert.ok(childSession);
+      await childSession.abort();
+    },
     async spawn(prompt: string) {
       const { id } = await runtime.runPromise(
         manager.spawn("pi", {
@@ -256,6 +289,35 @@ for (const scenario of [
     assert.equal(result.finalText, "Partial work.");
   });
 }
+
+test(
+  "Pi reports interruption when cancelled during overflow recovery",
+  { timeout: 5_000 },
+  async (t) => {
+    let signalCompaction: () => void;
+    const compactionStarted = new Promise<void>((resolve) => {
+      signalCompaction = resolve;
+    });
+    const f = await fixture(
+      t,
+      [
+        { error: OVERFLOW, text: "Partial work." },
+        { blocked: () => signalCompaction() },
+      ],
+      { enabled: true, keepRecentTokens: 16 },
+    );
+    const pending = f.spawn(LONG_PROMPT);
+    await compactionStarted;
+    // Abort the actual child session, not manager.cancel(), which sets its own
+    // interrupted outcome and would hide a backend translation error.
+    await f.abort();
+    const result = await pending;
+    assert.equal(f.requests(), 2);
+    assert.equal(result.status, "cancelled");
+    assert.equal(result.errorText, "Run was cancelled");
+    assert.equal(result.finalText, "Partial work.");
+  },
+);
 
 test("Pi compacts and continues after overflow, replacing the failed attempt's outcome", async (t) => {
   const f = await fixture(

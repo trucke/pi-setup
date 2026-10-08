@@ -7,6 +7,8 @@ export interface RunTimerEntryData {
   readonly durationMs: number;
   /** Absent in entries recorded before the model was tracked. */
   readonly model?: string;
+  /** Absent in older entries and runs that were not cancelled. */
+  readonly aborted?: boolean;
 }
 
 /**
@@ -45,10 +47,17 @@ export default function (pi: ExtensionAPI, deps: RunTimerDeps = defaultDeps) {
       const formatted =
         typeof duration === "number" ? formatDuration(duration) : "unknown";
       const model = entry.data?.model;
+      const aborted = entry.data?.aborted === true;
+      const durationLabel = aborted
+        ? `Cancelled after ${formatted}`
+        : formatted;
       const summary = model
-        ? `${theme.fg("text", model)}${theme.fg("dim", ` · ${formatted}`)}`
-        : `${theme.fg("dim", "Worked for")} ${theme.fg("accent", formatted)}`;
-      return new Text(`${theme.fg("success", "✓")} ${summary}`, 1, 0);
+        ? `${theme.fg("text", model)}${theme.fg("dim", ` · ${durationLabel}`)}`
+        : `${theme.fg("dim", aborted ? "Cancelled after" : "Worked for")} ${theme.fg("accent", formatted)}`;
+      const marker = aborted
+        ? theme.fg("warning", "○")
+        : theme.fg("success", "✓");
+      return new Text(`${marker} ${summary}`, 1, 0);
     },
   );
 
@@ -59,15 +68,16 @@ export default function (pi: ExtensionAPI, deps: RunTimerDeps = defaultDeps) {
     startedAt ??= deps.now();
   });
 
-  pi.on("agent_settled", (_event, ctx) => {
+  pi.on("agent_settled", (event, ctx) => {
     if (startedAt === undefined) return;
     const durationMs = elapsed();
     startedAt = undefined;
     const model = ctx.model?.id;
-    pi.appendEntry<RunTimerEntryData>(
-      ENTRY_TYPE,
-      model ? { durationMs, model } : { durationMs },
-    );
+    pi.appendEntry<RunTimerEntryData>(ENTRY_TYPE, {
+      durationMs,
+      ...(model ? { model } : {}),
+      ...(event.aborted ? { aborted: true } : {}),
+    });
   });
 
   pi.on("session_shutdown", () => {

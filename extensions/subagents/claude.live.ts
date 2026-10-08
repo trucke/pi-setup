@@ -206,8 +206,9 @@ test(
       );
 
       // Wait for streamed output so cancellation definitely lands mid-run and
-      // exercises the SDK's normal interrupt receipt/result path.
-      const streamDeadline = Date.now() + 15_000;
+      // exercises the SDK's normal interrupt receipt/result path. Allow for
+      // provider first-token latency before exercising cancellation.
+      const streamDeadline = Date.now() + 30_000;
       while (
         manager.view.get(started.id)?.status === "running" &&
         !manager.view.get(started.id)?.liveAssistant?.text &&

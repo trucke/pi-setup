@@ -38,10 +38,6 @@ Install these executables on `PATH` for the features you use:
   The old branch remains in `/tree`. It requires an idle agent and does not undo
   files or other side effects.
 - `/recap` summarizes the current task, progress and next step in at most 40 words.
-- `/fast on|off` requests priority for supported `openai-codex` models. It is off
-  by default, resets on reload or session replacement and can only change while
-  idle. Priority uses more credits; the dashboard indicator shows the request,
-  not confirmation of faster service. Reasoning effort is unchanged.
 
 To use an included theme, set `"theme"` to `"github-dark-default"` or
 `"dark-mini"` in `~/.pi/agent/settings.json`. `dark-mini` is Pi's `dark` theme
