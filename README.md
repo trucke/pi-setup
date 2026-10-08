@@ -44,6 +44,10 @@ Install these executables on `PATH` for the features you use:
 - `/jj` browses Jujutsu history with diffs and runs describe, sign, new, edit,
   squash, abandon, undo, bookmark and push on the selected revision. Push
   shows jj's dry run and pushes only after confirmation.
+- Mouse selections in fullscreen mode copy wrapped text without the line
+  breaks Pi adds at the screen edge. Lists, quotes, tables and code keep their
+  lines. This patches a private Pi method; if Pi changes it, copying falls back
+  to Pi's behavior.
 - `/recap` summarizes the current task, progress and next step in at most 40 words.
 
 To use an included theme, set `"theme"` to `"github-dark-default"` or
