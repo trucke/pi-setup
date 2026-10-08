@@ -26,7 +26,7 @@ import type {
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Key, Markdown, Text } from "@earendil-works/pi-tui";
+import { Key, Markdown, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import { TerminalManager, type TerminalManagerShape } from "./src/manager.ts";
@@ -381,8 +381,10 @@ export default function (pi: ExtensionAPI) {
         : (details.signal ?? `exit ${details.exitCode ?? "?"}`);
       const header =
         `${icon} ` +
-        theme.fg("accent", theme.bold(`terminal ${details.id ?? "?"}`)) +
-        theme.fg("muted", ` · ${details.title ?? ""} · ${how}`);
+        theme.fg(
+          "muted",
+          `terminal ${details.id ?? "?"} · ${details.title ?? ""} · ${how}`,
+        );
 
       const content =
         typeof message.content === "string" ? message.content : "";
@@ -406,13 +408,11 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      const previewLines = body.split("\n").slice(0, 8);
-      let text = header;
-      for (const line of previewLines)
-        text += `\n${theme.fg("toolOutput", line)}`;
-      if (body.split("\n").length > 8)
-        text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
-      return new Text(text, 0, 0);
+      // Collapsed results match the one-line tool rows; Ctrl+O shows the output.
+      return {
+        render: (width: number) => [truncateToWidth(header, width)],
+        invalidate() {},
+      };
     },
   );
 

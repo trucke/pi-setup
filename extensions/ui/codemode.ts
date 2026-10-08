@@ -16,7 +16,7 @@ function formatCost(cost: number) {
 
 /** The script is not useful in one line; show the nested call count and model cost instead. */
 export const codemodeRow: ToolRowSpec = {
-  label: (theme) => theme.fg("toolTitle", theme.bold("codemode")),
+  label: () => "codemode",
   summarize(result: ToolResult, theme) {
     const calls = nestedCalls(result.details);
     const failed = calls.filter((call) => call.status === "error").length;

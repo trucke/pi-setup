@@ -36,6 +36,9 @@ interface RowState {
   innerCall?: Component;
   innerResult?: Component;
   summary?: RowSummary;
+  /** When this module first drew the row running, for its elapsed-time counter. */
+  startedAt?: number;
+  ticker?: ReturnType<typeof setInterval>;
 }
 
 /**
@@ -55,6 +58,7 @@ function rowState(context: RenderContext): RowState {
 }
 
 const SEPARATOR = " · ";
+const MAX_TRAILER_SHARE = 0.4;
 
 function formatDuration(ms: number) {
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
@@ -78,7 +82,7 @@ const SCROLLBAR_GUTTER = 1;
 /** Wide enough that a call line is not wrapped before the row truncates it. */
 const UNWRAPPED_WIDTH = 1000;
 
-/** First non-blank line, without trailing padding but with its styling. */
+/** First non-blank line, without trailing padding. */
 function firstVisibleLine(component: Component) {
   for (const line of component.render(UNWRAPPED_WIDTH)) {
     const width = visibleWidth(stripTerminalSequences(line).trimEnd());
@@ -87,14 +91,62 @@ function firstVisibleLine(component: Component) {
   return undefined;
 }
 
-function statusParts(theme: Theme, context: RenderContext): string[] {
-  if (context.isPartial) return [theme.fg("warning", "…")];
-  const status = context.isError
-    ? theme.fg("error", "✗")
-    : theme.fg("success", "✓");
+/** Colors and text attributes; OSC 8 links stay clickable. */
+const SGR = /\x1b\[[0-9;:]*m/g;
+
+/**
+ * Collapsed rows drop the tool's own styling and use one color: accent while
+ * running, muted when done, so finished work recedes behind the agent's
+ * messages.
+ */
+function recolor(theme: Theme, color: "accent" | "muted", label: string) {
+  return theme.fg(color, label.replace(SGR, ""));
+}
+
+/** Pi's own spinner frames and speed, matching its Working indicator. */
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const FRAME_MS = 80;
+
+/**
+ * Redraws a running row for its spinner and timer. Pi creates a new call
+ * component on every update and never disposes the old one, so the timer
+ * lives in the row state and stops once the row finishes or expands.
+ */
+function updateTicker(state: RowState, context: RenderContext) {
+  if (!context.isPartial || context.expanded) {
+    clearInterval(state.ticker);
+    state.ticker = undefined;
+    return;
+  }
+  state.startedAt ??= Date.now();
+  if (!state.ticker) {
+    state.ticker = setInterval(context.invalidate, FRAME_MS);
+    // A row left running when Pi exits must not keep the process alive.
+    state.ticker.unref();
+  }
+}
+
+function statusMarker(theme: Theme, context: RenderContext, now: number) {
+  if (context.isPartial) {
+    const frame = SPINNER[Math.floor(now / FRAME_MS) % SPINNER.length];
+    return theme.fg("accent", frame ?? "⠋");
+  }
+  return context.isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
+}
+
+function timing(
+  theme: Theme,
+  context: RenderContext,
+  state: RowState,
+  now: number,
+) {
+  if (context.isPartial) {
+    const seconds = Math.floor((now - (state.startedAt ?? now)) / 1000);
+    return theme.fg("muted", `${seconds}s`);
+  }
   return context.durationMs === undefined
-    ? [status]
-    : [status, theme.fg("dim", formatDuration(context.durationMs))];
+    ? undefined
+    : theme.fg("dim", formatDuration(context.durationMs));
 }
 
 /** Pi's default shell: a padded block whose background shows the row's status. */
@@ -177,40 +229,61 @@ export function compactToolRows(
       ...builtIn,
       renderShell: "self",
       renderCall(args, theme, context) {
+        const state = rowState(context);
+        updateTicker(state, context);
         if (context.expanded) {
           const call = innerCall(args, theme, context);
           return ownFraming ? call : frame(call, theme, context, "call");
         }
 
         const call = spec?.label ? undefined : innerCall(args, theme, context);
-        const state = rowState(context);
-        const status = statusParts(theme, context);
         return {
           render(width: number) {
+            const now = Date.now();
             const pad = " ".repeat(context.outputPad);
             const available = Math.max(
               1,
               width - context.outputPad - SCROLLBAR_GUTTER,
             );
             const { detail, trailer } = state.summary ?? {};
-            const suffix = [
-              ...(detail ? [detail] : []),
-              ...status,
-              ...(trailer ? [trailer] : []),
-            ].join(theme.fg("dim", SEPARATOR));
+            const separator = theme.fg("dim", SEPARATOR);
+            const suffix = [detail, timing(theme, context, state, now), trailer]
+              .filter(Boolean)
+              .join(separator);
+            const marker = `${statusMarker(theme, context, now)} `;
+            // A long error may take at most this share of the row; the end of
+            // the row is cut instead of the tool's own label.
+            const trailerOverflow = trailer
+              ? Math.max(
+                  0,
+                  visibleWidth(trailer) -
+                    Math.floor(available * MAX_TRAILER_SHARE),
+                )
+              : 0;
             const labelWidth = Math.max(
               Math.min(12, available),
-              available - visibleWidth(SEPARATOR) - visibleWidth(suffix),
+              available -
+                visibleWidth(marker) -
+                (suffix
+                  ? visibleWidth(SEPARATOR) +
+                    visibleWidth(suffix) -
+                    trailerOverflow
+                  : 0),
             );
-            const label =
+            const label = recolor(
+              theme,
+              context.isPartial ? "accent" : "muted",
               spec?.label?.(theme) ??
-              (call && firstVisibleLine(call)) ??
-              theme.fg("toolTitle", theme.bold(toolName));
+                (call && firstVisibleLine(call)) ??
+                toolName,
+            );
             const line =
+              marker +
               truncateToWidth(label, labelWidth, theme.fg("dim", "…")) +
-              theme.fg("dim", SEPARATOR) +
-              suffix;
-            return [pad + truncateToWidth(line, available, "")];
+              (suffix ? separator + suffix : "");
+            return [
+              pad + truncateToWidth(line, available, theme.fg("dim", "…")),
+            ];
           },
           invalidate() {
             call?.invalidate();

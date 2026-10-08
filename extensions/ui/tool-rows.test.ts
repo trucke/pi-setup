@@ -47,8 +47,9 @@ function createRow(toolName: string, builtIn: ToolRenderers, width = 80) {
   const state = {};
   let callComponent: Component | undefined;
   let resultComponent: Component | undefined;
+  const row = { invalidations: 0 };
 
-  return (
+  const render = (
     result: ToolResult | undefined,
     {
       expanded = false,
@@ -61,7 +62,9 @@ function createRow(toolName: string, builtIn: ToolRenderers, width = 80) {
     const context = (lastComponent: Component | undefined): RenderContext => ({
       args,
       toolCallId: "call-1",
-      invalidate() {},
+      invalidate: () => {
+        row.invalidations += 1;
+      },
       lastComponent,
       state,
       cwd: "/tmp/project",
@@ -90,6 +93,7 @@ function createRow(toolName: string, builtIn: ToolRenderers, width = 80) {
       .map((line) => stripTerminalSequences(line).trimEnd())
       .filter(Boolean);
   };
+  return Object.assign(render, { row });
 }
 
 const text = (value: string): ToolResult => ({
@@ -97,15 +101,60 @@ const text = (value: string): ToolResult => ({
   details: undefined,
 });
 
-test("collapses a tool to its call line, status and duration", () => {
+test("animates a running row and stops once it finishes", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 0 });
   const render = createRow("read", builtInRenderers().renderers);
 
   assert.deepEqual(render(undefined, { isPartial: true }), [
-    "read src/index.ts:1-40 · …",
+    "⠋ read src/index.ts:1-40 · 0s",
   ]);
+  t.mock.timers.tick(2_500);
+  assert.equal(render.row.invalidations, 31);
+  assert.deepEqual(render(undefined, { isPartial: true }), [
+    "⠙ read src/index.ts:1-40 · 2s",
+  ]);
+
   assert.deepEqual(render(text("file contents"), { durationMs: 12 }), [
-    "read src/index.ts:1-40 · ✓ · 12ms",
+    "✓ read src/index.ts:1-40 · 12ms",
   ]);
+  t.mock.timers.tick(1_000);
+  assert.equal(render.row.invalidations, 31);
+});
+
+test("draws a finished call in one muted color, keeping links", () => {
+  const link = "\x1b]8;;file:///src/index.ts\x1b\\src/index.ts\x1b]8;;\x1b\\";
+  const tagged = {
+    fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+    bg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as unknown as Theme;
+  const renderers = resolve("read", () => ({
+    renderCall: () =>
+      new Text(`\x1b[1mread\x1b[22m \x1b[36m${link}\x1b[39m`, 0, 0),
+  }));
+  const row = renderers?.renderCall?.({}, tagged, {
+    args: {},
+    toolCallId: "call-1",
+    invalidate() {},
+    lastComponent: undefined,
+    state: {},
+    cwd: "/tmp/project",
+    executionStarted: true,
+    argsComplete: true,
+    isPartial: false,
+    expanded: false,
+    showImages: false,
+    isError: false,
+    durationMs: 2,
+    outputPad: 0,
+  });
+
+  // Wide enough that the color tags, counted as text here, do not truncate it.
+  const [line] = row?.render(200) ?? [];
+  assert.ok(
+    line?.startsWith(`<success>✓</success> <muted>read ${link}</muted>`),
+    line,
+  );
 });
 
 test("shows the last error line on failure", () => {
@@ -116,8 +165,23 @@ test("shows the last error line on failure", () => {
       isError: true,
       durationMs: 1_500,
     }),
-    ["$ pnpm test · ✗ · 1.5s · Command exited with code 1"],
+    ["✗ $ pnpm test · 1.5s · Command exited with code 1"],
   );
+});
+
+test("cuts a long error instead of the tool's label", () => {
+  const render = createRow("read", builtInRenderers().renderers, 60);
+
+  const [line] = render(text(`ENOENT: ${"x".repeat(100)}`), {
+    isError: true,
+    durationMs: 1,
+  });
+  assert.ok(
+    line?.startsWith("✗ read src/index.ts:1-40 · 1ms · ENOENT: x"),
+    line,
+  );
+  assert.ok(line.endsWith("x…"), line);
+  assert.equal(line.length, 59);
 });
 
 test("truncates a long call line before the status", () => {
@@ -125,7 +189,8 @@ test("truncates a long call line before the status", () => {
   const render = createRow("bash", renderers, 40);
 
   const [line] = render(text("ok"), { durationMs: 3 });
-  assert.ok(line?.endsWith("… · ✓ · 3ms"), line);
+  assert.ok(line?.startsWith("✓ bash x"), line);
+  assert.ok(line.endsWith("… · 3ms"), line);
   // The last column stays free for the fullscreen scrollbar.
   assert.equal(line.length, 39);
 });
@@ -134,7 +199,7 @@ test("tools without a call renderer show their arguments", () => {
   const render = createRow("bg-status", {});
 
   assert.deepEqual(render(text("running"), { durationMs: 4 }), [
-    'bg-status path="src/index.ts" · ✓ · 4ms',
+    '✓ bg-status path="src/index.ts" · 4ms',
   ]);
   assert.deepEqual(render(text("running"), { expanded: true }), [
     "bg-status",
@@ -152,7 +217,8 @@ function calls(...statuses: string[]) {
   }));
 }
 
-test("summarizes codemode calls, failures and model costs", () => {
+test("summarizes codemode calls, failures and model costs", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 0 });
   const render = createRow("codemode", builtInRenderers().renderers);
   const [first, second] = calls("ok", "error");
   assert.ok(first && second);
@@ -162,7 +228,7 @@ test("summarizes codemode calls, failures and model costs", () => {
       { content: [], details: { calls: calls("running") } },
       { isPartial: true },
     ),
-    ["codemode · 1 call · …"],
+    ["⠋ codemode · 1 call · 0s"],
   );
   assert.deepEqual(
     render(
@@ -172,7 +238,7 @@ test("summarizes codemode calls, failures and model costs", () => {
       },
       { isError: true, durationMs: 1_500 },
     ),
-    ["codemode · 2 calls, 1 failed · ✗ · 1.5s · $0.0012 · Script failed"],
+    ["✗ codemode · 2 calls, 1 failed · 1.5s · $0.0012 · Script failed"],
   );
 });
 

@@ -29,9 +29,11 @@ Install these executables on `PATH` for the features you use:
 
 - Dashboard with per-response runtime, VCS status and changed-file views,
   preferring JJ over Git.
-- One-line tool rows with the call, status, duration and, on failure, the last
-  error line. `codemode` rows show their call count and cost instead of the
-  script. Press Ctrl+O, or click a row, to show the full call and output.
+- One-line tool rows with the status, call, duration and, on failure, the last
+  error line. Running rows show a spinner and elapsed seconds in the accent
+  color; finished rows turn grey with ✓ or ✗. `codemode` rows show their call
+  count and cost instead of the script. Press Ctrl+O, or click a row, to show
+  the full call and output.
 - Herdr-aware `ask-user`, background terminals and `fd`/`rg`/`fuzzy-find` file search.
 - `read-pdf` for local files and public PDF URLs, using Poppler rather than OCR.
 - Web search, page fetching and Developer Index search, described below.
