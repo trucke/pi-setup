@@ -26,7 +26,7 @@ import type {
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Markdown, Text } from "@earendil-works/pi-tui";
+import { Key, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import { TerminalManager, type TerminalManagerShape } from "./src/manager.ts";
@@ -418,30 +418,37 @@ export default function (pi: ExtensionAPI) {
 
   // --- Command ------------------------------------------------------------
 
-  pi.registerCommand("ps", {
-    description: "List and inspect background terminals",
-    handler: async (_args, ctx) => {
-      const manager = await getManager();
-      if (ctx.mode !== "tui") {
-        if (ctx.hasUI) {
-          const terminals = manager.view.list();
-          ctx.ui.notify(
-            terminals.length === 0
-              ? "No background terminals."
-              : terminals.map((snap) => describeTerminal(snap)).join("\n"),
-            "info",
-          );
-        }
-        return;
-      }
-      if (manager.view.size() === 0) {
+  const openDashboard = async (ctx: ExtensionContext) => {
+    const manager = await getManager();
+    if (ctx.mode !== "tui") {
+      if (ctx.hasUI) {
+        const terminals = manager.view.list();
         ctx.ui.notify(
-          "No background terminals yet. The agent starts them with bg-start.",
+          terminals.length === 0
+            ? "No background terminals."
+            : terminals.map((snap) => describeTerminal(snap)).join("\n"),
           "info",
         );
-        return;
       }
-      await openTerminalPicker(ctx, manager.view);
-    },
+      return;
+    }
+    if (manager.view.size() === 0) {
+      ctx.ui.notify(
+        "No background terminals yet. The agent starts them with bg-start.",
+        "info",
+      );
+      return;
+    }
+    await openTerminalPicker(ctx, manager.view);
+  };
+
+  pi.registerCommand("ps", {
+    description: "List and inspect background terminals",
+    handler: (_args, ctx) => openDashboard(ctx),
+  });
+
+  pi.registerShortcut(Key.ctrlShift("b"), {
+    description: "Open the background terminals panel",
+    handler: openDashboard,
   });
 }

@@ -18,6 +18,7 @@ function makePi(tools: RegisteredTool[]) {
     registerMessageRenderer() {},
     registerEntryRenderer() {},
     registerCommand() {},
+    registerShortcut() {},
   } as unknown as ExtensionAPI;
 }
 

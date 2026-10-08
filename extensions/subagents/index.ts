@@ -39,7 +39,7 @@ import {
   ProjectTrustStore,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
-import { Markdown, Text } from "@earendil-works/pi-tui";
+import { Key, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { deriveBtwTitle, isModelVisible } from "./src/by-the-way.ts";
 import {
@@ -953,26 +953,33 @@ export default function (pi: ExtensionAPI) {
     handler: runByTheWay,
   });
 
+  const openDashboard = async (ctx: ExtensionContext) => {
+    if (ctx.mode !== "tui") {
+      if (ctx.hasUI)
+        ctx.ui.notify(
+          "Subagent takeover is only available in the TUI",
+          "error",
+        );
+      return;
+    }
+    const manager = await getManager();
+    if (manager.view.size() === 0) {
+      ctx.ui.notify(
+        "No subagents yet. Use subagent-spawn for profiles or subagent-spawn-direct for a specific harness.",
+        "info",
+      );
+      return;
+    }
+    await openSubagentPicker(ctx, manager.view);
+  };
+
   pi.registerCommand("subagents", {
     description: "List, inspect, and take over subagents",
-    handler: async (_args, ctx) => {
-      if (ctx.mode !== "tui") {
-        if (ctx.hasUI)
-          ctx.ui.notify(
-            "Subagent takeover is only available in the TUI",
-            "error",
-          );
-        return;
-      }
-      const manager = await getManager();
-      if (manager.view.size() === 0) {
-        ctx.ui.notify(
-          "No subagents yet. Use subagent-spawn for profiles or subagent-spawn-direct for a specific harness.",
-          "info",
-        );
-        return;
-      }
-      await openSubagentPicker(ctx, manager.view);
-    },
+    handler: (_args, ctx) => openDashboard(ctx),
+  });
+
+  pi.registerShortcut(Key.ctrlShift("s"), {
+    description: "Open the subagents panel",
+    handler: openDashboard,
   });
 }

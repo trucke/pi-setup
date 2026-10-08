@@ -29,16 +29,21 @@ Install these executables on `PATH` for the features you use:
 
 - Dashboard with per-response runtime, VCS status and changed-file views,
   preferring JJ over Git.
-- One-line `codemode` rows with call count, status and duration. Press Ctrl+O
-  to show the script, its tool calls and output.
+- One-line tool rows with the call, status, duration and, on failure, the last
+  error line. `codemode` rows show their call count and cost instead of the
+  script. Press Ctrl+O, or click a row, to show the full call and output.
 - Herdr-aware `ask-user`, background terminals and `fd`/`rg`/`fuzzy-find` file search.
 - `read-pdf` for local files and public PDF URLs, using Poppler rather than OCR.
 - Web search, page fetching and Developer Index search, described below.
 - Pi, Claude Code and Codex subagents, with companion skills for subagents and
-  background terminals.
+  background terminals. Open their panels with `/subagents` or Ctrl+Shift+S,
+  and `/ps` or Ctrl+Shift+B.
 - `/undo` rewinds the latest user turn and restores its text to the editor.
   The old branch remains in `/tree`. It requires an idle agent and does not undo
   files or other side effects.
+- `/jj` browses Jujutsu history with diffs and runs describe, sign, new, edit,
+  squash, abandon, undo, bookmark and push on the selected revision. Push
+  shows jj's dry run and pushes only after confirmation.
 - `/recap` summarizes the current task, progress and next step in at most 40 words.
 
 To use an included theme, set `"theme"` to `"github-dark-default"` or

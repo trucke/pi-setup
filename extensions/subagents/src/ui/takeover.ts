@@ -7,7 +7,7 @@
  */
 
 import type {
-  ExtensionCommandContext,
+  ExtensionContext,
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
@@ -62,7 +62,7 @@ export interface TakeoverOptions {
 }
 
 export async function openSubagentTakeover(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   view: SubagentReadModel,
   id: string,
   options?: TakeoverOptions,
@@ -79,7 +79,7 @@ export async function openSubagentTakeover(
 }
 
 export async function openSubagentPicker(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   view: SubagentReadModel,
 ) {
   const selection: DashboardSelection = { index: 0 };
