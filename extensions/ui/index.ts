@@ -13,6 +13,7 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { REFRESH_CHANNEL } from "../shared/dashboard-state.ts";
+import { compactCodemodeRenderer } from "./codemode.ts";
 import { fitFooterLine, type FooterSegment } from "./footer-layout.ts";
 import { registerVcsInfo } from "./vcs/index.ts";
 import { emptyVcsInfoState, type VcsInfoState } from "./vcs/state.ts";
@@ -291,6 +292,7 @@ export default function ui(
   }
 
   pi.registerMarkdownTransformer(markTranscriptRoles);
+  pi.registerToolRenderer(compactCodemodeRenderer);
 
   pi.on("session_start", (_event, ctx) => {
     title = formatDirectory(ctx.cwd);

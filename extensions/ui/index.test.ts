@@ -35,6 +35,7 @@ function createFooter(initialVcsState?: VcsInfoState) {
       handlers.set(name, handler);
     },
     registerMarkdownTransformer() {},
+    registerToolRenderer() {},
     events: { emit() {} },
   } as unknown as ExtensionAPI;
 
