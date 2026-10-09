@@ -3,7 +3,12 @@ import { runCommand } from "../ui/vcs/process.ts";
 import { createRuntime, runEffect } from "../ui/vcs/runtime.ts";
 import { sanitizeTerminalText } from "../ui/vcs/changed-files-view.ts";
 import { checked, performAction, type Run } from "./src/actions.ts";
-import { logArgs, parseLog, type LogEntry } from "./src/model.ts";
+import {
+  HISTORY_REVSET,
+  logArgs,
+  parseLog,
+  type LogEntry,
+} from "./src/model.ts";
 import { showHistory, type Selection } from "./src/view.ts";
 
 export default function jjExtension(pi: ExtensionAPI) {
@@ -45,7 +50,7 @@ export default function jjExtension(pi: ExtensionAPI) {
           ctx.ui.notify("Not a jj repository", "warning");
           return;
         }
-        let revset: string | undefined;
+        let revset: string | undefined = HISTORY_REVSET;
         let entries: LogEntry[] = [];
         let status = "";
         const selection: Selection = { index: 0 };
@@ -72,17 +77,17 @@ export default function jjExtension(pi: ExtensionAPI) {
           try {
             if (action === "revset") {
               const input = await ctx.ui.input(
-                "Revset (empty restores jj default)",
-                revset ?? "",
+                "Revset (empty shows the full history)",
+                revset === HISTORY_REVSET ? "" : (revset ?? ""),
               );
               if (input !== undefined) {
-                const next = input.trim() || undefined;
+                const next = input.trim() || HISTORY_REVSET;
                 // Validate before changing the filter, keeping the last good log on errors.
                 entries = parseLog(checked(await run(logArgs(next))));
                 revset = next;
               }
             } else if (action === "all")
-              revset = revset === "all()" ? undefined : "all()";
+              revset = revset === HISTORY_REVSET ? undefined : HISTORY_REVSET;
             else if (action !== "refresh")
               await performAction(
                 ctx,

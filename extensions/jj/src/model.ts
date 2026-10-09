@@ -81,8 +81,29 @@ export function parseLog(output: string): LogEntry[] {
   return entries;
 }
 
-export function logArgs(revset?: string) {
-  return ["log", ...(revset ? ["-r", revset] : []), "-T", LOG_TEMPLATE];
+/**
+ * The view starts with the whole history. jj's own default log revset shows
+ * only unpushed work and trunk, which is just two rows after a push.
+ */
+export const HISTORY_REVSET = "all()";
+/** Newest revisions first; keeps large repositories fast. */
+export const LOG_LIMIT = 500;
+
+/** `undefined` uses the user's configured jj log revset. */
+export function logArgs(revset: string | undefined) {
+  return [
+    "log",
+    ...(revset ? ["-r", revset] : []),
+    "--limit",
+    String(LOG_LIMIT),
+    "-T",
+    LOG_TEMPLATE,
+  ];
+}
+
+export function revsetLabel(revset: string | undefined) {
+  if (revset === HISTORY_REVSET) return "full history";
+  return revset ?? "jj default log";
 }
 
 export type Action =

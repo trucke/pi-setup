@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalText } from "../../ui/vcs/changed-files-view.ts";
 import { checked, type Run } from "./actions.ts";
-import type { Action, LogEntry } from "./model.ts";
+import { LOG_LIMIT, revsetLabel, type Action, type LogEntry } from "./model.ts";
 
 const actions: Record<
   string,
@@ -139,7 +139,7 @@ export async function showHistory(
         },
         render(width) {
           const hints = wrapTextWithAnsi(
-            "j/k ↑/↓ move · enter/tab detail · f diff · d describe · s/S sign/unsign · n new · e edit · x squash · a abandon · u undo · b bookmark · p push · r revset · A all/default · R refresh · q/esc back",
+            "j/k ↑/↓ move · enter/tab detail · f diff · d describe · s/S sign/unsign · n new · e edit · x squash · a abandon · u undo · b bookmark · p push · r revset · A history/jj default · R refresh · q/esc back",
             width,
           );
           const height = Math.max(1, tui.terminal.rows - hints.length - 4);
@@ -149,7 +149,7 @@ export async function showHistory(
             theme.fg(
               "accent",
               truncateToWidth(
-                `jj · ${revset ?? "default revset"} · ${entries.length} revisions · ${detail ? "DETAIL" : "LOG"}`,
+                `jj · ${revsetLabel(revset)} · ${entries.length >= LOG_LIMIT ? `newest ${LOG_LIMIT}` : entries.length} revisions · ${detail ? "DETAIL" : "LOG"}`,
                 width,
               ),
             ),

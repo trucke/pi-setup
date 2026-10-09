@@ -52,8 +52,14 @@ test("malformed and truncated records are errors rather than actionable partial 
 });
 
 test("commands preserve literal descriptions, names and default revset", () => {
-  assert.ok(!logArgs().includes("-r"));
-  assert.ok(logArgs("all()").includes("all()"));
+  assert.ok(!logArgs(undefined).includes("-r"));
+  assert.deepEqual(logArgs("all()").slice(0, 5), [
+    "log",
+    "-r",
+    "all()",
+    "--limit",
+    "500",
+  ]);
   assert.deepEqual(actionArgs("describe", "abc", ""), [
     "describe",
     "-r",
