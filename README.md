@@ -43,6 +43,12 @@ Install these executables on `PATH` for the features you use:
 - `/undo` rewinds the latest user turn and restores its text to the editor.
   The old branch remains in `/tree`. It requires an idle agent and does not undo
   files or other side effects.
+- Quote the agent's latest answer into your prompt: type `>` on an empty line
+  to pick a paragraph, list item or code block from a framed panel above the
+  editor. It takes vim-style keys: `j`/`k`, `g`/`G` and Ctrl+D/Ctrl+U move,
+  `/` filters, Enter inserts, `q` or Esc closes. Ctrl+Q or `/quote` quotes
+  the whole answer. Type `> ` with a space to write a quote yourself. The `>`
+  picker is skipped if another extension replaces Pi's editor.
 - `/jj` browses Jujutsu history with diffs and runs describe, sign, new, edit,
   squash, abandon, undo, bookmark and push on the selected revision. Push
   shows jj's dry run and pushes only after confirmation.
