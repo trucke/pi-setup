@@ -36,7 +36,7 @@
     "typebox": "*"
   },
   "name": "@trucke/pi-setup",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "packageManager": "pnpm@11.24.0",
   "keywords": [
     "pi-package"
@@ -65,7 +65,8 @@
     ],
     "themes": [
       "./themes/github-dark-default.json",
-      "./themes/dark-mini.json"
+      "./themes/dark-mini.json",
+      "./themes/nightside-ember.json"
     ]
   },
   "private": true
