@@ -58,8 +58,10 @@ Install these executables on `PATH` for the features you use:
   to Pi's behavior.
 - `/recap` summarizes the current task, progress and next step in at most 40 words.
 
-To use an included theme, set `"theme"` to `"github-dark-default"` or
-`"dark-mini"` in `~/.pi/agent/settings.json`. `dark-mini` is Pi's `dark` theme
+To use an included theme, set `"theme"` to `"github-dark-default"`,
+`"dark-mini"` or `"nightside-ember"` in `~/.pi/agent/settings.json`.
+`nightside-ember` is the Heylogix terminal theme with amber as the agent colour:
+pure black, no editor frame, tool blocks on navy, red only for errors. `dark-mini` is Pi's `dark` theme
 without backgrounds behind user messages and tool calls, and with one editor
 border color for every thinking level. It pairs with the
 compact transcript markers (`›` for prompts, _Thinking:_ for reasoning).
