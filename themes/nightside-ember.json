@@ -1,7 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
   "name": "nightside-ember",
-  "description": "Nightside Ember \u00b7 Heylogix agent theme. Nightside's black and ANSI set with amber as the agent's colour. Source of truth: Paper file heylogix-ci, tokens --color-nightside-ember-*. Editor frame = surface (fallback: subtle); caret is the terminal cursor.",
   "appearance": "dark",
   "vars": {
     "bg": "",
