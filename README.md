@@ -23,7 +23,6 @@ Install these executables on `PATH` for the features you use:
 | PDF reading             | Poppler (`pdfinfo` and `pdftotext`)           |
 | Claude subagents        | Claude Code, authenticated with `claude auth` |
 | Codex subagents         | Codex CLI, authenticated with `codex login`   |
-| Optional GitHub reports | `gh`, already signed in                       |
 
 ## Included tools and commands
 
@@ -95,16 +94,6 @@ Eligible local failures offer permission to send the exact URL to Exa, with
 Firecrawl fallback. Approval applies only to that request. Declining or
 dismissing sends nothing; headless runs remain local-only. Hosted providers
 control their own redirects and browser behavior.
-
-A separate report offer requires a user-supplied public, non-sensitive
-reproduction URL. The failed URL is never copied or prefilled. You review the
-exact report before separately approving publication to
-[`trucke/pi-setup`](https://github.com/trucke/pi-setup) under your signed-in GitHub
-account, not anonymously. Reports contain allowlisted diagnostics, not raw
-errors, logs, page content, headers or session data. Unsafe/invalid requests,
-cancellation and headless runs do not offer reporting. Report failures do not
-discard successful fetched content. If submission fails, check GitHub before
-retrying: an issue may already exist.
 
 For a separate explicit `web-fetch-hosted` tool, set `PI_WEB_HOSTED_FETCH=1` in
 the process environment before starting Pi. It sends URLs to third parties;

@@ -3,7 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export const HERDR_BLOCKED_CHANNEL = "herdr:blocked";
 
 export async function withHerdrBlocked<T>(
-  pi: ExtensionAPI,
+  pi: Pick<ExtensionAPI, "events">,
   label: string,
   operation: () => Promise<T>,
 ) {

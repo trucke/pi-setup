@@ -11,7 +11,7 @@ export type PreviewContext = Pick<ExtensionContext, "mode"> & {
   ui: Pick<ExtensionContext["ui"], "custom" | "select">;
 };
 
-/** Read-only viewport. Wrapping follows the terminal, never changes the report. */
+/** Read-only viewport. Wrapping follows the terminal, never changes the reviewed text. */
 export class TextPreview {
   private readonly content: Text;
   private offset = 0;

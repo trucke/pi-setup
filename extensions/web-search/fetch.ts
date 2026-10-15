@@ -175,12 +175,12 @@ export function registerFetchTool(pi: ExtensionAPI, call: CallHosted) {
     label: "Fetch Web Page",
     ...webRenderers("web-fetch"),
     description:
-      "Read one public HTTP(S) URL locally first. HTML becomes readable Markdown; text, Markdown and JSON are returned directly. No JavaScript, cookies or credentials. Every redirect and DNS answer is validated and connections are pinned. Downloads are limited to 5 MiB and 30 seconds by default. Inline output is limited to 16KB or 400 lines, with complete extracted content saved to a temp file when truncated; use read for more. Eligible local failures offer per-request UI consent for Exa with Firecrawl fallback, plus a separately opt-in public GitHub reproduction report. Headless requests stay local.",
+      "Read one public HTTP(S) URL locally first. HTML becomes readable Markdown; text, Markdown and JSON are returned directly. No JavaScript, cookies or credentials. Every redirect and DNS answer is validated and connections are pinned. Downloads are limited to 5 MiB and 30 seconds by default. Inline output is limited to 16KB or 400 lines, with complete extracted content saved to a temp file when truncated; use read for more. Eligible local failures offer per-request UI consent for Exa with Firecrawl fallback. Headless requests stay local.",
     promptSnippet:
       "Read a public URL locally, with optional per-request hosted recovery after UI consent.",
     promptGuidelines: [
       "Use web-fetch to read selected known URLs; do not re-fetch content already available unless freshness matters.",
-      "web-fetch never silently discloses URLs to hosted providers. Respect declined consent; do not bypass it with web-fetch-hosted or other tools. Reporting requires the user to supply a non-sensitive public reproduction URL.",
+      "web-fetch never silently discloses URLs to hosted providers. Respect declined consent; do not bypass it with web-fetch-hosted or other tools.",
     ],
     parameters: Type.Object({
       url: Type.String({
@@ -193,7 +193,7 @@ export function registerFetchTool(pi: ExtensionAPI, call: CallHosted) {
           minimum: 1,
           maximum: 120_000,
           description:
-            "Local fetch/extraction timeout in milliseconds, excluding consent, hosted recovery and reporting. Default 30000; maximum 120000.",
+            "Local fetch/extraction timeout in milliseconds, excluding consent and hosted recovery. Default 30000; maximum 120000.",
         }),
       ),
     }),
@@ -211,8 +211,8 @@ export function registerFetchTool(pi: ExtensionAPI, call: CallHosted) {
         };
       };
       const result = await recoverFetch<Page>({
+        pi,
         url: params.url,
-        timeout: params.timeout ?? 30_000,
         ctx,
         signal: signal ?? new AbortController().signal,
         queue,
