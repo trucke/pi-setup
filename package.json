@@ -27,7 +27,8 @@
     "format": "prettier --write \"extensions/**/*.{ts,cjs}\" \"*.json\"",
     "format:check": "prettier --check \"extensions/**/*.{ts,cjs}\" \"*.json\"",
     "test": "node --test --experimental-strip-types extensions/*/*.test.ts && vitest run extensions/file-search/index.spec.ts",
-    "test:live": "node --test --experimental-strip-types extensions/subagents/claude.live.ts extensions/subagents/codex.live.ts"
+    "test:live": "node --test --experimental-strip-types extensions/subagents/claude.live.ts extensions/subagents/codex.live.ts",
+    "test:cli": "node --test --experimental-strip-types extensions/cliproxyapi-provider/release.cli.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -36,7 +37,7 @@
     "typebox": "*"
   },
   "name": "@trucke/pi-setup",
-  "version": "0.8.10",
+  "version": "0.9.0",
   "packageManager": "pnpm@11.24.0",
   "keywords": [
     "pi-package"
@@ -45,6 +46,7 @@
     "extensions": [
       "./extensions/ask-user/index.ts",
       "./extensions/background-terminals/index.ts",
+      "./extensions/cliproxyapi-provider/index.ts",
       "./extensions/file-search/index.ts",
       "./extensions/jj/index.ts",
       "./extensions/quote/index.ts",

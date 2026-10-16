@@ -1,0 +1,137 @@
+# CLIProxyAPI provider
+
+Connects Pi to a [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (CPA) server for GPT and Claude models.
+GPT models use CPA's Responses WebSocket and continue earlier turns instead of resending the whole conversation.
+Claude models use Anthropic Messages. OpenCode and OpenCode Go stay Pi's built-in providers.
+
+The extension does nothing until its config file exists.
+
+## Set up
+
+1. Create `~/.pi/agent/cliproxyapi.json` (or `$PI_CODING_AGENT_DIR/cliproxyapi.json`):
+
+   ```json
+   { "baseUrl": "http://127.0.0.1:8317" }
+   ```
+
+2. Provide a CPA client key. Either set `CLIPROXYAPI_API_KEY` in Pi's environment or run `/login cliproxyapi`.
+   A stored key can be a secret command such as `"!security find-generic-password -ws cpa"`.
+3. Start Pi and run `/proxy status`. You should see the CPA models and where their limits came from.
+
+On the first start without a cached model list, Pi asks CPA once, for at most 8 seconds, using the environment key.
+Later starts use the cached list. Interactive sessions refresh it in the background at startup.
+Print, JSON and RPC runs keep using the cache. Run `/proxy refresh` to refresh it now.
+
+## Move from a manual `proxy` provider in models.json
+
+The extension refuses to register a provider id that `models.json` still defines with `models`, `baseUrl`, `api` or `oauth`.
+`/proxy status` names the conflict. To keep the name `proxy`:
+
+1. Remove the `providers.proxy` block from `~/.pi/agent/models.json`. A block with only `modelOverrides` can stay.
+2. Set `"provider": "proxy"` in `cliproxyapi.json`.
+3. Move per-model corrections into `routes`, for example:
+
+   ```json
+   {
+     "baseUrl": "https://cpa.example",
+     "provider": "proxy",
+     "routes": {
+       "gpt-6.1-sol": { "contextWindow": 500000 },
+       "gpt-6.1-sol-fast": { "metadata": "openai/gpt-6.1-sol", "contextWindow": 500000 }
+     }
+   }
+   ```
+
+4. Run `/reload`, then `/proxy refresh`.
+
+Model ids stay exactly as CPA lists them, including aliases such as `gpt-6.1-sol-fast`.
+
+## Configuration reference
+
+`PI_CLIPROXYAPI_CONFIG` overrides the config file path. Unknown keys are rejected.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `baseUrl` | required | CPA root URL. A trailing `/v1` is accepted. |
+| `provider` | `cliproxyapi` | Pi provider id. Built-in provider ids are refused. |
+| `name` | `CLIProxyAPI` | Display name. |
+| `apiKeyEnv` | `CLIPROXYAPI_API_KEY` | Environment variable that holds the client key. The file never holds the key itself. |
+| `websocket` | `true` | `false` sends GPT requests over HTTP streaming (SSE) only. |
+| `routes` | `{}` | Settings per CPA model id, described below. |
+
+A route can set:
+
+| Key | Meaning |
+|---|---|
+| `api` | `openai-responses` or `anthropic-messages`. Required for ids that are not inferred. |
+| `metadata` | Pi catalog entry to enrich from, such as `openai/gpt-6.1-sol`. `null` turns enrichment off. |
+| `name`, `contextWindow`, `maxTokens`, `input`, `reasoning`, `thinkingLevelMap`, `cost` | Corrections with Pi's model field meanings. |
+| `compat` | Pi compatibility flags for the route's API, such as `supportsMidConvoEffort`. |
+
+## Model list and metadata
+
+CPA decides which models exist. Pi asks `GET /v1/models` and, for details, `GET /v1/models?client_version=pi`, which older CPA versions do not support.
+
+Without a route, only bare ids are used: `gpt-*` with Responses and `claude-*` with Anthropic Messages.
+Other ids, such as `go/claude-haiku-5-5`, are hidden and listed in `/proxy status`.
+
+Each field takes the first available source:
+
+| Field | GPT routes | Claude routes |
+|---|---|---|
+| Context window | route, CPA, Pi catalog | route, then CPA or Pi catalog (the smaller when both exist) |
+| Max output, input types, reasoning levels | route, CPA, Pi catalog | route, Pi catalog |
+| Price | route, Pi catalog | route, Pi catalog |
+
+CPA reports GPT-style details even for Claude ids it knows little about, so they are not trusted there.
+Conflicting context sizes appear as warnings in `/proxy status`.
+
+Metadata comes from Pi's own model catalog: the session catalog including pi.dev updates, or the catalog bundled with Pi.
+There is no separate models.dev download. The default entry is `openai/<id>` for GPT and `anthropic/<id>` for Claude.
+Fields that no source provides stay conservative: text only, no reasoning, 128000 context, 16384 output and price 0.
+This is common for aliases without a catalog entry. `/proxy status` marks these fields. A price of 0 does not mean free, and catalog prices are estimates, not CPA billing.
+
+From a catalog entry, only flags describing the request shape are taken, such as strict tools and adaptive thinking.
+Mid-conversation features such as `configuration_update` stay off unless a route enables them in `compat`.
+
+## Cache
+
+The model list is stored in Pi's `models-store.json` under the provider id, with the CPA root and a scrypt hash of the key.
+The key itself is not stored. A cached list is used only for the same CPA root.
+It is also checked against the key when Pi can read the key without running a command.
+
+## WebSocket continuation
+
+For GPT models in a session, Pi's normal Responses request is carried over `wss://<root>/v1/responses`.
+When a request extends the previous one on the same connection, only the new input is sent with `previous_response_id`.
+Pi keeps the full history. Continuation only saves sending it again.
+
+- A continuation is sent only when the request options are identical and the new input starts with the previous input and that response's output, item for item.
+- Anything else, including compaction, `/tree` navigation, edited history and model changes, starts a full request on a new connection.
+- Connections belong to one session, model and key. Parallel and subagent sessions never share them.
+- If CPA rejects a continuation, or closes with code 1012 to ask for a replay, the full history is sent once on a new connection.
+- If the WebSocket cannot connect, the same request goes over HTTP and the session stays on HTTP for 5 minutes.
+- If a reused connection is lost before the request was sent, the full history goes over a new connection.
+- If CPA may have received a request, the extension reports the failure instead of resending it. Pi's own retry policy still applies.
+- Idle connections close after 5 minutes. Aborts, `/reload` and session shutdown close them.
+- Pi's `transport: "sse"` setting, a model with a different `baseUrl`, and requests without a session id use HTTP.
+
+Request hooks work as usual. For WebSocket requests, `onResponse` sees a synthetic `200 text/event-stream` response, not the handshake headers.
+
+Continuation applies between Pi and CPA. How CPA reaches the upstream service is CPA's decision.
+For HTTP upstreams, CPA expands each continuation back to the full history.
+
+## Commands
+
+- `/proxy status` shows the config, endpoint, key source, model list age and scope, each model's limits and their sources, warnings, hidden ids and WebSocket statistics. Without an interactive UI it writes to stderr.
+- `/proxy refresh` asks CPA for the model list now and keeps the previous list if that fails.
+
+## Limitations
+
+- Tested against a local mock of CPA's documented WebSocket behavior, not a deployed CPA.
+- First-use discovery needs the key in the environment. With only a stored key, start Pi interactively once or run `/proxy refresh`.
+- `pi update --models` does not load extensions, so it does not refresh this provider.
+
+## Development
+
+`pnpm test` covers this extension. `pnpm test:cli` stages the package with runtime dependencies only and runs it under the installed `pi` binary; set `PI_BIN` to use another one.

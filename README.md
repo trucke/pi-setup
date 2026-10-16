@@ -56,6 +56,10 @@ Install these executables on `PATH` for the features you use:
   lines. This patches a private Pi method; if Pi changes it, copying falls back
   to Pi's behavior.
 - `/recap` summarizes the current task, progress and next step in at most 40 words.
+- A CLIProxyAPI provider for GPT and Claude models behind a CPA server, with
+  WebSocket continuation for GPT. It stays off until `cliproxyapi.json` exists;
+  see [its README](extensions/cliproxyapi-provider/README.md). `/proxy status`
+  and `/proxy refresh` inspect and refresh it.
 
 To use an included theme, set `"theme"` to `"github-dark-default"`,
 `"dark-mini"` or `"nightside-ember"` in `~/.pi/agent/settings.json`.
@@ -133,5 +137,8 @@ pnpm check
 pnpm format:check
 pnpm pack --dry-run
 ```
+
+`pnpm test:cli` additionally runs the CLIProxyAPI provider from a
+runtime-only package under the installed `pi` binary.
 
 See [AGENTS.md](AGENTS.md) for repository and release guidelines.
