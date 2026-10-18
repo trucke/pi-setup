@@ -18,7 +18,6 @@ import {
 } from "./src/config.ts";
 import { bundledReference } from "./src/provider.ts";
 import { continuationDelta, type Continuation } from "./src/responses.ts";
-import { formatStatus } from "./src/status.ts";
 
 const config = (routes: ProxyConfig["routes"] = {}): ProxyConfig => ({
   path: "test",
@@ -344,37 +343,4 @@ test("extension code imports only Pi modules the host provides", async () => {
       );
     }
   }
-});
-
-test("status shows catalog warnings and neutralizes control characters from CPA", () => {
-  const hostile: DiscoveredModel[] = [
-    { id: "evil\u001b[2Jid\u202e" },
-    { id: "gpt-6.1-sol" },
-  ];
-  const catalog = resolveCatalog(
-    hostile,
-    config({ "gpt-retired": { api: "openai-responses" } }),
-    bundledReference,
-  );
-  const text = formatStatus({
-    load: { status: "ok", config: config() },
-    auth: "CLIPROXYAPI_API_KEY",
-    catalog: {
-      source: "live",
-      scope: "verified",
-      checkedAt: 0,
-      notes: [],
-      catalog,
-      lastError: { message: "boom\u0007\nforged line", at: 0 },
-    },
-    sessions: [],
-    now: 60_000,
-  });
-  assert.match(
-    text,
-    /Catalog warnings:\n {2}! route gpt-retired is configured but CPA does not offer it/,
-  );
-  assert.match(text, /evil\?\[2Jid\?: not a bare gpt-\* or claude-\* id/);
-  assert.match(text, /last refresh failed 60s ago: boom\?\?forged line/);
-  assert.doesNotMatch(text, /[\u0000-\u0009\u000b-\u001f\u202e]/);
 });

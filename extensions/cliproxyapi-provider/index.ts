@@ -21,9 +21,11 @@ import {
   isBuiltinProviderId,
   type ProxyProvider,
 } from "./src/provider.ts";
-import { formatStatus, printable } from "./src/status.ts";
+import { formatModels, formatStatus, printable } from "./src/status.ts";
 
 const REFRESH_TIMEOUT_MS = 30_000;
+const ACTIONS = ["status", "models", "refresh"];
+const USAGE = `/proxy [${ACTIONS.join(" | ")}]`;
 
 export default async function cliproxyapiProvider(pi: ExtensionAPI) {
   const agentDir = getAgentDir();
@@ -89,21 +91,24 @@ export default async function cliproxyapiProvider(pi: ExtensionAPI) {
     else process.stderr.write(`${safe}\n`);
   };
 
+  const reportSetup = (ctx: ExtensionCommandContext) =>
+    report(
+      ctx,
+      formatStatus({ load, ...(setupError ? { setupError } : {}) }),
+      "warning",
+    );
+
   pi.registerCommand("proxy", {
-    description: "CLIProxyAPI provider: /proxy status | /proxy refresh",
+    description: `CLIProxyAPI provider: ${USAGE}`,
     getArgumentCompletions: (prefix) =>
-      ["status", "refresh"]
-        .filter((value) => value.startsWith(prefix.trim()))
-        .map((value) => ({ value, label: value })),
+      ACTIONS.filter((value) => value.startsWith(prefix.trim())).map(
+        (value) => ({ value, label: value }),
+      ),
     handler: async (args, ctx) => {
       const action = args.trim() || "status";
       if (action === "refresh") {
         if (!proxy) {
-          report(
-            ctx,
-            formatStatus({ load, ...(setupError ? { setupError } : {}) }),
-            "warning",
-          );
+          reportSetup(ctx);
           return;
         }
         const id = proxy.provider.id;
@@ -136,29 +141,32 @@ export default async function cliproxyapiProvider(pi: ExtensionAPI) {
         }
         return;
       }
-      if (action !== "status") {
-        report(ctx, "Usage: /proxy status | /proxy refresh", "warning");
+      if (action === "models") {
+        if (!proxy || load.status !== "ok") {
+          reportSetup(ctx);
+          return;
+        }
+        report(ctx, formatModels(load.config, proxy.status()), "info");
         return;
       }
-      const auth = proxy
-        ? ctx.modelRegistry.getProviderAuthStatus(proxy.provider.id)
-        : undefined;
+      if (action !== "status") {
+        report(ctx, `Usage: ${USAGE}`, "warning");
+        return;
+      }
+      if (!proxy) {
+        reportSetup(ctx);
+        return;
+      }
       report(
         ctx,
         formatStatus({
           load,
-          ...(setupError ? { setupError } : {}),
-          ...(auth
-            ? {
-                auth: auth.configured
-                  ? `${auth.label ?? auth.source ?? "configured"}`
-                  : `not configured (set ${load.status === "ok" ? load.config.apiKeyEnv : "the key"} or /login)`,
-              }
-            : {}),
-          ...(proxy
-            ? { catalog: proxy.status(), sessions: proxy.transport.status() }
-            : {}),
-          currentSessionId: ctx.sessionManager.getSessionId(),
+          registered: {
+            auth: ctx.modelRegistry.getProviderAuthStatus(proxy.provider.id),
+            catalog: proxy.status(),
+            sessions: proxy.transport.status(),
+            sessionId: ctx.sessionManager.getSessionId(),
+          },
         }),
         "info",
       );

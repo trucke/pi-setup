@@ -181,13 +181,26 @@ test(
       "read note.txt",
       "thanks",
       "/proxy status",
+      "/proxy models",
     ]);
     assert.equal(chat.status, 0, chat.stderr);
     assert.match(chat.stdout, /plain answer ✓/);
-    assert.match(
-      chat.stderr,
-      /3 WebSocket requests \(2 delta, 1 full, 1 connections\), 0 via SSE/,
+    // Without a UI both reports go to stderr: a short status, then the per-model details.
+    const status = chat.stderr.slice(
+      chat.stderr.indexOf("CLIProxyAPI: "),
+      chat.stderr.indexOf("CLIProxyAPI models:"),
     );
+    const models = chat.stderr.slice(
+      chat.stderr.indexOf("CLIProxyAPI models:"),
+    );
+    assert.match(status, /^CLIProxyAPI: ready\n/);
+    assert.match(
+      status,
+      /GPT \(this session\): WebSocket connected for gpt-6\.1-sol; 3 requests, 2 continued, 1 connection\n/,
+    );
+    assert.ok(status.trim().split("\n").length <= 7, status);
+    assert.doesNotMatch(status, /claude-opus-5-5|cliproxyapi\.json/);
+    assert.match(models, /claude-opus-5-5 \[anthropic-messages, inferred\]/);
     assert.doesNotMatch(chat.stderr, /\[bun\] Warning/);
     assert.deepEqual(
       mock.requests.map((request) => [

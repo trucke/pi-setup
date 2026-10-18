@@ -16,7 +16,8 @@ The extension does nothing until its config file exists.
 
 2. Provide a CPA client key. Either set `CLIPROXYAPI_API_KEY` in Pi's environment or run `/login cliproxyapi`.
    A stored key can be a secret command such as `"!security find-generic-password -ws cpa"`.
-3. Start Pi and run `/proxy status`. You should see the CPA models and where their limits came from.
+3. Start Pi and run `/proxy status`. You should see `ready`, the key source and the number of models.
+   Run `/proxy models` to see each model's limits and where they came from.
 
 On the first start without a cached model list, Pi asks CPA once, for at most 8 seconds, using the environment key.
 Later starts use the cached list. Interactive sessions refresh it in the background at startup.
@@ -73,7 +74,7 @@ A route can set:
 CPA decides which models exist. Pi asks `GET /v1/models` and, for details, `GET /v1/models?client_version=pi`, which older CPA versions do not support.
 
 Without a route, only bare ids are used: `gpt-*` with Responses and `claude-*` with Anthropic Messages.
-Other ids, such as `go/claude-haiku-5-5`, are hidden and listed in `/proxy status`.
+Other ids, such as `go/claude-haiku-5-5`, are hidden and listed in `/proxy models`.
 
 Each field takes the first available source:
 
@@ -84,12 +85,12 @@ Each field takes the first available source:
 | Price | route, Pi catalog | route, Pi catalog |
 
 CPA reports GPT-style details even for Claude ids it knows little about, so they are not trusted there.
-Conflicting context sizes appear as warnings in `/proxy status`.
+Conflicting context sizes appear as warnings in `/proxy models`.
 
 Metadata comes from Pi's own model catalog: the session catalog including pi.dev updates, or the catalog bundled with Pi.
 There is no separate models.dev download. The default entry is `openai/<id>` for GPT and `anthropic/<id>` for Claude.
 Fields that no source provides stay conservative: text only, no reasoning, 128000 context, 16384 output and price 0.
-This is common for aliases without a catalog entry. `/proxy status` marks these fields. A price of 0 does not mean free, and catalog prices are estimates, not CPA billing.
+This is common for aliases without a catalog entry. `/proxy models` marks these fields. A price of 0 does not mean free, and catalog prices are estimates, not CPA billing.
 
 From a catalog entry, only flags describing the request shape are taken, such as strict tools and adaptive thinking.
 Mid-conversation features such as `configuration_update` stay off unless a route enables them in `compat`.
@@ -123,12 +124,16 @@ For HTTP upstreams, CPA expands each continuation back to the full history.
 
 ## Commands
 
-- `/proxy status` shows the config, endpoint, key source, model list age and scope, each model's limits and their sources, warnings, hidden ids and WebSocket statistics. Without an interactive UI it writes to stderr.
+- `/proxy status`, or `/proxy` alone, shows a short health summary: `ready`, `unverified` (key not yet checked), `refresh failed` (using the previous model list) or `not ready`, the server, the key source, the number of models and when they were checked, and the GPT transport of this session.
+  It counts metadata notices, config warnings and hidden ids without listing them. Metadata notices, such as a missing price, do not make the provider unhealthy.
+  `idle` means this session has not sent a GPT request yet; the WebSocket opens on the first one.
+- `/proxy models` lists each model's limits and their sources, metadata notices, config warnings and hidden ids.
 - `/proxy refresh` asks CPA for the model list now and keeps the previous list if that fails.
+
+Without an interactive UI, the commands write to stderr.
 
 ## Limitations
 
-- Tested against a local mock of CPA's documented WebSocket behavior, not a deployed CPA.
 - First-use discovery needs the key in the environment. With only a stored key, start Pi interactively once or run `/proxy refresh`.
 - `pi update --models` does not load extensions, so it does not refresh this provider.
 
