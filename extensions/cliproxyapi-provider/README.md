@@ -128,7 +128,7 @@ For HTTP upstreams, CPA expands each continuation back to the full history.
   The command itself does not contact CPA. A visible status snapshot updates when the automatic check finishes. It counts metadata notices, config warnings and hidden ids without listing them. Metadata notices, such as a missing price, do not make the provider unhealthy.
   `idle` means this session has not sent a GPT request yet; the WebSocket opens on the first one.
 - `/proxy models` shows an aligned table, one row per model, with API, token limits, input types, reasoning support and note references. Narrow terminals omit optional columns and shorten long model ids. Shared metadata warnings appear once below the table, followed by config warnings and hidden ids.
-- `/proxy refresh` immediately shows `Refreshing CPA models…`, including a footer indicator in the terminal UI. It then reports success, failure or timeout and clears the indicator. Failed refreshes keep the previous list. A second refresh while one is running reports that it is already in progress.
+- `/proxy refresh` immediately shows a notification, then reports success, failure or timeout. Failed refreshes keep the previous list. A second refresh while one is running reports that it is already in progress. Neither automatic checks nor manual refreshes add a footer line.
 
 Without an interactive UI, the commands write to stderr.
 

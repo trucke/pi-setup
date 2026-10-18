@@ -162,7 +162,7 @@ test("a Pi session uses the extension's provider, tools and WebSocket continuati
   const refreshing = command.handler("refresh", commandContext);
   try {
     assert.match(notifications[0] ?? "", /^Refreshing CPA models/);
-    assert.deepEqual(statuses, ["Refreshing CPA models…"]);
+    assert.deepEqual(statuses, []);
     await command.handler("refresh", commandContext);
     assert.match(notifications.at(-1) ?? "", /already in progress/);
   } finally {
@@ -171,7 +171,7 @@ test("a Pi session uses the extension's provider, tools and WebSocket continuati
     registry.refresh = originalRefresh;
   }
   assert.match(notifications.at(-1) ?? "", /catalog refreshed/);
-  assert.equal(statuses.at(-1), undefined);
+  assert.deepEqual(statuses, []);
   registry.refresh = async () => ({
     aborted: false,
     errors: new Map([["cpa-test", new Error("offline")]]),
@@ -182,7 +182,7 @@ test("a Pi session uses the extension's provider, tools and WebSocket continuati
       notifications.at(-1) ?? "",
       /refresh failed: offline; keeping the previous catalog/,
     );
-    assert.match(statuses.at(-1) ?? "", /check failed; using cached models/);
+    assert.deepEqual(statuses, []);
     registry.refresh = async () => {
       throw new Error("status must not make a network request");
     };
@@ -222,6 +222,7 @@ test("a Pi session uses the extension's provider, tools and WebSocket continuati
       if (previousOffline === undefined) delete process.env.PI_OFFLINE;
       else process.env.PI_OFFLINE = previousOffline;
     }
+    assert.deepEqual(statuses, []);
   } finally {
     registry.refresh = originalRefresh;
     runner.setUIContext(undefined, ctx.mode);

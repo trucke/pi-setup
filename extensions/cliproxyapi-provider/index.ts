@@ -25,7 +25,6 @@ import { formatModels, formatStatus, printable } from "./src/status.ts";
 
 const REFRESH_TIMEOUT_MS = 30_000;
 const STARTUP_CHECK_TIMEOUT_MS = 8_000;
-const STATUS_KEY = "cliproxyapi-refresh";
 const ACTIONS = ["status", "models", "refresh"];
 const USAGE = `/proxy [${ACTIONS.join(" | ")}]`;
 
@@ -108,11 +107,6 @@ export default async function cliproxyapiProvider(pi: ExtensionAPI) {
     ]);
     if (!automatic)
       report(ctx, "Refreshing CPA models from the server…", "info");
-    if (ctx.hasUI)
-      ctx.ui.setStatus(
-        STATUS_KEY,
-        automatic ? "Checking CPA models…" : "Refreshing CPA models…",
-      );
     try {
       let checked = false;
       // Pi can supersede our first refresh with its own startup catalog refresh.
@@ -169,11 +163,6 @@ export default async function cliproxyapiProvider(pi: ExtensionAPI) {
     } finally {
       if (activeCheck === operation) {
         activeCheck = undefined;
-        if (ctx.hasUI)
-          ctx.ui.setStatus(
-            STATUS_KEY,
-            checkError ? "CPA check failed; using cached models" : undefined,
-          );
         // Update a visible status snapshot, but never replace a model table or an agent reply.
         if (automatic && statusViewSession === operation.sessionId)
           showStatus(ctx);
@@ -228,7 +217,6 @@ export default async function cliproxyapiProvider(pi: ExtensionAPI) {
       if (activeCheck?.sessionId === sessionId) {
         activeCheck.controller.abort();
         activeCheck = undefined;
-        if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
       }
       if (statusViewSession === sessionId) statusViewSession = undefined;
       unregisterCleanup();
