@@ -162,10 +162,25 @@ test("first use discovers before registration and later starts read Pi's store f
   await writeFile(storeFile, JSON.stringify({ proxy: persisted }));
   // Any rediscovery would now publish an empty catalog.
   mock.modelsResponse = { object: "list", data: [] };
+  delete process.env[env];
   const cached = createProxyProvider(config(mock.root, env));
   await cached.initialize(storeFile);
   assert.equal(cached.provider.getModels().length, 2);
   assert.equal(cached.status().source, "cache");
+  assert.equal(cached.status().scope, "unverified");
+  const credentials = new InMemoryCredentialStore();
+  await credentials.modify("proxy", async () => ({
+    type: "api_key",
+    key: "key-a",
+  }));
+  const restored = createModels({ modelsStore: store, credentials });
+  restored.setProvider(cached.provider);
+  await restored.refresh({ allowNetwork: false });
+  assert.equal(
+    cached.status().scope,
+    "verified",
+    "a matching resolved key verifies the existing cache without fetching models",
+  );
 });
 
 test("discovery errors never echo the client key", async (t) => {

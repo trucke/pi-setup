@@ -180,7 +180,7 @@ test(
       "cpa-release/gpt-6.1-sol",
       "read note.txt",
       "thanks",
-      "/proxy status",
+      "/proxy",
       "/proxy models",
     ]);
     assert.equal(chat.status, 0, chat.stderr);
@@ -193,14 +193,15 @@ test(
     const models = chat.stderr.slice(
       chat.stderr.indexOf("CLIProxyAPI models:"),
     );
-    assert.match(status, /^CLIProxyAPI: ready\n/);
+    assert.match(status, /^CLIProxyAPI: ready \(status snapshot\)\n/);
     assert.match(
       status,
       /GPT \(this session\): WebSocket connected for gpt-6\.1-sol; 3 requests, 2 continued, 1 connection\n/,
     );
     assert.ok(status.trim().split("\n").length <= 7, status);
     assert.doesNotMatch(status, /claude-opus-5-5|cliproxyapi\.json/);
-    assert.match(models, /claude-opus-5-5 \[anthropic-messages, inferred\]/);
+    assert.match(models, /│ claude-opus-5-5\s+│ Messages/);
+    assert.match(models, /┌─+┬/);
     assert.doesNotMatch(chat.stderr, /\[bun\] Warning/);
     assert.deepEqual(
       mock.requests.map((request) => [

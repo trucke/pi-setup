@@ -1,5 +1,9 @@
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import type { RouteInfo, RouteModel } from "./catalog.ts";
+import {
+  stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { ConfigLoad, ProxyConfig } from "./config.ts";
 import type { CatalogStatus } from "./provider.ts";
 import type { TransportSessionStatus } from "./responses.ts";
@@ -17,6 +21,8 @@ export interface StatusInput {
     readonly sessions: readonly TransportSessionStatus[];
     /** The session running the command; status reports only its transport. */
     readonly sessionId: string;
+    readonly checking?: boolean;
+    readonly checkError?: string;
   };
   readonly now?: number;
 }
@@ -55,7 +61,7 @@ function clip(text: string, limit = MESSAGE_LIMIT): string {
 }
 
 const render = (lines: readonly string[]) =>
-  lines.map((line) => printable(clip(line, LINE_LIMIT))).join("\n");
+  lines.map((line) => printable(clip(line.trimStart(), LINE_LIMIT))).join("\n");
 
 function duration(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000));
@@ -72,8 +78,6 @@ const plural = (count: number, noun: string) =>
 function freshness(status: CatalogStatus, now: number): string {
   if (status.source === "none") return "not discovered yet";
   const source = status.source === "live" ? "live" : "cached";
-  if (status.scope === "unverified")
-    return `${source}, not yet verified for this key`;
   return status.checkedAt === undefined
     ? source
     : `${source}, checked ${duration(now - status.checkedAt)} ago`;
@@ -173,17 +177,20 @@ export function formatStatus(input: StatusInput): string {
   const { auth, catalog: status, sessions, sessionId } = registered;
   const { catalog } = status;
   const models = catalog.models.length;
-  const health =
-    !auth.configured || models === 0
-      ? "not ready"
-      : status.lastError
-        ? "refresh failed"
-        : status.scope === "unverified"
-          ? "unverified"
-          : "ready";
+  const health = !auth.configured
+    ? "not ready"
+    : registered.checking
+      ? "checking"
+      : models === 0
+        ? "not ready"
+        : status.lastError || registered.checkError
+          ? "refresh failed"
+          : status.scope === "unverified"
+            ? "cached"
+            : "ready";
 
   const lines = [
-    `${config.name}: ${health}`,
+    `${config.name}: ${health} (status snapshot)`,
     `  Server: ${config.root} (provider ${config.provider})`,
     `  Key: ${keyText(auth, config)}`,
   ];
@@ -197,9 +204,7 @@ export function formatStatus(input: StatusInput): string {
       `  Models: none yet${reason}${auth.configured ? "; run /proxy refresh" : ""}`,
     );
   } else {
-    const verify =
-      status.scope === "unverified" ? "; run /proxy refresh to verify" : "";
-    lines.push(`  Models: ${models}, ${freshness(status, now)}${verify}`);
+    lines.push(`  Models: ${models}, ${freshness(status, now)}`);
   }
   if (status.lastError) {
     const previous =
@@ -208,6 +213,11 @@ export function formatStatus(input: StatusInput): string {
       `  Last refresh failed ${duration(now - status.lastError.at)} ago${previous}: ${clip(status.lastError.message)}`,
     );
   }
+
+  if (registered.checkError && !status.lastError)
+    lines.push(
+      `Check failed: ${clip(registered.checkError)}; keeping cached models.`,
+    );
 
   // Metadata gaps such as missing prices are expected for aliases and do not affect health.
   const details = [
@@ -227,23 +237,79 @@ export function formatStatus(input: StatusInput): string {
   return render(lines);
 }
 
-function routeLines(model: RouteModel, route: RouteInfo): string[] {
-  const metadata = route.reference
-    ? ` metadata ${route.reference}`
-    : " no catalog metadata";
+const MODEL_COLUMNS = [
+  "Model",
+  "API",
+  "Context",
+  "Output",
+  "Input",
+  "Think",
+  "Notes",
+] as const;
+type ModelColumn = (typeof MODEL_COLUMNS)[number];
+type ModelRow = Record<ModelColumn, string>;
+const tokenNumber = new Intl.NumberFormat("en-US");
+
+/** Keep one row per model; drop optional columns before shortening model ids. */
+function modelTable(
+  rows: readonly ModelRow[],
+  availableWidth: number,
+): string[] {
+  const width = Math.max(8, Math.floor(availableWidth));
+  const columns: readonly ModelColumn[] =
+    width >= 100
+      ? MODEL_COLUMNS
+      : width >= 76
+        ? ["Model", "Context", "Output", "Input", "Think", "Notes"]
+        : width >= 52
+          ? ["Model", "Context", "Output", "Notes"]
+          : width >= 32
+            ? ["Model", "Context", "Notes"]
+            : width >= 20
+              ? ["Model", "Notes"]
+              : ["Model"];
+  const widths = columns.map((column) =>
+    Math.max(
+      visibleWidth(column),
+      ...rows.map((row) => visibleWidth(row[column])),
+    ),
+  );
+  const occupied =
+    widths.reduce((sum, value) => sum + value, 0) + 3 * columns.length + 1;
+  widths[0] = Math.max(1, (widths[0] ?? 1) - Math.max(0, occupied - width));
+  const border = (left: string, join: string, right: string) =>
+    left + widths.map((value) => "─".repeat(value + 2)).join(join) + right;
+  const line = (values: readonly string[]) =>
+    "│" +
+    values
+      .map((value, index) => {
+        const cellWidth = widths[index] ?? 1;
+        // Truncation adds ANSI resets; keep cells plain before the report sanitizer runs.
+        const cell = stripTerminalSequences(
+          truncateToWidth(value, cellWidth, "…"),
+        );
+        const padding = " ".repeat(Math.max(0, cellWidth - visibleWidth(cell)));
+        const numeric =
+          columns[index] === "Context" || columns[index] === "Output";
+        return ` ${numeric ? padding + cell : cell + padding} `;
+      })
+      .join("│") +
+    "│";
   return [
-    `  ${route.id} [${route.api}${route.apiSource === "inferred" ? ", inferred" : ""}]${metadata}`,
-    `    context ${model.contextWindow} (${route.sources.contextWindow}), max output ${model.maxTokens} (${route.sources.maxTokens}),`,
-    `    input ${model.input.join("+")} (${route.sources.input}), reasoning ${model.reasoning ? "yes" : "no"} (${route.sources.reasoning}), price ${route.sources.cost}`,
-    ...route.warnings.map((warning) => `    ! ${warning}`),
+    border("┌", "┬", "┐"),
+    line(columns),
+    border("├", "┼", "┤"),
+    ...rows.map((row) => line(columns.map((column) => row[column]))),
+    border("└", "┴", "┘"),
   ];
 }
 
-/** Every routed model with its limits and their sources, warnings and hidden ids. */
+/** One table row per model, with shared warning text collected below the table. */
 export function formatModels(
   config: ProxyConfig,
   status: CatalogStatus,
   now = Date.now(),
+  width = 120,
 ): string {
   const { catalog } = status;
   const details =
@@ -265,10 +331,39 @@ export function formatModels(
     lines.push("  Run /proxy refresh to load them.");
 
   const models = new Map(catalog.models.map((model) => [model.id, model]));
-  if (catalog.routes.length > 0) lines.push("Models:");
-  for (const route of catalog.routes) {
+  const notes = new Map<string, number>();
+  const cell = (value: string) =>
+    printable(value).replace(/[│┌┐└┘├┤┬┴┼]/gu, "?");
+  const rows: ModelRow[] = [];
+  for (const route of [...catalog.routes].sort((a, b) =>
+    a.id.localeCompare(b.id, "en", { numeric: true }),
+  )) {
     const model = models.get(route.id);
-    if (model) lines.push(...routeLines(model, route));
+    if (!model) continue;
+    const references = route.warnings.map((warning) => {
+      const text = printable(warning);
+      let number = notes.get(text);
+      if (number === undefined) {
+        number = notes.size + 1;
+        notes.set(text, number);
+      }
+      return number;
+    });
+    rows.push({
+      Model: cell(route.id),
+      API: route.api === "openai-responses" ? "Responses" : "Messages",
+      Context: tokenNumber.format(model.contextWindow),
+      Output: tokenNumber.format(model.maxTokens),
+      Input: model.input.join("+"),
+      Think: model.reasoning ? "yes" : "no",
+      Notes: references.join(", ") || "-",
+    });
+  }
+  if (rows.length > 0) lines.push(...modelTable(rows, width));
+  if (notes.size > 0) {
+    lines.push("Notes:");
+    for (const [message, number] of notes)
+      lines.push(`  [${number}] ${message}`);
   }
   if (catalog.warnings.length > 0) {
     lines.push("Catalog warnings:");
@@ -281,9 +376,9 @@ export function formatModels(
   }
   if (catalog.routes.length > 0) {
     lines.push(
-      `Sources: route = routes in ${config.path}, cpa = CPA, reference = Pi catalog, default = conservative fallback.`,
+      "Context and output are token limits. Narrow terminals omit optional columns and shorten long model ids.",
       "Prices are Pi catalog estimates, not CPA billing.",
     );
   }
-  return lines.map(printable).join("\n");
+  return lines.map((line) => printable(line.trimStart())).join("\n");
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import test from "node:test";
 import { Type } from "@earendil-works/pi-ai";
 import {
@@ -123,4 +124,106 @@ test("a Pi session uses the extension's provider, tools and WebSocket continuati
   );
   const toolOutput = mock.requests[1]?.merged.at(-1);
   assert.ok(isJson(toolOutput) && toolOutput.output === "echo:héllo 🌍");
+
+  const command = session.extensionRunner.getCommand("proxy");
+  assert.ok(command);
+  assert.equal(await command.getArgumentCompletions?.("refresh"), null);
+  assert.equal(await command.getArgumentCompletions?.("models"), null);
+  assert.ok(
+    (await command.getArgumentCompletions?.("ref"))?.some(
+      (item) => item.value === "refresh",
+    ),
+  );
+  const ctx = session.extensionRunner.createCommandContext();
+  const notifications: string[] = [];
+  const statuses: (string | undefined)[] = [];
+  const ui = {
+    ...ctx.ui,
+    notify: (message: string) => {
+      notifications.push(message);
+    },
+    setStatus: (_key: string, text: string | undefined) => {
+      statuses.push(text);
+    },
+  };
+  const commandContext = { ...ctx, hasUI: true, ui };
+  const registry = ctx.modelRegistry;
+  const originalRefresh = registry.refresh;
+  let complete:
+    | ((result: Awaited<ReturnType<typeof registry.refresh>>) => void)
+    | undefined;
+  const pending = new Promise<Awaited<ReturnType<typeof registry.refresh>>>(
+    (resolve) => {
+      complete = resolve;
+    },
+  );
+  assert.ok(complete);
+  registry.refresh = () => pending;
+  const refreshing = command.handler("refresh", commandContext);
+  try {
+    assert.match(notifications[0] ?? "", /^Refreshing CPA models/);
+    assert.deepEqual(statuses, ["Refreshing CPA models…"]);
+    await command.handler("refresh", commandContext);
+    assert.match(notifications.at(-1) ?? "", /already in progress/);
+  } finally {
+    complete({ aborted: false, errors: new Map() });
+    await refreshing;
+    registry.refresh = originalRefresh;
+  }
+  assert.match(notifications.at(-1) ?? "", /catalog refreshed/);
+  assert.equal(statuses.at(-1), undefined);
+  registry.refresh = async () => ({
+    aborted: false,
+    errors: new Map([["cpa-test", new Error("offline")]]),
+  });
+  try {
+    await command.handler("refresh", commandContext);
+    assert.match(
+      notifications.at(-1) ?? "",
+      /refresh failed: offline; keeping the previous catalog/,
+    );
+    assert.match(statuses.at(-1) ?? "", /check failed; using cached models/);
+    registry.refresh = async () => {
+      throw new Error("status must not make a network request");
+    };
+    notifications.length = 0;
+    await command.handler("", commandContext);
+    assert.match(notifications[0] ?? "", /status snapshot/);
+  } finally {
+    registry.refresh = originalRefresh;
+  }
+
+  // RPC has no built-in interactive-mode catalog refresher: the extension must do it.
+  const runner = session.extensionRunner;
+  const network: boolean[] = [];
+  registry.refresh = async (options) => {
+    network.push(options?.allowNetwork === true);
+    return { aborted: false, errors: new Map() };
+  };
+  runner.setUIContext(ui, "rpc");
+  try {
+    await runner.emit({ type: "session_start", reason: "reload" });
+    await setImmediate();
+    assert.ok(
+      network.includes(true),
+      "startup/reload should check the catalog automatically",
+    );
+    network.length = 0;
+    const previousOffline = process.env.PI_OFFLINE;
+    process.env.PI_OFFLINE = "1";
+    try {
+      await runner.emit({ type: "session_start", reason: "reload" });
+      await setImmediate();
+      assert.ok(
+        !network.includes(true),
+        "offline startup must not contact the server",
+      );
+    } finally {
+      if (previousOffline === undefined) delete process.env.PI_OFFLINE;
+      else process.env.PI_OFFLINE = previousOffline;
+    }
+  } finally {
+    registry.refresh = originalRefresh;
+    runner.setUIContext(undefined, ctx.mode);
+  }
 });

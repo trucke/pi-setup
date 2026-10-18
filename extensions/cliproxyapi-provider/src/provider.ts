@@ -114,7 +114,7 @@ function apiKeyAuth(config: ProxyConfig): ApiKeyAuth {
 
 /**
  * The key a cache restore can check without side effects. Stored `!command` keys are resolved by
- * Pi only when needed, so their scope stays unverified until the next live refresh.
+ * Pi only when needed. Read-only contexts can retain the command rather than its resolved key.
  */
 function offlineKey(
   config: ProxyConfig,
@@ -246,7 +246,9 @@ export function createProxyProvider(config: ProxyConfig): ProxyProvider {
     ...(stored.checkedAt === undefined ? {} : { checkedAt: stored.checkedAt }),
     notes: verified
       ? []
-      : ["key not checkable offline; verified on next refresh"],
+      : [
+          "Using a cached model list; the current key has not been checked yet.",
+        ],
     persisted: true,
   });
 
@@ -269,8 +271,11 @@ export function createProxyProvider(config: ProxyConfig): ProxyProvider {
       state.source !== "none" &&
       (credential === undefined || credential === state.credential)
     ) {
+      const verified = credential !== undefined;
       const next = {
         ...state,
+        scope: verified ? ("verified" as const) : state.scope,
+        notes: verified && state.scope === "unverified" ? [] : state.notes,
         catalog: resolveCatalog(state.discovered, config, lookup),
         persisted: true,
       };

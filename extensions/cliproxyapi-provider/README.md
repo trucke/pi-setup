@@ -17,11 +17,11 @@ The extension does nothing until its config file exists.
 2. Provide a CPA client key. Either set `CLIPROXYAPI_API_KEY` in Pi's environment or run `/login cliproxyapi`.
    A stored key can be a secret command such as `"!security find-generic-password -ws cpa"`.
 3. Start Pi and run `/proxy status`. You should see `ready`, the key source and the number of models.
-   Run `/proxy models` to see each model's limits and where they came from.
+   Run `/proxy models` to see the model table and metadata warnings.
 
 On the first start without a cached model list, Pi asks CPA once, for at most 8 seconds, using the environment key.
-Later starts use the cached list. Interactive sessions refresh it in the background at startup.
-Print, JSON and RPC runs keep using the cache. Run `/proxy refresh` to refresh it now.
+Later starts use the cached list immediately. TUI and RPC sessions check it in the background on startup and `/reload`, including when the key is stored as a secret command. The automatic check has an 8-second deadline and keeps cached models if it fails.
+Print and JSON runs use the cache without contacting CPA. `/proxy refresh` forces a check when you want one; it is not required during normal interactive use.
 
 ## Move from a manual `proxy` provider in models.json
 
@@ -90,7 +90,7 @@ Conflicting context sizes appear as warnings in `/proxy models`.
 Metadata comes from Pi's own model catalog: the session catalog including pi.dev updates, or the catalog bundled with Pi.
 There is no separate models.dev download. The default entry is `openai/<id>` for GPT and `anthropic/<id>` for Claude.
 Fields that no source provides stay conservative: text only, no reasoning, 128000 context, 16384 output and price 0.
-This is common for aliases without a catalog entry. `/proxy models` marks these fields. A price of 0 does not mean free, and catalog prices are estimates, not CPA billing.
+This is common for aliases without a catalog entry. `/proxy models` warns about unverified default limits. A price of 0 does not mean free, and catalog prices are estimates, not CPA billing.
 
 From a catalog entry, only flags describing the request shape are taken, such as strict tools and adaptive thinking.
 Mid-conversation features such as `configuration_update` stay off unless a route enables them in `compat`.
@@ -124,17 +124,17 @@ For HTTP upstreams, CPA expands each continuation back to the full history.
 
 ## Commands
 
-- `/proxy status`, or `/proxy` alone, shows a short health summary: `ready`, `unverified` (key not yet checked), `refresh failed` (using the previous model list) or `not ready`, the server, the key source, the number of models and when they were checked, and the GPT transport of this session.
-  It counts metadata notices, config warnings and hidden ids without listing them. Metadata notices, such as a missing price, do not make the provider unhealthy.
+- `/proxy status`, or `/proxy` alone, shows an aligned status snapshot: `checking` while the background check runs, `ready` after verification, `cached` when showing a saved model list, `refresh failed` after an unsuccessful check or `not ready` when the key or models are missing.
+  The command itself does not contact CPA. A visible status snapshot updates when the automatic check finishes. It counts metadata notices, config warnings and hidden ids without listing them. Metadata notices, such as a missing price, do not make the provider unhealthy.
   `idle` means this session has not sent a GPT request yet; the WebSocket opens on the first one.
-- `/proxy models` lists each model's limits and their sources, metadata notices, config warnings and hidden ids.
-- `/proxy refresh` asks CPA for the model list now and keeps the previous list if that fails.
+- `/proxy models` shows an aligned table, one row per model, with API, token limits, input types, reasoning support and note references. Narrow terminals omit optional columns and shorten long model ids. Shared metadata warnings appear once below the table, followed by config warnings and hidden ids.
+- `/proxy refresh` immediately shows `Refreshing CPA models…`, including a footer indicator in the terminal UI. It then reports success, failure or timeout and clears the indicator. Failed refreshes keep the previous list. A second refresh while one is running reports that it is already in progress.
 
 Without an interactive UI, the commands write to stderr.
 
 ## Limitations
 
-- First-use discovery needs the key in the environment. With only a stored key, start Pi interactively once or run `/proxy refresh`.
+- First-use discovery before model selection needs the key in the environment. If there is no cached catalog yet and the key is only stored, Pi needs another available model to finish startup before the background check can discover CPA models.
 - `pi update --models` does not load extensions, so it does not refresh this provider.
 
 ## Development
