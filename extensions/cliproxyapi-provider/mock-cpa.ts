@@ -43,6 +43,7 @@ export interface Faults {
 export interface MockCpa {
   readonly root: string;
   readonly requests: RecordedRequest[];
+  readonly modelRequests: string[];
   readonly faults: Faults;
   connections: number;
   modelsResponse: unknown;
@@ -240,6 +241,7 @@ export async function startMockCpa(options: {
   const mock: MockCpa = {
     root: "",
     requests: [],
+    modelRequests: [],
     faults: {},
     connections: 0,
     modelsResponse: {
@@ -260,6 +262,8 @@ export async function startMockCpa(options: {
 
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
+    if (request.method === "GET" && url.pathname === "/v1/models")
+      mock.modelRequests.push(url.pathname + url.search);
     if (!authorized(request))
       return json(response, 401, { error: { message: "unauthorized" } });
     if (request.method === "GET" && url.pathname === "/v1/models") {

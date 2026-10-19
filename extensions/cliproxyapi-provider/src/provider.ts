@@ -36,7 +36,7 @@ import {
   type ResponsesTransport,
 } from "./responses.ts";
 
-/** Background refreshes within this window reuse the live catalog; `/proxy refresh` forces one. */
+/** Reuse a matching catalog, including persisted results, until this age; `/proxy refresh` bypasses it. */
 const FRESH_FOR_MS = 5 * 60_000;
 /** Upper bound for the one-time discovery when Pi starts without a usable cached catalog. */
 const BOOTSTRAP_TIMEOUT_MS = 8_000;
@@ -320,12 +320,20 @@ export function createProxyProvider(config: ProxyConfig): ProxyProvider {
         `No ${config.name} key; set ${config.apiKeyEnv} or run /login ${config.provider}`,
       );
     const credential = await scopeId(config.root, key);
+    const age =
+      state.checkedAt === undefined ? undefined : Date.now() - state.checkedAt;
     const fresh =
-      state.source === "live" &&
+      state.source !== "none" &&
       state.credential === credential &&
-      state.checkedAt !== undefined &&
-      Date.now() - state.checkedAt < FRESH_FOR_MS;
-    if (fresh && state.persisted && !context.force) return;
+      age !== undefined &&
+      age >= 0 &&
+      age < FRESH_FOR_MS;
+    if (fresh && !context.force) {
+      // A live refresh can resolve a stored command key that the cache-only phase could not.
+      if (state.scope !== "verified" || !state.persisted)
+        await restore(context);
+      return;
+    }
 
     const exit = await Effect.runPromiseExit(discover(config.root, key), {
       signal: context.signal,

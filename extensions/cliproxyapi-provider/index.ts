@@ -108,33 +108,22 @@ export default async function cliproxyapiProvider(pi: ExtensionAPI) {
     if (!automatic)
       report(ctx, "Refreshing CPA models from the server…", "info");
     try {
-      let checked = false;
-      // Pi can supersede our first refresh with its own startup catalog refresh.
-      // A second attempt is bounded by the same deadline and only needed if none published.
-      for (let attempt = 0; attempt < (automatic ? 2 : 1); attempt++) {
-        const result = await ctx.modelRegistry.refresh({
-          providers: [active.provider.id],
-          allowNetwork: true,
-          force: !automatic,
-          signal,
-        });
-        if (operation.controller.signal.aborted) return;
-        if (result.aborted || signal.aborted) {
-          checkError = "the server check timed out";
-          break;
-        }
+      const result = await ctx.modelRegistry.refresh({
+        providers: [active.provider.id],
+        allowNetwork: true,
+        force: !automatic,
+        signal,
+      });
+      if (operation.controller.signal.aborted) return;
+      if (result.aborted || signal.aborted)
+        checkError = "the model check timed out";
+      else {
         const error = result.errors.get(active.provider.id);
-        if (error) {
-          checkError = error.message;
-          break;
-        }
         const status = active.status();
-        if (status.scope === "verified" && status.source === "live") {
-          checked = true;
-          break;
-        }
+        if (error) checkError = error.message;
+        else if (status.scope !== "verified" || status.source === "none")
+          checkError = "the model check did not complete";
       }
-      if (!checked) checkError ??= "the model check did not complete";
       if (!automatic) {
         if (checkError)
           report(
@@ -178,7 +167,7 @@ export default async function cliproxyapiProvider(pi: ExtensionAPI) {
     );
     const resetSession = (_event: unknown, ctx: ExtensionContext) =>
       active.transport.closeSession(ctx.sessionManager.getSessionId());
-    pi.on("session_start", (_event, ctx) => {
+    pi.on("session_start", (event, ctx) => {
       const registry = ctx.modelRegistry;
       active.setReferenceLookup((provider, id) => {
         try {
@@ -187,9 +176,12 @@ export default async function cliproxyapiProvider(pi: ExtensionAPI) {
           return bundledReference(provider, id);
         }
       });
-      // Serve the cache immediately; verify in the background in TUI and RPC, including reloads.
+      // Pi owns TUI startup refreshes. Only supply the missing pass for RPC and later reloads.
+      const piOwnsStartupRefresh =
+        ctx.mode === "tui" && event.reason === "startup";
       if (
         ctx.hasUI &&
+        !piOwnsStartupRefresh &&
         process.env.PI_OFFLINE === undefined &&
         registry.getProviderAuthStatus(providerId).configured
       )

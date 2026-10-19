@@ -46,6 +46,21 @@ function run(
   args: string[],
   options: { cwd: string; env?: NodeJS.ProcessEnv },
 ) {
+  if (command === pi) {
+    assert.ok(
+      options.env?.HOME && options.env.PI_CODING_AGENT_DIR,
+      "Pi checks need isolated home and agent directories",
+    );
+    assert.notEqual(
+      options.env.HOME,
+      process.env.HOME,
+      "Pi checks must not use the live home directory",
+    );
+    assert.ok(
+      !Object.keys(options.env).some((name) => name.startsWith("HERDR_")),
+      "Pi checks must not inherit a live Herdr reporter identity",
+    );
+  }
   return new Promise<{ status: number | null; stdout: string; stderr: string }>(
     (resolve, reject) => {
       // Pi's print mode reads piped stdin until EOF, so stdin must not stay open.
@@ -150,8 +165,8 @@ test(
       path.join(agentDir, "cliproxyapi.json"),
       JSON.stringify({ baseUrl: `${mock.root}/v1`, provider: "cpa-release" }),
     );
-    // Only what Pi needs: inherited settings such as PI_CLIPROXYAPI_CONFIG or PI_OFFLINE could
-    // point this at a real proxy or change first-use behavior.
+    // Allowlist only: inherited Pi settings can select a real proxy, and HERDR_* variables
+    // let a second TUI reporter overwrite the live pane's lifecycle state.
     const home = path.join(work, "home");
     await mkdir(home, { recursive: true });
     const env: NodeJS.ProcessEnv = {

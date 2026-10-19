@@ -105,6 +105,63 @@ test("caches discovery per endpoint and key, and keeps it through failed refresh
   assert.equal(live.collection.getModels("proxy").length, 0);
 });
 
+test("fresh persisted catalogs survive restarts without discovery; stale and forced checks fetch", async (t) => {
+  const now = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now });
+  const mock = await startMockCpa({
+    apiKey: "key-a",
+    models,
+    reply: () => ({ text: "ok" }),
+  });
+  t.after(() => mock.close());
+  const store = new InMemoryModelsStore();
+  const env = keyEnv(t, "key-a");
+  const restart = () => {
+    const proxy = createProxyProvider(config(mock.root, env));
+    const collection = createModels({ modelsStore: store });
+    collection.setProvider(proxy.provider);
+    return { proxy, collection };
+  };
+
+  await restart().collection.refresh({ allowNetwork: true });
+  assert.equal(mock.modelRequests.length, 2);
+
+  t.mock.timers.tick(4 * 60_000);
+  const cached = restart();
+  await cached.collection.refresh({ allowNetwork: true });
+  assert.equal(
+    mock.modelRequests.length,
+    2,
+    "a fresh saved catalog needs no HTTP requests",
+  );
+  assert.equal(cached.proxy.status().source, "cache");
+  assert.equal(cached.proxy.status().scope, "verified");
+  assert.equal(
+    cached.proxy.status().checkedAt,
+    now,
+    "restoring must not extend freshness",
+  );
+
+  t.mock.timers.tick(60_001);
+  const stale = restart();
+  await stale.collection.refresh({ allowNetwork: true });
+  assert.equal(
+    mock.modelRequests.length,
+    4,
+    "a stale catalog is refreshed once",
+  );
+  assert.equal(stale.proxy.status().source, "live");
+  assert.equal(stale.proxy.status().checkedAt, now + 5 * 60_000 + 1);
+
+  const forced = restart();
+  await forced.collection.refresh({ allowNetwork: true, force: true });
+  assert.equal(
+    mock.modelRequests.length,
+    6,
+    "an explicit refresh bypasses saved freshness",
+  );
+});
+
 test("a key the cache cannot verify offline still cannot restore another endpoint", async (t) => {
   const mock = await startMockCpa({
     apiKey: "key-a",

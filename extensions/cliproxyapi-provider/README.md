@@ -20,8 +20,8 @@ The extension does nothing until its config file exists.
    Run `/proxy models` to see the model table and metadata warnings.
 
 On the first start without a cached model list, Pi asks CPA once, for at most 8 seconds, using the environment key.
-Later starts use the cached list immediately. TUI and RPC sessions check it in the background on startup and `/reload`, including when the key is stored as a secret command. The automatic check has an 8-second deadline and keeps cached models if it fails.
-Print and JSON runs use the cache without contacting CPA. `/proxy refresh` forces a check when you want one; it is not required during normal interactive use.
+Later starts and `/reload` use the cached list immediately. A matching catalog stays fresh for five minutes, including across restarts: background checks reuse it without contacting CPA. A missing or stale catalog is refreshed quietly, without a footer line. Pi owns the TUI startup refresh; the extension supplies one check for RPC and reloads, without an extra retry loop.
+Print, JSON and offline runs use the cache without contacting CPA. `/proxy refresh` bypasses freshness and forces a server request. Failed refreshes keep the previous list.
 
 ## Move from a manual `proxy` provider in models.json
 
@@ -99,7 +99,7 @@ Mid-conversation features such as `configuration_update` stay off unless a route
 
 The model list is stored in Pi's `models-store.json` under the provider id, with the CPA root and a scrypt hash of the key.
 The key itself is not stored. A cached list is used only for the same CPA root.
-It is also checked against the key when Pi can read the key without running a command.
+The extension checks its scope against the resolved key when Pi makes that key available, including keys stored as secret commands. This is a local cache check, not a request to CPA. Restoring the cache does not reset its five-minute freshness window.
 
 ## WebSocket continuation
 
@@ -125,7 +125,7 @@ For HTTP upstreams, CPA expands each continuation back to the full history.
 ## Commands
 
 - `/proxy status`, or `/proxy` alone, shows an aligned status snapshot: `checking` while the background check runs, `ready` after verification, `cached` when showing a saved model list, `refresh failed` after an unsuccessful check or `not ready` when the key or models are missing.
-  The command itself does not contact CPA. A visible status snapshot updates when the automatic check finishes. It counts metadata notices, config warnings and hidden ids without listing them. Metadata notices, such as a missing price, do not make the provider unhealthy.
+  The command itself does not contact CPA. It counts metadata notices, config warnings and hidden ids without listing them. Metadata notices, such as a missing price, do not make the provider unhealthy.
   `idle` means this session has not sent a GPT request yet; the WebSocket opens on the first one.
 - `/proxy models` shows an aligned table, one row per model, with API, token limits, input types, reasoning support and note references. Narrow terminals omit optional columns and shorten long model ids. Shared metadata warnings appear once below the table, followed by config warnings and hidden ids.
 - `/proxy refresh` immediately shows a notification, then reports success, failure or timeout. Failed refreshes keep the previous list. A second refresh while one is running reports that it is already in progress. Neither automatic checks nor manual refreshes add a footer line.

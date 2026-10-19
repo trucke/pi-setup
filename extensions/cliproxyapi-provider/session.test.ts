@@ -200,13 +200,22 @@ test("a Pi session uses the extension's provider, tools and WebSocket continuati
     network.push(options?.allowNetwork === true);
     return { aborted: false, errors: new Map() };
   };
-  runner.setUIContext(ui, "rpc");
+  runner.setUIContext(ui, "tui");
   try {
+    await runner.emit({ type: "session_start", reason: "startup" });
+    await setImmediate();
+    assert.deepEqual(
+      network,
+      [false],
+      "TUI startup restores only; Pi owns the single background refresh",
+    );
+    network.length = 0;
+    runner.setUIContext(ui, "rpc");
     await runner.emit({ type: "session_start", reason: "reload" });
     await setImmediate();
     assert.ok(
       network.includes(true),
-      "startup/reload should check the catalog automatically",
+      "RPC/reload uses a non-forced catalog check when Pi has no startup refresher",
     );
     network.length = 0;
     const previousOffline = process.env.PI_OFFLINE;
