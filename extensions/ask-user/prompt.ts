@@ -6,14 +6,16 @@ export const ASK_USER_PARAMETER_DESCRIPTIONS = {
   questionLabel:
     "Optional short contextual label for this question, such as 'Scope' or 'Priority'",
   questions:
-    "Between 1 and 4 questions. Use one array item when asking a single question. Each question is single-select.",
+    "Between 1 and 4 questions. Use one array item when asking a single question. Every question must be answered before the batch can be submitted.",
+  multiSelect:
+    "Allow multiple options to be selected. Defaults to false. Use when the choices are not mutually exclusive; the user can also add a custom answer.",
   options:
     "Between 2 and 5 answer options. A free-form 'write my own answer' option is always appended automatically - never include one yourself.",
 };
 
-/** Describes ask-user's single and batched single-select question shapes. */
+/** Describes ask-user's single and batched multiple-choice question shapes. */
 export const ASK_USER_TOOL_DESCRIPTION =
-  "Ask the user one multiple-choice question or a batch of up to 4 questions. Pass every question in the questions array, including when asking only one. Each question has 2-5 options and accepts one answer. A free-form 'write my own answer' option is always added automatically, and the user may dismiss the questionnaire without answering.";
+  "Ask the user one multiple-choice question or a batch of up to 4 questions. Pass every question in the questions array, including when asking only one. Each question has 2-5 options and accepts one answer by default; set multiSelect to true when multiple choices are valid. A free-form 'write my own answer' option is always added automatically and can accompany selections on multi-select questions. Every question must be answered before submitting a batch, and the user may dismiss the whole questionnaire without submitting anything.";
 
 /** Adds ask-user's single and batched multiple-choice capability to the model prompt. */
 export const ASK_USER_PROMPT_SNIPPET =
@@ -23,15 +25,27 @@ export const ASK_USER_PROMPT_SNIPPET =
 export const ASK_USER_PROMPT_GUIDELINES = [
   "When asking the user a question whose likely answers can be enumerated, use the ask-user tool instead of asking in plain text.",
   "Batch independent questions into one ask-user call when that is more efficient. Ask dependent follow-up questions only after receiving the earlier answer.",
-  "Each question is single-select. Never include a free-form option yourself; ask-user adds one automatically.",
+  "Questions are single-select by default. Set multiSelect to true when multiple choices are valid. Never include a free-form option yourself; ask-user adds one automatically.",
 ];
 
-type ReportedAnswer = {
+export type ReportedAnswer = {
   label: string;
   answer: string;
-  wasCustom: boolean;
-  index?: number;
-};
+} & (
+  | { wasCustom: boolean; index?: number; selected?: never }
+  | { selected: string[]; wasCustom?: never; index?: never }
+);
+
+function describeMultiAnswer(selected: string[], custom: string) {
+  const parts = [];
+  if (selected.length > 0) {
+    parts.push(
+      `User selected options: ${selected.map((label) => JSON.stringify(label)).join(", ")}`,
+    );
+  }
+  if (custom) parts.push(`User wrote: ${custom}`);
+  return parts.join("\n");
+}
 
 /** Builds the behavioral tool-result message returned to the parent model for an ask-user outcome. */
 export function buildAskUserResultMessage(
@@ -41,6 +55,7 @@ export function buildAskUserResultMessage(
     | { kind: "dismissed" }
     | { kind: "custom"; answer: string }
     | { kind: "selected"; answer: string; index: number | undefined }
+    | { kind: "multi"; selected: string[]; answer: string }
     | { kind: "batch"; answers: ReportedAnswer[] },
 ) {
   switch (outcome.kind) {
@@ -54,14 +69,19 @@ export function buildAskUserResultMessage(
       return `User wrote their own answer: ${outcome.answer}`;
     case "selected":
       return `User selected option ${outcome.index}: ${outcome.answer}`;
+    case "multi":
+      return describeMultiAnswer(outcome.selected, outcome.answer);
     case "batch":
       return [
         "User submitted these answers:",
-        ...outcome.answers.map((answer) =>
-          answer.wasCustom
+        ...outcome.answers.map((answer) => {
+          if (answer.selected !== undefined) {
+            return `${answer.label}: ${describeMultiAnswer(answer.selected, answer.answer)}`;
+          }
+          return answer.wasCustom
             ? `${answer.label}: user wrote: ${answer.answer}`
-            : `${answer.label}: user selected option ${answer.index}: ${answer.answer}`,
-        ),
+            : `${answer.label}: user selected option ${answer.index}: ${answer.answer}`;
+        }),
       ].join("\n");
   }
 }
