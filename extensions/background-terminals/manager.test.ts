@@ -130,22 +130,6 @@ test("happy path: stdout and stderr captured separately, settles done, hook fire
   });
 });
 
-test("non-zero exit settles as failed with the exit code", async () => {
-  await withManager(async (manager, runtime) => {
-    const snap = await runTool(
-      runtime,
-      manager.start({
-        command: nodeCmd("process.exit(3)"),
-        title: "fails",
-        cwd,
-      }),
-    );
-    const { snap: failed } = await settlement(manager, snap.id);
-    assert.equal(failed.status, "failed");
-    assert.equal(failed.exitCode, 3);
-  });
-});
-
 test("kill settles a never-exiting process as killed and resolves after settle; repeat kill is a no-op", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(

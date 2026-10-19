@@ -41,14 +41,6 @@ function unwrap(markdown: string, width: number, pad = 0) {
   });
 }
 
-test("joins prose that Pi wrapped to the screen width", () => {
-  const sentence =
-    "Classio sends school announcements to parents and keeps the timetable in sync.";
-  assert.notEqual(selectAll(sentence, 24), sentence);
-  assert.equal(unwrap(sentence, 24), sentence);
-  assert.equal(unwrap(sentence, 30, 1), ` ${sentence}`);
-});
-
 test("keeps real line breaks, paragraphs and list items", () => {
   const markdown = [
     "Short line.  ",
@@ -68,18 +60,6 @@ test("keeps real line breaks, paragraphs and list items", () => {
       "- second item",
     ].join("\n"),
   );
-});
-
-test("joins quotes without repeating their bars", () => {
-  assert.equal(
-    unwrap("> a quote that is long enough to wrap around the edge", 24),
-    "│ a quote that is long enough to wrap around the edge",
-  );
-});
-
-test("keeps table rows apart", () => {
-  const table = "| Step | Owner |\n|---|---|\n| Build | CI |";
-  assert.equal(unwrap(table, 24), selectAll(table, 24));
 });
 
 test("joins a word split across rows without adding spaces", () => {

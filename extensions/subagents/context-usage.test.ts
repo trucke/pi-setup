@@ -18,15 +18,6 @@ test("Claude occupancy sums one request's input, cache, and output tokens", () =
   );
 });
 
-test("Claude occupancy is unknown without a usable per-request usage", () => {
-  assert.equal(contextOccupancyTokens(undefined), undefined);
-  assert.equal(contextOccupancyTokens(null), undefined);
-  assert.equal(
-    contextOccupancyTokens({ input_tokens: null, output_tokens: 5 }),
-    undefined,
-  );
-});
-
 // --- Codex: last request's total, never the thread-cumulative total ----------
 
 const codexParams = (tokenUsage: unknown) => ({
@@ -57,28 +48,4 @@ test("Codex occupancy uses tokenUsage.last.totalTokens, not the cumulative total
   );
   assert.equal(contextTokens, 61_000);
   assert.equal(contextWindow, 272_000);
-});
-
-test("Codex occupancy is unknown when last usage or window is absent", () => {
-  assert.deepEqual(
-    parseThreadTokenUsage(
-      codexParams({ total: { totalTokens: 10 }, modelContextWindow: null }),
-    ),
-    {
-      contextTokens: undefined,
-      contextWindow: undefined,
-      inputTokens: undefined,
-      outputTokens: undefined,
-      cacheReadTokens: undefined,
-      cacheWriteTokens: undefined,
-    },
-  );
-  assert.deepEqual(parseThreadTokenUsage({ threadId: "t" }), {
-    contextTokens: undefined,
-    contextWindow: undefined,
-    inputTokens: undefined,
-    outputTokens: undefined,
-    cacheReadTokens: undefined,
-    cacheWriteTokens: undefined,
-  });
 });

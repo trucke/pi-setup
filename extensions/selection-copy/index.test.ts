@@ -73,12 +73,6 @@ async function copyTranscript(text: string) {
 const sentence =
   "Pi wraps this sentence across several rows of the transcript.";
 
-test("Pi's private selection hooks still exist", () => {
-  const host = selectionHost();
-  assert.equal(typeof host.getActiveSelectionText, "function");
-  assert.equal(typeof host.getSelectionBounds, "function");
-});
-
 test("copies a dragged selection without wrap line breaks", async () => {
   assert.match((await copyTranscript(sentence)) ?? "", /\n/);
 

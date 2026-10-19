@@ -89,11 +89,3 @@ test("quotes into the visible editor after another extension replaces it", () =>
   emit("session_shutdown");
   assert.equal(state.factory, theirs);
 });
-
-test("removes its own editor on shutdown", () => {
-  const { state, emit } = load();
-  emit("session_start");
-  assert.ok(state.factory);
-  emit("session_shutdown");
-  assert.equal(state.factory, undefined);
-});

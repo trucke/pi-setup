@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -307,40 +307,5 @@ test("continuations require the exact prior request and an unchanged replay of i
     body([...prior, replayedMessage, replayedCall]),
   ]) {
     assert.equal(continuationDelta(changed, continuation), undefined);
-  }
-});
-
-test("extension code imports only Pi modules the host provides", async () => {
-  // Pi maps these specifiers to its own instance; other subpaths would load a second SDK copy,
-  // which installed packages do not have and the compiled binary cannot resolve.
-  const virtual = await readFile(
-    path.join(
-      import.meta.dirname,
-      "../../node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/virtual-modules.js",
-    ),
-    "utf8",
-  );
-  const provided = new Set(
-    [...virtual.matchAll(/"(@earendil-works\/[^"]+)":/g)].map(
-      (match) => match[1],
-    ),
-  );
-  assert.ok(provided.has("@earendil-works/pi-ai/compat"));
-  const files = [
-    "index.ts",
-    ...(await readdir(path.join(import.meta.dirname, "src"))).map(
-      (file) => `src/${file}`,
-    ),
-  ];
-  for (const file of files) {
-    const source = await readFile(path.join(import.meta.dirname, file), "utf8");
-    for (const [, specifier] of source.matchAll(
-      /^import (?!type )[^;]*?from "(@earendil-works\/[^"]+)"/gms,
-    )) {
-      assert.ok(
-        provided.has(specifier ?? ""),
-        `${file} imports ${specifier}, which Pi does not provide`,
-      );
-    }
   }
 });

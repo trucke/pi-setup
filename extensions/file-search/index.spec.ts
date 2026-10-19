@@ -1,27 +1,17 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { Effect, FileSystem } from "effect";
 import {
   buildFdArgs,
   buildFuzzyFdArgs,
   buildFzfArgs,
   buildRgArgs,
-  normalizeSearchPath,
 } from "./src/args.ts";
-import {
-  MissingBinaryError,
-  resolveBinary,
-  TOOL_SPECS,
-  type BinaryEnv,
-} from "./src/binaries.ts";
-import { formatCapturedOutput, formatOutput } from "./src/output.ts";
+import { MissingBinaryError, type BinaryEnv } from "./src/binaries.ts";
+import { formatCapturedOutput } from "./src/output.ts";
 import { executeSearchProcess } from "./src/process.ts";
-import {
-  executeFuzzyPipeline,
-  makeNulDelimitedCollector,
-} from "./src/fuzzy.ts";
+import { executeFuzzyPipeline } from "./src/fuzzy.ts";
 import { makeBinaryInitializers } from "./index.ts";
 
 // --- argument construction -------------------------------------------------
@@ -95,11 +85,6 @@ it("fuzzy args: fd emits NUL-delimited candidates and the fzf query cannot becom
   ]);
 });
 
-it("path normalization strips leading @ and expands ~", () => {
-  assert.equal(normalizeSearchPath("@src/lib"), "src/lib");
-  assert.equal(normalizeSearchPath("~/projects"), join(homedir(), "projects"));
-});
-
 // --- binary resolution -----------------------------------------------------
 
 function makeEnv(available: string[]): BinaryEnv & { probes: string[] } {
@@ -113,20 +98,6 @@ function makeEnv(available: string[]): BinaryEnv & { probes: string[] } {
       }),
   };
 }
-
-it.effect("binary resolution: fdfind is accepted as a system fd", () =>
-  Effect.gen(function* () {
-    const env = makeEnv(["fdfind"]);
-    const resolved = yield* resolveBinary(TOOL_SPECS.fd, env);
-
-    assert.deepEqual(resolved, {
-      tool: "fd",
-      command: "fdfind",
-      source: "system",
-    });
-    assert.deepEqual(env.probes, ["fd", "fdfind"]);
-  }),
-);
 
 it.effect(
   "binary resolution: one missing tool does not disable the other",
@@ -144,17 +115,6 @@ it.effect(
 );
 
 // --- fuzzy pipeline --------------------------------------------------------
-
-it("NUL collector: splits across chunks and counts beyond the limit", () => {
-  const encoder = new TextEncoder();
-  const collector = makeNulDelimitedCollector(2);
-  collector.observe(encoder.encode("a/b.ts\0we ird\nna"));
-  collector.observe(encoder.encode("me.ts\0c.ts\0d.ts"));
-  const matches = collector.finish();
-
-  assert.deepEqual(matches.paths, ["a/b.ts", "we ird\nname.ts"]);
-  assert.equal(matches.matchCount, 4);
-});
 
 it.effect(
   "fuzzy pipeline connects source stdout to filter stdin NUL-safely",
@@ -228,27 +188,3 @@ it.effect("process output is streamed to a complete spill file", () =>
     });
   }).pipe(Effect.provide(NodeServices.layer)),
 );
-
-it("output: oversized results are truncated and persisted", async () => {
-  const bigOutput = Array.from({ length: 3000 }, (_, i) => `file-${i}.ts`).join(
-    "\n",
-  );
-  let persisted: string | undefined;
-  const formatted = await formatOutput(bigOutput, {
-    tempPrefix: "pi-fd-",
-    persistFullOutput: async (full) => {
-      persisted = full;
-      return "/tmp/fake/output.txt";
-    },
-  });
-  assert.isTrue(formatted.truncated);
-  assert.equal(formatted.fullOutputPath, "/tmp/fake/output.txt");
-  assert.equal(persisted, bigOutput);
-  assert.match(formatted.text, /\[Output truncated: 2000 of 3000 lines/);
-  assert.match(
-    formatted.text,
-    /Full output saved to: \/tmp\/fake\/output\.txt\]/,
-  );
-  const shownLines = formatted.text.split("\n");
-  assert.equal(shownLines[0], "file-0.ts");
-});

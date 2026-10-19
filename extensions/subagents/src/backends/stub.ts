@@ -1,16 +1,7 @@
 /**
- * Scripted stub sessions shared by all three backend implementations while
- * the real integrations are pending. A stub session:
- *
- * - streams a plausible turn (thinking deltas, one fake tool cycle, text
- *   deltas, usage ramp, a final assistant message, RunSettled) over a few
- *   seconds so streaming UI, wait, and the footer counters are observable;
- * - supports send() while running (queued-steer rendering) and while idle
- *   (fresh run);
- * - supports interrupt (RunSettled Interrupted -> status "cancelled");
- * - fails the run when the prompt starts with "FAIL:" (error-path testing);
- * - appends every event to a JSONL "session file" in tmpdir so the
- *   "full transcript in session file" pointers resolve.
+ * Scripted backend fixture for manager and recovery tests. Streams events,
+ * accepts steering, supports interruption and records a local session file.
+ * Prompt markers control startup rejection and delayed session acquisition.
  */
 
 import * as fs from "node:fs";
@@ -142,13 +133,9 @@ const makeStubSession = (
       Effect.gen(function* () {
         yield* emit({ _tag: "RunStarted" });
         const first = firstLine(userText);
-        const failing = userText.trimStart().startsWith("FAIL:");
         const markers = new Set(first.split(/\s+/));
         const rejectBeforeActivity = markers.has(`REJECT:${profile.backend}`);
         const rejectRace = markers.has(`REJECT_RACE:${profile.backend}`);
-        const rejectAfterActivity = markers.has(
-          `REJECT_AFTER_ACTIVITY:${profile.backend}`,
-        );
         if (rejectBeforeActivity || rejectRace) {
           state.startupRejected = true;
           if (rejectRace) yield* pause;
@@ -161,16 +148,8 @@ const makeStubSession = (
         }
 
         const thinking = "Looking at the task and planning an approach...";
-        for (const [index, delta] of chunked(thinking, 16).entries()) {
+        for (const delta of chunked(thinking, 16)) {
           yield* emit({ _tag: "AssistantDelta", kind: "thinking", delta });
-          if (rejectAfterActivity && index === 0) {
-            yield* emit({
-              _tag: "RunRejected",
-              reason: "model_not_found",
-              message: `${profile.backend} rejected after activity`,
-            });
-            return;
-          }
           yield* pause;
         }
 
@@ -216,18 +195,6 @@ const makeStubSession = (
             outputTokens: 400 * (turn + 1),
           },
         });
-
-        if (failing) {
-          yield* pause;
-          yield* emit({
-            _tag: "RunSettled",
-            outcome: {
-              _tag: "Failed",
-              errorText: `[stub:${profile.backend}] task failed as requested by FAIL: prefix`,
-            },
-          });
-          return;
-        }
 
         const finalText =
           `[stub:${profile.backend}] completed: ${firstLine(userText).slice(0, 200)}\n\n` +

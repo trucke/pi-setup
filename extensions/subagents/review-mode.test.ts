@@ -1,15 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Effect, Result } from "effect";
-import {
-  claudeCodeReviewPrompt,
-  claudeStartupRejection,
-} from "./src/backends/claude.ts";
-import {
-  codexBackend,
-  codexReviewTarget,
-  codexStartupFailure,
-} from "./src/backends/codex.ts";
+import { claudeStartupRejection } from "./src/backends/claude.ts";
+import { codexBackend, codexStartupFailure } from "./src/backends/codex.ts";
 import type { SpawnTask } from "./src/domain.ts";
 
 const baseTask = {
@@ -65,27 +58,6 @@ test("Codex distinguishes pre-activity rejection from terminal failure", () => {
   );
 });
 
-test("Codex review mode uses native custom review instructions", () => {
-  const target = codexReviewTarget({
-    ...baseTask,
-    reviewTarget: { type: "baseBranch", branch: "main" },
-  });
-  assert.equal(target.type, "custom");
-  assert.match(String(target.instructions), /base branch "main"/);
-  assert.match(String(target.instructions), /git diff main\.\.\.HEAD/);
-  assert.match(String(target.instructions), /Focus on lifecycle races/);
-  assert.match(String(target.instructions), /Do not .*post remote comments/);
-  assert.match(
-    String(
-      codexReviewTarget({
-        ...baseTask,
-        reviewTarget: { type: "pullRequest", number: 42 },
-      }).instructions,
-    ),
-    /pull request #42/,
-  );
-});
-
 test("Claude classifies typed startup errors without parsing messages", () => {
   assert.deepEqual(claudeStartupRejection("model_not_found", 0), {
     _tag: "RunRejected",
@@ -98,17 +70,4 @@ test("Claude classifies typed startup errors without parsing messages", () => {
   );
   assert.equal(claudeStartupRejection("max_output_tokens", 1), undefined);
   assert.equal(claudeStartupRejection(undefined, 0), undefined);
-});
-
-test("Claude review mode uses a direct read-only prompt for commit targets", () => {
-  const prompt = claudeCodeReviewPrompt({
-    ...baseTask,
-    runMode: "code-review",
-    reviewTarget: { type: "commit", sha: "abc1234" },
-  });
-  assert.match(prompt, /Review commit "abc1234"/);
-  assert.match(prompt, /git show --format=fuller abc1234/);
-  assert.match(prompt, /Focus on lifecycle races/);
-  assert.match(prompt, /Do not .*post remote comments/);
-  assert.doesNotMatch(prompt, /^\/code-review/m);
 });

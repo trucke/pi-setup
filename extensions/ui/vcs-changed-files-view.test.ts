@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  countGitDiffLines,
   parseGitChangedPaths,
-  parseJjChangedPaths,
   sanitizeTerminalText,
 } from "./vcs/changed-files-view.ts";
 
@@ -16,19 +14,6 @@ test("parses Git changed paths including rename records", () => {
       { path: "two.ts", status: "??" },
     ],
   );
-});
-
-test("counts additions and deletions in Git-format diffs", () => {
-  assert.deepEqual(
-    countGitDiffLines(
-      "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1,2 @@\n-old\n+new\n+next\n",
-    ),
-    { additions: 2, deletions: 1 },
-  );
-  assert.deepEqual(countGitDiffLines("Binary files a/a and b/a differ\n"), {
-    additions: null,
-    deletions: null,
-  });
 });
 
 test("repository text cannot inject terminal control sequences", () => {

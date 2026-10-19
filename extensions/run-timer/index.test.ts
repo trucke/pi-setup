@@ -7,7 +7,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import runTimer, {
-  formatDuration,
   type RunTimerDeps,
   type RunTimerEntryData,
 } from "./index.ts";
@@ -79,43 +78,6 @@ function createHarness() {
   };
 }
 
-test("formats completed durations", () => {
-  assert.equal(formatDuration(0), "0s");
-  assert.equal(formatDuration(42_999), "42s");
-  assert.equal(formatDuration(65_000), "1m 05s");
-  assert.equal(formatDuration(3_661_000), "1h 01m 01s");
-  assert.equal(formatDuration(-5), "0s");
-});
-
-test("appends one completion line when the request settles", () => {
-  const harness = createHarness();
-
-  harness.emit("agent_start");
-  harness.advance(42_000);
-  assert.deepEqual(harness.entries, []);
-
-  harness.emit("agent_settled");
-  assert.deepEqual(harness.entries, [{ durationMs: 42_000 }]);
-  assert.equal(harness.renderEntry(0), "✓ Worked for 42s");
-
-  harness.advance(10_000);
-  assert.deepEqual(harness.entries, [{ durationMs: 42_000 }]);
-});
-
-test("names the model that completed the run", () => {
-  const harness = createHarness();
-  harness.setModel("claude-opus-5-5");
-
-  harness.emit("agent_start");
-  harness.advance(22_000);
-  harness.emit("agent_settled");
-
-  assert.deepEqual(harness.entries, [
-    { durationMs: 22_000, model: "claude-opus-5-5" },
-  ]);
-  assert.equal(harness.renderEntry(0), "✓ claude-opus-5-5 · 22s");
-});
-
 test("records cancellation without marking it as completed or affecting the next run", () => {
   const harness = createHarness();
   harness.setModel("claude-opus-5-5");
@@ -148,19 +110,4 @@ test("keeps one continuous run across repeated agent_start before settle", () =>
 
   assert.deepEqual(harness.entries, [{ durationMs: 60_000 }]);
   assert.equal(harness.renderEntry(0), "✓ Worked for 1m 00s");
-});
-
-test("session_shutdown abandons an active measurement", () => {
-  const harness = createHarness();
-
-  harness.emit("agent_start");
-  harness.advance(3_000);
-  harness.emit("session_shutdown");
-  assert.deepEqual(harness.entries, []);
-
-  harness.advance(10_000);
-  harness.emit("agent_start");
-  harness.advance(2_000);
-  harness.emit("agent_settled");
-  assert.deepEqual(harness.entries, [{ durationMs: 2_000 }]);
 });

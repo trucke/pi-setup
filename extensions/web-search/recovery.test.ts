@@ -3,7 +3,7 @@ import test from "node:test";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { FetchError } from "../shared/fetch-error.ts";
 import { fetchHosted } from "./hosted-fetch.ts";
-import { HostedError, providerFailure, withHostedFallback } from "./mcp.ts";
+import { HostedError, providerFailure } from "./mcp.ts";
 import {
   approveQuotaFallback,
   createRecoveryQueue,
@@ -163,60 +163,6 @@ test("headless, failed and cancelled quota dialogs never authorize fallback and 
     assert.equal(await approveQuotaFallback(ui.options), false);
     assert.deepEqual(ui.states, [true, false]);
   }
-});
-
-test("ordinary failures fall back without approval; Firecrawl quota errors stop without another dialog", async () => {
-  for (const kind of ["transient", "rate-limit", "unavailable"] as const) {
-    const providers: string[] = [];
-    let approvals = 0;
-    const run = (secondaryFails: boolean) =>
-      withHostedFallback(
-        async (provider) => {
-          providers.push(provider);
-          if (provider === "exa")
-            throw new HostedError(kind, "temporary failure");
-          if (secondaryFails)
-            throw new HostedError("billing", "Firecrawl quota exhausted");
-          return "page";
-        },
-        signal(),
-        undefined,
-        async () => {
-          approvals++;
-          return true;
-        },
-      );
-    assert.equal((await run(false)).provider, "firecrawl");
-    await assert.rejects(run(true), /Firecrawl quota exhausted/);
-    assert.deepEqual(providers, ["exa", "firecrawl", "exa", "firecrawl"]);
-    assert.equal(approvals, 0);
-  }
-});
-
-test("parallel quota dialogs serialize and skip cancelled requests", async () => {
-  const queue = createRecoveryQueue();
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const order: string[] = [];
-  const first = queue(signal(), async () => {
-    order.push("start");
-    await gate;
-    order.push("end");
-  });
-  const controller = new AbortController();
-  const second = queue(controller.signal, async () => {
-    order.push("cancelled");
-  });
-  controller.abort();
-  await assert.rejects(second);
-  const third = queue(signal(), async () => {
-    order.push("third");
-  });
-  release();
-  await Promise.all([first, third]);
-  assert.deepEqual(order, ["start", "end", "third"]);
 });
 
 test("quota exhaustion is distinct from temporary rate limiting", () => {

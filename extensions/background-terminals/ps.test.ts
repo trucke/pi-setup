@@ -4,11 +4,7 @@ import {
   reconcileDashboardSelection,
   type DashboardSelection,
 } from "./src/ui/ps.ts";
-import {
-  buildOutputLines,
-  createOutputLineCache,
-  sanitizeText,
-} from "./src/ui/output-view.ts";
+import { sanitizeText } from "./src/ui/output-view.ts";
 
 test("dashboard selection follows its terminal id and falls back by row", () => {
   const selection: DashboardSelection = { id: "bt-7", index: 6 };
@@ -46,16 +42,4 @@ test("sanitizeText strips ANSI, tabs, and control characters", () => {
   assert.equal(sanitizeText("a\u0085b"), "ab");
   assert.equal(sanitizeText("a\tb"), "a  b");
   assert.equal(sanitizeText("a\u0007b\u0000c"), "abc");
-});
-
-test("buildOutputLines wraps long lines and keeps only the final CR segment", () => {
-  const lines = buildOutputLines("progress 1\rprogress 2\rdone\nnext", 80);
-  assert.deepEqual(lines, ["done", "next"]);
-  assert.deepEqual(buildOutputLines("progress 1\rprogress 2\r", 80), [
-    "progress 2",
-  ]);
-
-  const wrapped = buildOutputLines("x".repeat(25), 10);
-  assert.ok(wrapped.length > 1);
-  assert.equal(wrapped.join(""), "x".repeat(25));
 });

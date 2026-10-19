@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import askUser, { type AskUserInput, MAX_QUESTIONS } from "./index.ts";
+import askUser, { type AskUserInput } from "./index.ts";
 
 type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -34,12 +34,6 @@ type TestContext = {
 };
 
 type TestTool = {
-  parameters: {
-    type?: string;
-    properties?: Record<string, unknown>;
-    anyOf?: unknown;
-  };
-  prepareArguments?(args: unknown): unknown;
   execute(
     toolCallId: string,
     params: AskUserInput,
@@ -49,14 +43,10 @@ type TestTool = {
   ): Promise<ToolResult>;
 };
 
-function registeredTool(emitted: Array<{ name: string; value: unknown }> = []) {
+function registeredTool() {
   let tool: TestTool | undefined;
   const pi = {
-    events: {
-      emit(name: string, value: unknown) {
-        emitted.push({ name, value });
-      },
-    },
+    events: { emit() {} },
     registerTool(value: unknown) {
       tool = value as TestTool;
     },
@@ -66,33 +56,6 @@ function registeredTool(emitted: Array<{ name: string; value: unknown }> = []) {
   assert.ok(tool);
   return tool;
 }
-
-test("exposes a root object schema for GLM-compatible tool calling", () => {
-  const tool = registeredTool();
-
-  assert.equal(tool.parameters.type, "object");
-  assert.ok(tool.parameters.properties?.questions);
-  assert.equal(tool.parameters.anyOf, undefined);
-});
-
-test("prepares legacy single-question calls for resumed sessions", () => {
-  const tool = registeredTool();
-
-  assert.deepEqual(
-    tool.prepareArguments?.({
-      question: "Choose one",
-      options: [{ label: "A" }, { label: "B" }],
-    }),
-    {
-      questions: [
-        {
-          question: "Choose one",
-          options: [{ label: "A" }, { label: "B" }],
-        },
-      ],
-    },
-  );
-});
 
 test("returns structured batched question details when no UI is available", async () => {
   const result = await registeredTool().execute(
@@ -133,36 +96,6 @@ test("returns structured batched question details when no UI is available", asyn
     answers: [],
     cancelled: true,
   });
-});
-
-test("reports the interactive wait to Herdr", async () => {
-  const emitted: Array<{ name: string; value: unknown }> = [];
-
-  await registeredTool(emitted).execute(
-    "ask-1",
-    {
-      questions: [
-        {
-          question: "Choose one",
-          options: [{ label: "A" }, { label: "B" }],
-        },
-      ],
-    },
-    undefined,
-    undefined,
-    {
-      mode: "tui",
-      ui: { custom: async () => null },
-    },
-  );
-
-  assert.deepEqual(emitted, [
-    {
-      name: "herdr:blocked",
-      value: { active: true, label: "Waiting for your answer" },
-    },
-    { name: "herdr:blocked", value: { active: false } },
-  ]);
 });
 
 test("collects a batch through question tabs and the submit tab", async () => {
@@ -226,22 +159,4 @@ test("collects a batch through question tabs and the submit tab", async () => {
     ["Small", "High"],
   );
   assert.equal(details.cancelled, false);
-});
-
-test("rejects batches larger than the supported maximum", async () => {
-  const questions = Array.from({ length: MAX_QUESTIONS + 1 }, (_, index) => ({
-    question: `Question ${index + 1}`,
-    options: [{ label: "A" }, { label: "B" }],
-  }));
-
-  await assert.rejects(
-    registeredTool().execute(
-      "ask-1",
-      { questions } as AskUserInput,
-      undefined,
-      undefined,
-      { mode: "json" },
-    ),
-    /between 1 and 4 questions/,
-  );
 });

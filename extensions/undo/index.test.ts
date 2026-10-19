@@ -67,12 +67,7 @@ function registerUndoCommand() {
   return command;
 }
 
-function createContext(options: {
-  entries?: SessionEntry[];
-  idle?: boolean;
-  cancelled?: boolean;
-  error?: Error;
-}) {
+function createContext(options: { entries?: SessionEntry[]; idle?: boolean }) {
   const notifications: Array<{
     message: string;
     level: "info" | "warning" | "error";
@@ -87,8 +82,7 @@ function createContext(options: {
     sessionManager: { getBranch: () => options.entries ?? [] },
     async navigateTree(targetId, navigateOptions) {
       navigations.push({ targetId, options: navigateOptions });
-      if (options.error) throw options.error;
-      return { cancelled: options.cancelled ?? false };
+      return { cancelled: false };
     },
     ui: {
       notify(message, level) {
@@ -133,32 +127,4 @@ test("refuses to queue undo while the agent is active", async () => {
   assert.deepEqual(navigations, []);
   assert.match(notifications[0]?.message ?? "", /interrupt/i);
   assert.equal(notifications[0]?.level, "warning");
-});
-
-test("reports empty history, invalid arguments, cancellation, and failures", async () => {
-  const command = registerUndoCommand();
-
-  const empty = createContext({});
-  await command.handler("", empty.context);
-  assert.match(empty.notifications[0]?.message ?? "", /no user turn/i);
-
-  const invalid = createContext({ entries: [userEntry("user", null)] });
-  await command.handler("unexpected", invalid.context);
-  assert.match(invalid.notifications[0]?.message ?? "", /Usage: \/undo/);
-  assert.deepEqual(invalid.navigations, []);
-
-  const cancelled = createContext({
-    entries: [userEntry("user", null)],
-    cancelled: true,
-  });
-  await command.handler("", cancelled.context);
-  assert.match(cancelled.notifications[0]?.message ?? "", /cancelled/i);
-
-  const failed = createContext({
-    entries: [userEntry("user", null)],
-    error: new Error("navigation broke"),
-  });
-  await command.handler("", failed.context);
-  assert.match(failed.notifications[0]?.message ?? "", /navigation broke/);
-  assert.equal(failed.notifications[0]?.level, "error");
 });

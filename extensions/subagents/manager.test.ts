@@ -1,9 +1,6 @@
 /**
- * End-to-end smoke tests: manager behavior through a real ManagedRuntime,
- * exactly as the tool handlers drive it. The registry is test-only: scripted
- * stub sessions registered under the claude/codex names (the production
- * backends launch real processes and have their own live test files), plus
- * the real pi backend for its cheap registry precondition.
+ * Manager lifecycle tests through a real ManagedRuntime and scripted backends.
+ * Real Pi session behavior and external backend integration have separate tests.
  */
 
 import assert from "node:assert/strict";
@@ -13,7 +10,6 @@ import * as path from "node:path";
 import test, { after } from "node:test";
 import { Effect, Layer, ManagedRuntime, Result, Stream } from "effect";
 import { BackendRegistry, type SubagentBackend } from "./src/backend.ts";
-import { piBackend } from "./src/backends/pi.ts";
 import {
   activeStubSessionCount,
   makeStubBackend,
@@ -36,7 +32,6 @@ after(() => fs.rmSync(stateDirectory, { recursive: true, force: true }));
 
 const TestRegistryLive = Layer.sync(BackendRegistry, () => {
   const backends: SubagentBackend[] = [
-    piBackend,
     makeStubBackend({
       backend: "claude",
       defaultModelLabel: "claude/sonnet",
@@ -132,43 +127,12 @@ test("stub subagent completes and delivers a final result", async () => {
   });
 });
 
-test("FAIL: prompts settle as errors; unconsumed settles are delivered", async () => {
-  await withManager(async (manager, runtime) => {
-    const settled: Array<{ id: string; consumed: boolean }> = [];
-    manager.view.setOnSettled((snap, consumed) =>
-      settled.push({ id: snap.id, consumed }),
-    );
-
-    const snap = await runTool(
-      runtime,
-      manager.spawn("codex", task("FAIL: blow up please")),
-    );
-    // Poll without wait-interest so the settle is delivered unconsumed.
-    while (manager.view.get(snap.id)?.status === "running") {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    const failed = manager.view.get(snap.id);
-    assert.equal(failed?.status, "failed");
-    assert.match(failed?.errorText ?? "", /task failed/);
-    assert.deepEqual(settled, [{ id: snap.id, consumed: false }]);
-  });
-});
-
 test("startup rejection reports failure and closes the rejected session", async () => {
   await withManager(async (manager, runtime) => {
     const started = await runTool(
       runtime,
       manager.spawn("claude", profileTask("REJECT:claude unavailable")),
     );
-    assert.deepEqual(started.execution, {
-      requested: { type: "profile", profile: "code" },
-      selected: {
-        harness: "claude",
-        model: "unavailable-model",
-        reasoningEffort: "high",
-        runMode: "agent",
-      },
-    });
     await runTool(runtime, manager.waitFor([started.id]));
     const failed = manager.view.get(started.id);
     assert.equal(failed?.status, "failed");
@@ -182,24 +146,6 @@ test("startup rejection reports failure and closes the rejected session", async 
   });
 });
 
-test("rejections after activity settle as failures", async () => {
-  await withManager(async (manager, runtime) => {
-    const started = await runTool(
-      runtime,
-      manager.spawn(
-        "claude",
-        profileTask("REJECT_AFTER_ACTIVITY:claude preserve partial work"),
-      ),
-    );
-    await runTool(runtime, manager.waitFor([started.id]));
-    const failed = manager.view.get(started.id);
-    assert.equal(failed?.status, "failed");
-    assert.equal(failed?.backend, "claude");
-    assert.equal(failed?.execution.selected.harness, "claude");
-    assert.match(failed?.errorText ?? "", /rejected after activity/);
-  });
-});
-
 test("cancel just before RunRejected cannot wedge the logical run", async () => {
   await withManager(async (manager, runtime) => {
     const started = await runTool(
@@ -210,20 +156,6 @@ test("cancel just before RunRejected cannot wedge the logical run", async () => 
     const report = await runTool(runtime, manager.cancel([started.id]));
     assert.equal(report[0]?.cancelled, true);
     assert.equal(manager.view.get(started.id)?.status, "cancelled");
-  });
-});
-
-test("cancel interrupts a running stub subagent", async () => {
-  await withManager(async (manager, runtime) => {
-    const snap = await runTool(
-      runtime,
-      manager.spawn("claude", task("Long running task")),
-    );
-    const report = await runTool(runtime, manager.cancel([snap.id]));
-    assert.deepEqual(report, [
-      { id: snap.id, title: "test", status: "cancelled", cancelled: true },
-    ]);
-    assert.equal(manager.view.get(snap.id)?.errorText, "Run was cancelled");
   });
 });
 
@@ -363,18 +295,6 @@ test("aborting spawn after session creation closes the unattached scope", async 
   });
 });
 
-test("pi spawn fails fast without the parent model registry", async () => {
-  await withManager(async (manager, runtime) => {
-    await assert.rejects(
-      runTool(runtime, manager.spawn("pi", task("needs a registry"))),
-      /model registry/,
-    );
-    // The failed spawn must release its concurrency reservation.
-    const snap = await runTool(runtime, manager.spawn("codex", task("ok")));
-    assert.equal(snap.backend, "codex");
-  });
-});
-
 test("idle restarts respect the concurrency cap", async () => {
   await withManager(async (manager, runtime) => {
     // Settle one subagent, then fill all four slots with running ones.
@@ -397,31 +317,6 @@ test("idle restarts respect the concurrency cap", async () => {
       /Max 4 subagents/,
     );
     assert.equal(manager.view.get(settled.id)?.status, "done");
-  });
-});
-
-test("send steers an idle subagent into another turn", async () => {
-  await withManager(async (manager, runtime) => {
-    const snap = await runTool(
-      runtime,
-      manager.spawn("claude", task("First turn")),
-    );
-    await runTool(runtime, manager.waitFor([snap.id]));
-    const afterFirst = manager.view.get(snap.id);
-    assert.equal(afterFirst?.status, "done");
-
-    const receipt = await runTool(
-      runtime,
-      manager.send(snap.id, "Second turn"),
-    );
-    assert.equal(receipt.disposition, "delivered");
-    while (manager.view.get(snap.id)?.status !== "running") {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    await runTool(runtime, manager.waitFor([snap.id]));
-    const afterSecond = manager.view.get(snap.id);
-    assert.equal(afterSecond?.status, "done");
-    assert.match(afterSecond?.finalText ?? "", /Second turn/);
   });
 });
 

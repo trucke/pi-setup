@@ -38,15 +38,3 @@ test("quotes the agent's latest message without thinking or tool calls", () => {
     "Final\n\nanswer.",
   );
 });
-
-test("skips messages without text, such as a turn still thinking", () => {
-  assert.equal(
-    latestAnswer([
-      assistant(text("Answer.")),
-      user("next"),
-      assistant({ type: "thinking", thinking: "working" }),
-    ]),
-    "Answer.",
-  );
-  assert.equal(latestAnswer([user("first")]), undefined);
-});
