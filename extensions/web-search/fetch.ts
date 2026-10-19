@@ -9,7 +9,11 @@ import { boundedOutput, errorMessage } from "./output.ts";
 import { FetchError, NETWORK_CODES } from "../shared/fetch-error.ts";
 import { fetchHosted, normalizeHostedPage } from "./hosted-fetch.ts";
 import type { CallHosted } from "./mcp.ts";
-import { createRecoveryQueue, recoverFetch } from "./recovery.ts";
+import {
+  approveQuotaFallback,
+  createRecoveryQueue,
+  recoverFetch,
+} from "./recovery.ts";
 import { webRenderers } from "./render.ts";
 import { sanitizeText } from "./sanitize.ts";
 
@@ -175,12 +179,12 @@ export function registerFetchTool(pi: ExtensionAPI, call: CallHosted) {
     label: "Fetch Web Page",
     ...webRenderers("web-fetch"),
     description:
-      "Read one public HTTP(S) URL locally first. HTML becomes readable Markdown; text, Markdown and JSON are returned directly. No JavaScript, cookies or credentials. Every redirect and DNS answer is validated and connections are pinned. Downloads are limited to 5 MiB and 30 seconds by default. Inline output is limited to 16KB or 400 lines, with complete extracted content saved to a temp file when truncated; use read for more. Eligible local failures offer per-request UI consent for Exa with Firecrawl fallback. Headless requests stay local.",
+      "Read one public HTTP(S) URL locally first. HTML becomes readable Markdown; text, Markdown and JSON are returned directly. No JavaScript, cookies or credentials. Every redirect and DNS answer is validated and connections are pinned. Downloads are limited to 5 MiB and 30 seconds by default. Inline output is limited to 16KB or 400 lines, with complete extracted content saved to a temp file when truncated; use read for more. Eligible local failures show a short note and automatically try anonymous Exa with Firecrawl fallback, including in headless runs. If Exa reports a quota or billing limit, UI confirmation is required before trying Firecrawl. No paid access is used.",
     promptSnippet:
-      "Read a public URL locally, with optional per-request hosted recovery after UI consent.",
+      "Read a public URL locally, with automatic hosted recovery and confirmation only for quota fallback.",
     promptGuidelines: [
       "Use web-fetch to read selected known URLs; do not re-fetch content already available unless freshness matters.",
-      "web-fetch never silently discloses URLs to hosted providers. Respect declined consent; do not bypass it with web-fetch-hosted or other tools.",
+      "web-fetch automatically sends eligible failed requests to anonymous hosted providers. Respect declined quota fallback; do not bypass it with web-fetch-hosted or other tools.",
     ],
     parameters: Type.Object({
       url: Type.String({
@@ -193,12 +197,12 @@ export function registerFetchTool(pi: ExtensionAPI, call: CallHosted) {
           minimum: 1,
           maximum: 120_000,
           description:
-            "Local fetch/extraction timeout in milliseconds, excluding consent and hosted recovery. Default 30000; maximum 120000.",
+            "Local fetch/extraction timeout in milliseconds, excluding quota confirmation and hosted recovery. Default 30000; maximum 120000.",
         }),
       ),
     }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      signal = signal ?? ctx.signal;
+    async execute(_id, params, toolSignal, onUpdate, ctx) {
+      const signal = toolSignal ?? ctx.signal ?? new AbortController().signal;
       type Page = {
         text: string;
         details: {
@@ -211,15 +215,25 @@ export function registerFetchTool(pi: ExtensionAPI, call: CallHosted) {
         };
       };
       const result = await recoverFetch<Page>({
-        pi,
-        url: params.url,
-        ctx,
-        signal: signal ?? new AbortController().signal,
-        queue,
+        signal,
+        note: () => {
+          const text =
+            "Local fetch failed; trying Exa with Firecrawl fallback.";
+          if (ctx.hasUI) ctx.ui.notify(text, "info");
+          else onUpdate?.({ content: [{ type: "text", text }], details: {} });
+        },
         local: () =>
           fetchLocal(params.url, { timeout: params.timeout, signal }),
         hosted: async () => {
-          const result = await fetchHosted(call, { url: params.url }, signal);
+          const result = await fetchHosted(call, { url: params.url }, signal, {
+            approveBillingFallback: () =>
+              approveQuotaFallback({
+                pi,
+                ctx,
+                signal,
+                queue,
+              }),
+          });
           const page = normalizeHostedPage(result.provider, result.text);
           return {
             text: page.text,

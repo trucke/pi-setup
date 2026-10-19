@@ -286,16 +286,16 @@ test("hosted fetching validates destinations before disclosure and extracts prov
     fetchHosted(call, { url: "http://127.0.0.1/private" }, signal),
   );
   await assert.rejects(
-    fetchHosted(call, { url: "https://private.example" }, signal, async () => [
-      PRIVATE,
-    ]),
+    fetchHosted(call, { url: "https://private.example" }, signal, {
+      resolve: async () => [PRIVATE],
+    }),
   );
   assert.equal(calls.length, 0);
   const result = await fetchHosted(
     call,
     { url: "https://example.com", provider: "firecrawl" },
     signal,
-    async () => [PUBLIC],
+    { resolve: async () => [PUBLIC] },
   );
   assert.equal(calls[0].tool, "firecrawl_scrape");
   assert.equal(calls[0].args.url, "https://example.com/");

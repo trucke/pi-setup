@@ -95,15 +95,20 @@ DNS and redirects, blocks private destinations and sends no cookies or
 credentials. HTML becomes readable text; JavaScript does not run. Downloads are
 limited to 5 MiB, with a default timeout of 30 seconds.
 
-Eligible local failures offer permission to send the exact URL to Exa, with
-Firecrawl fallback. Approval applies only to that request. Declining or
-dismissing sends nothing; headless runs remain local-only. Hosted providers
-control their own redirects and browser behavior.
+Eligible local failures show a short note and automatically send the URL to
+anonymous Exa MCP, including in headless runs. Firecrawl fallback is automatic
+for transient failures, temporary rate limits and unavailable pages. If Exa
+reports a quota or billing limit, Pi asks before trying Firecrawl for that
+request. Declining, dismissing or running headless stops that quota fallback.
+If Firecrawl also fails, the request stops. No paid access or configured API
+keys are used. Hosted providers control their own redirects and browser behavior.
+Unsafe URLs, authentication failures and other terminal local errors never
+trigger hosted recovery.
 
 For a separate explicit `web-fetch-hosted` tool, set `PI_WEB_HOSTED_FETCH=1` in
-the process environment before starting Pi. It sends URLs to third parties;
-use it only when disclosure is appropriate, never to bypass declined consent.
-This setting is not needed for consent-based recovery.
+the process environment before starting Pi. Like automatic recovery, it sends
+URLs to third parties. Never use it to bypass a declined quota fallback.
+This setting is not needed for automatic recovery.
 
 ### Developer Index
 

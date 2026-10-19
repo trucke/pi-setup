@@ -38,7 +38,7 @@ export function providerFailure(message: string, status?: number): HostedError {
   if (status === 402) kind = "billing";
   else if (status === 401 || status === 403) kind = "auth";
   else if (
-    /insufficient.*credit|credit.*(?:exhaust|balance)|payment required|billing (?:error|limit)|quota.*exhaust/i.test(
+    /insufficient.*credit|credit.*(?:exhaust|balance)|payment required|billing (?:error|limit)|quota.*(?:exhaust|exceed|reached)|free[ -]tier.*(?:exhaust|exceed|reached)|exceed.*free (?:exa |firecrawl )?mcp.*limit/i.test(
       text,
     )
   )
@@ -289,6 +289,7 @@ export async function withHostedFallback(
   operation: (provider: HostedProvider) => Promise<string>,
   signal: AbortSignal,
   provider?: HostedProvider,
+  approveBillingFallback?: () => Promise<boolean>,
 ) {
   signal.throwIfAborted();
   try {
@@ -298,11 +299,11 @@ export async function withHostedFallback(
     };
   } catch (error) {
     signal.throwIfAborted();
-    if (
-      provider ||
-      !(error instanceof HostedError) ||
-      !["transient", "rate-limit", "unavailable"].includes(error.kind)
-    )
+    if (provider || !(error instanceof HostedError)) throw error;
+    if (error.kind === "billing") {
+      if (!(await approveBillingFallback?.())) throw error;
+      signal.throwIfAborted();
+    } else if (!["transient", "rate-limit", "unavailable"].includes(error.kind))
       throw error;
     const fallbackReason = `Exa ${error.kind}: ${error.message}`;
     try {

@@ -48,13 +48,16 @@ export async function fetchHosted(
   call: CallHosted,
   params: { url: string; provider?: HostedProvider },
   signal: AbortSignal = new AbortController().signal,
-  resolve?: ResolveHost,
+  options: {
+    resolve?: ResolveHost;
+    approveBillingFallback?: () => Promise<boolean>;
+  } = {},
 ) {
   const combined = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
   const url = parsePublicHttpUrl(params.url);
   // Fail closed before disclosing even the URL. Redirect handling after this
   // point belongs to the hosted service, unlike the locally pinned fetch tool.
-  await resolvePublicUrl(url, combined, resolve);
+  await resolvePublicUrl(url, combined, options.resolve);
   return withHostedFallback(
     (provider) =>
       call({
@@ -64,10 +67,11 @@ export async function fetchHosted(
           provider === "exa"
             ? { urls: [url.href], maxCharacters: 100_000 }
             : { url: url.href, formats: ["markdown"], onlyMainContent: true },
-        signal: combined,
+        signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
       }),
-    combined,
+    signal,
     params.provider,
+    options.approveBillingFallback,
   );
 }
 
@@ -77,7 +81,7 @@ export function registerHostedFetchTool(pi: ExtensionAPI, call: CallHosted) {
     label: "Fetch Web Page via Hosted Provider",
     ...webRenderers("web-fetch-hosted"),
     description:
-      "Explicitly send a public URL to anonymous hosted MCP extraction. Exa first; Firecrawl scrape is used only after transient failures, rate limits or unavailable pages. May return cached content. Hosted services own redirect and browser behavior. This explicit tool sends immediately, unlike web-fetch's per-request consented recovery. Never use it to bypass declined recovery consent. Inline output is limited to 16KB or 400 lines, with complete returned content saved to a temp file when truncated; use read for more.",
+      "Explicitly send a public URL to anonymous hosted MCP extraction. Exa first; Firecrawl scrape is used only after transient failures, rate limits or unavailable pages. May return cached content. Hosted services own redirect and browser behavior. Like web-fetch's automatic recovery, this sends URLs to hosted services. Never use it to bypass a declined quota fallback. Inline output is limited to 16KB or 400 lines, with complete returned content saved to a temp file when truncated; use read for more.",
     promptSnippet:
       "Explicit third-party extraction of a public page, when local fetching is insufficient.",
     parameters: Type.Object({

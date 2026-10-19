@@ -5,9 +5,9 @@ import type {
 import { FetchError } from "../shared/fetch-error.ts";
 import { withHerdrBlocked } from "../shared/herdr.ts";
 import { abortable } from "../shared/public-http.ts";
-import { reviewText, type PreviewContext } from "./preview.ts";
+import { errorMessage } from "./output.ts";
 
-/** Serialize the whole interaction, not individual dialogs from parallel fetches. */
+/** Serialize quota dialogs, without serializing hosted requests. */
 export function createRecoveryQueue() {
   let tail: Promise<unknown> = Promise.resolve();
   return async <T>(signal: AbortSignal, work: () => Promise<T>) => {
@@ -22,93 +22,58 @@ export function createRecoveryQueue() {
   };
 }
 
-async function optIn(
-  ui: PreviewContext["ui"],
-  title: string,
-  yes: string,
-  signal: AbortSignal,
-) {
-  signal.throwIfAborted();
-  const choice = await ui.select(title, ["No", yes], { signal });
-  signal.throwIfAborted();
-  return choice === yes;
-}
-
-export async function recoverFetch<T>(options: {
+export async function approveQuotaFallback(options: {
   pi: Pick<ExtensionAPI, "events">;
-  local: () => Promise<T>;
-  hosted: () => Promise<T>;
-  url: string;
-  ctx: PreviewContext & Pick<ExtensionContext, "hasUI">;
+  ctx: Pick<ExtensionContext, "hasUI"> & {
+    ui: Pick<ExtensionContext["ui"], "select">;
+  };
   signal: AbortSignal;
   queue: ReturnType<typeof createRecoveryQueue>;
 }) {
-  const { signal, pi } = options;
-  const ui = options.ctx.ui;
-  const ctx: typeof options.ctx = {
-    ...options.ctx,
-    ui: {
-      ...ui,
-      select: (...args) =>
-        withHerdrBlocked(pi, "Waiting for web fetch approval", () =>
-          ui.select(...args),
-        ),
-      custom: (factory, settings) =>
-        withHerdrBlocked(pi, "Waiting for web fetch review", () =>
-          ui.custom(factory, settings),
-        ),
-    },
-  };
+  const { pi, ctx, signal, queue } = options;
+  if (!ctx.hasUI || signal.aborted) return false;
+  try {
+    return await queue(signal, () =>
+      withHerdrBlocked(pi, "Waiting for web fetch quota approval", async () => {
+        const choice = await ctx.ui.select(
+          "Exa reported a quota or billing limit. Try this request through Firecrawl's anonymous endpoint instead? No paid access will be used.",
+          ["No", "Try Firecrawl"],
+          { signal },
+        );
+        signal.throwIfAborted();
+        return choice === "Try Firecrawl";
+      }),
+    );
+  } catch {
+    // A dismissed, failed or cancelled dialog never authorizes a quota fallback.
+    return false;
+  }
+}
+
+export async function recoverFetch<T>(options: {
+  local: () => Promise<T>;
+  hosted: () => Promise<T>;
+  note: () => void;
+  signal: AbortSignal;
+}) {
   try {
     return await options.local();
   } catch (failure) {
     if (
       !(failure instanceof FetchError) ||
       !failure.recoverable ||
-      !ctx.hasUI ||
-      signal.aborted
+      options.signal.aborted
     )
       throw failure;
-    let result: T | undefined;
-    let succeeded = false;
-    let hostedFailed = false;
+    options.note();
+    options.signal.throwIfAborted();
     try {
-      await options.queue(signal, async () => {
-        // JSON escaping preserves the exact URL while making terminal controls inert.
-        let allowed = false;
-        try {
-          const url = JSON.stringify(new URL(options.url).href);
-          const reviewed =
-            url.length <= 180 || (await reviewText(ctx, url, signal));
-          allowed =
-            reviewed &&
-            (await optIn(
-              ctx.ui,
-              `Local fetch failed. Send ${url.length <= 180 ? url : "the reviewed URL"} to Exa, with Firecrawl fallback, for THIS request only? Hosted services control redirects.`,
-              "Allow this request",
-              signal,
-            ));
-        } catch {
-          /* A broken dialog never authorizes disclosure. */
-        }
-        signal.throwIfAborted();
-        if (allowed) {
-          try {
-            result = await options.hosted();
-            succeeded = true;
-          } catch {
-            hostedFailed = true;
-          }
-        }
-      });
-    } catch {
-      /* Preserve local failure or successful hosted content. */
-    }
-    if (succeeded) return result as T;
-    if (hostedFailed)
+      return await options.hosted();
+    } catch (error) {
       throw new Error(
-        `Local attempt: ${failure.message}\nThe consented hosted fetch also failed.`,
+        `Local attempt: ${failure.message}\nHosted attempt: ${errorMessage(error)}`,
+        { cause: error },
       );
-    throw failure;
+    }
   }
 }
