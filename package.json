@@ -37,7 +37,7 @@
     "typebox": "*"
   },
   "name": "@trucke/pi-setup",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "packageManager": "pnpm@11.24.0",
   "keywords": [
     "pi-package"
@@ -47,6 +47,7 @@
       "./extensions/ask-user/index.ts",
       "./extensions/background-terminals/index.ts",
       "./extensions/cliproxyapi-provider/index.ts",
+      "./extensions/code-paste/index.ts",
       "./extensions/file-search/index.ts",
       "./extensions/jj/index.ts",
       "./extensions/quote/index.ts",

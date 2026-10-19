@@ -48,6 +48,9 @@ Install these executables on `PATH` for the features you use:
   `/` filters, Enter inserts, `q` or Esc closes. Ctrl+Q or `/quote` quotes
   the whole answer. Type `> ` with a space to write a quote yourself. The `>`
   picker is skipped if another extension replaces Pi's editor.
+- Alt+V pastes the clipboard's text as a fenced code block, on its own
+  paragraph. The fence outgrows any backticks inside the text. It reads the
+  clipboard with `pbpaste` on macOS and `wl-paste`, `xclip` or `xsel` on Linux.
 - `/jj` browses Jujutsu history with diffs and runs describe, sign, new, edit,
   squash, abandon, undo, bookmark and push on the selected revision. Push
   shows jj's dry run and pushes only after confirmation.
