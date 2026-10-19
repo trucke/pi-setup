@@ -127,6 +127,10 @@ test("a Pi session uses the extension's provider, tools and WebSocket continuati
 
   const command = session.extensionRunner.getCommand("proxy");
   assert.ok(command);
+  assert.deepEqual(await command.getArgumentCompletions?.(""), [
+    { value: "models", label: "models" },
+    { value: "refresh", label: "refresh" },
+  ]);
   assert.equal(await command.getArgumentCompletions?.("refresh"), null);
   assert.equal(await command.getArgumentCompletions?.("models"), null);
   assert.ok(

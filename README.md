@@ -58,7 +58,7 @@ Install these executables on `PATH` for the features you use:
 - `/recap` summarizes the current task, progress and next step in at most 40 words.
 - A CLIProxyAPI provider for GPT and Claude models behind a CPA server, with
   WebSocket continuation for GPT. It stays off until `cliproxyapi.json` exists;
-  see [its README](extensions/cliproxyapi-provider/README.md). `/proxy status`
+  see [its README](extensions/cliproxyapi-provider/README.md). `/proxy`
   shows a short summary, `/proxy models` shows model details and `/proxy refresh`
   updates the catalog.
 

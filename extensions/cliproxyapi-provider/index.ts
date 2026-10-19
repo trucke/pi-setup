@@ -25,7 +25,7 @@ import { formatModels, formatStatus, printable } from "./src/status.ts";
 
 const REFRESH_TIMEOUT_MS = 30_000;
 const STARTUP_CHECK_TIMEOUT_MS = 8_000;
-const ACTIONS = ["status", "models", "refresh"];
+const ACTIONS = ["models", "refresh"];
 const USAGE = `/proxy [${ACTIONS.join(" | ")}]`;
 
 export default async function cliproxyapiProvider(pi: ExtensionAPI) {
@@ -226,7 +226,7 @@ export default async function cliproxyapiProvider(pi: ExtensionAPI) {
       );
     },
     handler: async (args, ctx) => {
-      const action = args.trim() || "status";
+      const action = args.trim();
       if (action === "refresh") return refreshCatalog(ctx, false);
       if (action === "models") {
         statusViewSession = undefined;
@@ -240,7 +240,7 @@ export default async function cliproxyapiProvider(pi: ExtensionAPI) {
         );
         return;
       }
-      if (action !== "status") {
+      if (action !== "") {
         report(ctx, `Usage: ${USAGE}`, "warning");
         return;
       }
