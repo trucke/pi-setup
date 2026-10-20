@@ -70,12 +70,11 @@ function prefixMarkdown(prefix: string, markdown: string) {
     : `${prefix} ${markdown}`;
 }
 
-/** Mark transcript roles inline instead of relying on background boxes. */
+/** Label reasoning without changing user or assistant text. */
 export const markTranscriptRoles: MarkdownTransformer = (
   markdown,
   { messageType },
 ) => {
-  if (messageType === "user") return prefixMarkdown("›", markdown);
   if (messageType === "assistant-thinking") {
     return prefixMarkdown("_Thinking:_", markdown);
   }
