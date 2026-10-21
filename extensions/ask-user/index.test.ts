@@ -241,6 +241,15 @@ test("requires every batch question before submitting and preserves single-selec
   ]);
 });
 
+test("shows a written single-select answer when returning to its tab", async () => {
+  const run = await openQuestionnaire(batch);
+  run.input("3", "Something else", ENTER, LEFT);
+  assert.match(
+    run.render().join("\n"),
+    /❯ ✎ Write my own answer…\n\s+Something else/,
+  );
+});
+
 test("multi-select combines checked options and custom text without advancing on a toggle", async () => {
   const run = await openQuestionnaire({
     questions: [{ ...batch.questions[0], multiSelect: true }],

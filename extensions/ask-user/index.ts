@@ -330,6 +330,7 @@ export default function askUser(pi: ExtensionAPI) {
           function currentOptions(): DisplayOption[] {
             const question = currentQuestion();
             if (!question) return [];
+            const answer = answers.get(currentTab);
             return [
               ...question.options.map((option) => ({
                 ...option,
@@ -339,7 +340,9 @@ export default function askUser(pi: ExtensionAPI) {
                 label: "Write my own answer…",
                 description: question.multiSelect
                   ? customAnswers.get(currentTab)
-                  : undefined,
+                  : answer?.wasCustom
+                    ? answer.answer
+                    : undefined,
                 kind: "custom",
               },
               ...(question.multiSelect
