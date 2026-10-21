@@ -13,6 +13,7 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { REFRESH_CHANNEL } from "../shared/dashboard-state.ts";
+import { askUserRow } from "./ask-user.ts";
 import { codemodeRow } from "./codemode.ts";
 import { compactToolRows } from "./tool-rows.ts";
 import { fitFooterLine, type FooterSegment } from "./footer-layout.ts";
@@ -292,7 +293,9 @@ export default function ui(
   }
 
   pi.registerMarkdownTransformer(markTranscriptRoles);
-  pi.registerToolRenderer(compactToolRows({ codemode: codemodeRow }));
+  pi.registerToolRenderer(
+    compactToolRows({ codemode: codemodeRow, "ask-user": askUserRow }),
+  );
 
   pi.on("session_start", (_event, ctx) => {
     title = formatDirectory(ctx.cwd);

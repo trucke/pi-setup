@@ -882,15 +882,9 @@ export default function askUser(pi: ExtensionAPI) {
         return renderSingle(singleQuestion);
       }
 
-      const labels = input.questions
-        .map(
-          (question: QuestionInput, index: number) =>
-            question.label?.trim() || `Q${index + 1}`,
-        )
-        .join(", ");
+      // Question labels are shown with each answer in the result.
       let text = theme.fg("toolTitle", theme.bold("ask-user "));
       text += theme.fg("muted", `${input.questions.length} questions`);
-      if (labels) text += theme.fg("dim", ` (${labels})`);
       return new Text(text, 0, 0);
     },
 

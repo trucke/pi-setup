@@ -59,6 +59,7 @@ function rowState(context: RenderContext): RowState {
 
 const SEPARATOR = " · ";
 const MAX_TRAILER_SHARE = 0.4;
+const MAX_DETAIL_SHARE = 0.5;
 
 function formatDuration(ms: number) {
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
@@ -245,12 +246,16 @@ export function compactToolRows(
               1,
               width - context.outputPad - SCROLLBAR_GUTTER,
             );
-            const { detail, trailer } = state.summary ?? {};
+            const { trailer } = state.summary ?? {};
             const separator = theme.fg("dim", SEPARATOR);
-            const suffix = [detail, timing(theme, context, state, now), trailer]
-              .filter(Boolean)
-              .join(separator);
             const marker = `${statusMarker(theme, context, now)} `;
+            const label = recolor(
+              theme,
+              context.isPartial ? "accent" : "muted",
+              spec?.label?.(theme) ??
+                (call && firstVisibleLine(call)) ??
+                toolName,
+            );
             // A long error may take at most this share of the row; the end of
             // the row is cut instead of the tool's own label.
             const trailerOverflow = trailer
@@ -260,6 +265,28 @@ export function compactToolRows(
                     Math.floor(available * MAX_TRAILER_SHARE),
                 )
               : 0;
+            const after = [timing(theme, context, state, now), trailer].filter(
+              Boolean,
+            );
+            // A long detail, such as a written answer, uses the space the
+            // label leaves free, and at least this share of the row. It is cut
+            // itself so the timing after it stays visible.
+            const detail =
+              state.summary?.detail &&
+              truncateToWidth(
+                state.summary.detail,
+                Math.max(
+                  Math.floor(available * MAX_DETAIL_SHARE),
+                  available -
+                    visibleWidth(marker) -
+                    visibleWidth(label) -
+                    visibleWidth(SEPARATOR) * (after.length + 1) -
+                    visibleWidth(after.join("")) +
+                    trailerOverflow,
+                ),
+                theme.fg("dim", "…"),
+              );
+            const suffix = [detail, ...after].filter(Boolean).join(separator);
             const labelWidth = Math.max(
               Math.min(12, available),
               available -
@@ -269,13 +296,6 @@ export function compactToolRows(
                     visibleWidth(suffix) -
                     trailerOverflow
                   : 0),
-            );
-            const label = recolor(
-              theme,
-              context.isPartial ? "accent" : "muted",
-              spec?.label?.(theme) ??
-                (call && firstVisibleLine(call)) ??
-                toolName,
             );
             const line =
               marker +
