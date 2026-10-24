@@ -199,6 +199,8 @@ test("a Pi session uses the extension's provider, tools and WebSocket continuati
 
   // RPC has no built-in interactive-mode catalog refresher: the extension must do it.
   const runner = session.extensionRunner;
+  // Finish the real auth snapshot before replacing refresh with a recording stub.
+  await registry.refresh({ providers: ["cpa-test"], allowNetwork: false });
   const network: boolean[] = [];
   registry.refresh = async (options) => {
     network.push(options?.allowNetwork === true);
