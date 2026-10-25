@@ -34,11 +34,11 @@ Profiles are typed, source-controlled configuration in `src/profiles.ts`. Each h
 | `scout`    | Pi          | `openai-codex/gpt-5.6-luna` | high   |
 | `lookup`   | Pi          | `openai-codex/gpt-5.6-luna` | medium |
 | `code`     | Pi          | `opencode-go/glm-5.3-flash` | high   |
-| `build`    | Pi          | `openai-codex/gpt-6-astra`  | high   |
-| `ui`       | Claude Code | `claude-fable-5-1`          | high   |
-| `review`   | Pi          | `openai-codex/gpt-6-astra`  | high   |
+| `build`    | Pi          | `proxy/claude-opus-5-5`    | xhigh  |
+| `ui`       | Pi          | `proxy/claude-fable-5-1`   | high   |
+| `review`   | Pi          | `proxy/gpt-6.1-sol-fast`   | max    |
 | `research` | Pi          | `openai-codex/gpt-6-astra`  | high   |
-| `write`    | Claude Code | `claude-fable-5-1`          | high   |
+| `write`    | Pi          | `proxy/claude-opus-5-5`    | medium |
 
 There is no automatic model or harness fallback. Startup errors return to the caller; asynchronous rejection settles the run as failed and closes the rejected session. The parent decides whether to retry or reassign. Historical attempt records remain readable in saved artifacts.
 

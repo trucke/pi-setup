@@ -10,18 +10,18 @@ The design has eight profiles. `research` absorbs the former `analyst` responsib
 
 Each profile has one primary model and no automatic fallback. **GLM-5.3-Flash · high is the selected `code` model for now.** Model assignments remain subject to practical evaluation, not claims of measured superiority.
 
-Model shorthand: Astra means GPT-6 Astra, Luna means GPT-5.6 Luna, Sol means GPT-5.6 Sol and Fable means Claude Fable 5.1. Each model is followed by its requested reasoning effort. These are display labels; exact provider configuration strings are recorded in the architecture document and executable configuration.
+Model shorthand: Astra means GPT-6 Astra, Luna means GPT-5.6 Luna, Sol means GPT-5.6 Sol, Sol Fast means GPT-6.1 Sol Fast, Opus means Claude Opus 5.5 and Fable means Claude Fable 5.1. Each model is followed by its requested reasoning effort. These are display labels; exact provider configuration strings are recorded in the architecture document and executable configuration.
 
 | Profile      | Primary model            | Description                                                                                                      | When to use                                                                                                                                            |
 | ------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **scout**    | **Luna · high**          | Explore existing code and local material; explain relevant findings and constraints.                             | Locate an implementation, trace a dependency, map a subsystem or find relevant knowledge-vault notes.                                                  |
 | **lookup**   | **Luna · medium**        | Find and verify bounded external information using authoritative, current sources.                               | Investigate compatibility across libraries, verify version-specific API behavior or answer a bounded external question substantial enough to delegate. |
 | **code**     | **GLM-5.3-Flash · high** | Implement well-defined small and medium tasks within established architecture.                                   | Fix a localized bug, add an endpoint following established patterns, write a script or perform a scoped refactor with clear acceptance criteria.       |
-| **build**    | **Astra · high**         | Own substantial engineering decisions and implementation.                                                        | Design APIs or architecture, make database decisions, resolve complex bugs or deliver features across multiple subsystems.                             |
+| **build**    | **Opus · xhigh**         | Own substantial engineering decisions and implementation.                                                        | Design APIs or architecture, make database decisions, resolve complex bugs or deliver features across multiple subsystems.                             |
 | **ui**       | **Fable · high**         | Own interface design, implementation and browser-based validation.                                               | Build a screen or component, improve a user flow, establish visual direction or fix responsive and accessibility issues.                               |
-| **review**   | **Astra · high**         | Independently assess artifacts using task-specific criteria.                                                     | Review code, architecture, plans or documents for defects, omissions, unsupported assumptions and maintainability problems.                            |
+| **review**   | **Sol Fast · max**       | Independently assess artifacts using task-specific criteria.                                                     | Review code, architecture, plans or documents for defects, omissions, unsupported assumptions and maintainability problems.                            |
 | **research** | **Astra · high**         | Investigate substantial questions and produce evidence-backed findings, recommendations or analytical documents. | Compare approaches, reconcile conflicting evidence, develop scientific sections or produce technical assessments and funding arguments.                |
-| **write**    | **Fable · high**         | Draft and refine prose while preserving established substance.                                                   | Write correspondence, documentation, website copy or narrative text; polish scientific prose when its argument and evidence are already settled.       |
+| **write**    | **Opus · medium**        | Draft and refine prose while preserving established substance.                                                   | Write correspondence, documentation, website copy or narrative text; polish scientific prose when its argument and evidence are already settled.       |
 
 Profiles define responsibilities and authority, not merely model presets. Sharing a model does not make distinct working contracts redundant.
 
@@ -195,7 +195,7 @@ Primary: **Fable 5.1 · high**.
 
 ## Agreed contract: review
 
-Primary: **Astra · high**.
+Primary: **Sol Fast · max**.
 
 One profile assesses different artifacts using criteria suited to the task. Separate code, UI and prose review profiles are not needed.
 
@@ -263,7 +263,7 @@ These models are outside automatic routing. They are possible deliberate evaluat
 
 - **Pi:** Current primary harness.
 - **OpenCode:** Intended primary harness for the redesigned setup.
-- **Claude Code:** Harness for Fable assignments.
+- **Claude Code:** Available through direct execution; all current profiles use Pi.
 - **Codex CLI:** Optional harness.
 
 Harness assignments and provider model IDs are configured in source. Pi primary IDs were checked against the local model registry without network refresh. Supported effort mappings and required tools still need representative end-to-end validation. Model availability alone does not establish that a harness can perform a profile's tasks.

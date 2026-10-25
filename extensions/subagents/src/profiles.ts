@@ -55,8 +55,8 @@ export const EXECUTION_PROFILES = {
     description: "Own substantial engineering decisions and implementation",
     execution: {
       harness: "pi",
-      model: "openai-codex/gpt-6-astra",
-      reasoningEffort: "medium",
+      model: "proxy/claude-opus-5-5",
+      reasoningEffort: "xhigh",
       runMode: "agent",
     },
     instructions:
@@ -65,8 +65,8 @@ export const EXECUTION_PROFILES = {
   ui: {
     description: "Own interface design, implementation and browser validation",
     execution: {
-      harness: "claude",
-      model: "claude-fable-5-1",
+      harness: "pi",
+      model: "proxy/claude-fable-5-1",
       reasoningEffort: "high",
       runMode: "agent",
     },
@@ -77,8 +77,8 @@ export const EXECUTION_PROFILES = {
     description: "Independently assess code, plans, interfaces or documents",
     execution: {
       harness: "pi",
-      model: "openai-codex/gpt-6-astra",
-      reasoningEffort: "high",
+      model: "proxy/gpt-6.1-sol-fast",
+      reasoningEffort: "max",
       runMode: "agent",
     },
     instructions:
@@ -100,8 +100,8 @@ export const EXECUTION_PROFILES = {
     description:
       "Draft and refine prose while preserving established substance",
     execution: {
-      harness: "claude",
-      model: "claude-fable-5-1",
+      harness: "pi",
+      model: "proxy/claude-opus-5-5",
       reasoningEffort: "medium",
       runMode: "agent",
     },
