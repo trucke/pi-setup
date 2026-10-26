@@ -22,6 +22,22 @@ const STATUS_STDERR_MAX_LINES = 200;
 const RESULT_STDOUT_MAX_LINES = 40;
 const RESULT_STDERR_MAX_LINES = 20;
 
+/** Longest bash timeout allowed before the call is redirected to bg-start. A
+ * blocking bash call locks the session for its whole duration. */
+export const MAX_BASH_TIMEOUT_SECONDS = 300;
+
+/** Block reason for an over-long bash call, or undefined when it may run. */
+export function longBashBlockReason(
+  timeout: number | undefined,
+): string | undefined {
+  if (timeout === undefined || timeout <= MAX_BASH_TIMEOUT_SECONDS) return;
+  return (
+    `bash timeout ${timeout}s exceeds ${MAX_BASH_TIMEOUT_SECONDS}s and would block the session. ` +
+    "Run this command with bg-start instead; you will be notified with its output when it exits. " +
+    `If it reliably finishes sooner, retry bash with a timeout of at most ${MAX_BASH_TIMEOUT_SECONDS}s.`
+  );
+}
+
 export const BG_START_TOOL_DESCRIPTION =
   "Start a long-running shell command as a background terminal (executed via the platform shell — sh -c on POSIX, cmd.exe /d /s /c on Windows). " +
   "Fire-and-forget: this returns immediately with an id, and you get a message with the final output when the process exits. " +
@@ -34,6 +50,7 @@ export const BG_START_PROMPT_SNIPPET =
 
 export const BG_START_PROMPT_GUIDELINES = [
   "Use bg-start for commands expected to run long or indefinitely (servers, watch modes, long builds); use the regular bash tool for quick commands.",
+  `Also use bg-start for commands that wait on something else to finish (CI watchers, agent or job waits, sleep or poll loops). bash calls with a timeout above ${MAX_BASH_TIMEOUT_SECONDS}s are rejected.`,
   "bg-start processes receive no stdin — never start a command that requires interactive input.",
   "After bg-start, keep working; the exit result arrives automatically. Use bg-status only when you need current output before continuing.",
 ];

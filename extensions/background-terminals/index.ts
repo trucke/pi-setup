@@ -25,7 +25,10 @@ import type {
   ExtensionContext,
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import {
+  getMarkdownTheme,
+  isToolCallEventType,
+} from "@earendil-works/pi-coding-agent";
 import { Key, Markdown, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { TerminalSnapshot } from "./src/domain.ts";
@@ -45,6 +48,7 @@ import {
   buildStatusResult,
   buildTerminalResultMessage,
   describeTerminal,
+  longBashBlockReason,
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
 import {
@@ -199,6 +203,14 @@ export default function (pi: ExtensionAPI) {
     runtime = undefined;
     managerPromise = undefined;
     await closing?.dispose();
+  });
+
+  // Prompt guidance alone does not stop the model from parking the session
+  // on a long blocking wait, so reject over-long bash timeouts outright.
+  pi.on("tool_call", (event) => {
+    if (!isToolCallEventType("bash", event)) return;
+    const reason = longBashBlockReason(event.input.timeout);
+    if (reason) return { block: true, reason };
   });
 
   // --- Tools -------------------------------------------------------------
