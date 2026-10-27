@@ -591,3 +591,61 @@ test("aborting the kill wait does not cancel the termination", async () => {
     assert.ok(await pollUntil(() => processGone(pid)), "process is gone");
   });
 });
+
+test("wait returns settled terminals, leaves the rest running and keeps settles unconsumed", async () => {
+  await withManager(async (manager, runtime) => {
+    const settled: Array<{ id: string; consumed: boolean }> = [];
+    manager.view.setOnSettled((snap, consumed) =>
+      settled.push({ id: snap.id, consumed }),
+    );
+    const start = (title: string, script: string) =>
+      runTool(runtime, manager.start({ command: nodeCmd(script), title, cwd }));
+    const quick = await start("quick", 'process.stdout.write("quick\\n")');
+    const other = await start("other", 'process.stdout.write("other\\n")');
+    const immortal = await start("immortal", "setInterval(() => {}, 1000)");
+
+    const all = await runTool(
+      runtime,
+      manager.wait([quick.id, other.id, quick.id], "all"),
+    );
+    assert.equal(all.timedOut, false);
+    assert.deepEqual(
+      all.settled.map((snap) => [snap.id, snap.status, snap.stdout.text]),
+      [
+        [quick.id, "done", "quick\n"],
+        [other.id, "done", "other\n"],
+      ],
+    );
+    assert.deepEqual(all.pending, []);
+
+    const any = await runTool(
+      runtime,
+      manager.wait([immortal.id, quick.id], "any"),
+    );
+    assert.equal(any.timedOut, false);
+    assert.deepEqual(
+      any.settled.map((snap) => snap.id),
+      [quick.id],
+    );
+    assert.deepEqual(any.pending, [immortal.id]);
+
+    const timedOut = await runTool(
+      runtime,
+      manager.wait([immortal.id], "all", 50),
+    );
+    assert.equal(timedOut.timedOut, true);
+    assert.deepEqual(timedOut.settled, []);
+    assert.deepEqual(timedOut.pending, [immortal.id]);
+    assert.equal(manager.view.get(immortal.id)?.status, "running");
+
+    // The tool retracts follow-ups for the ids it returns; the manager must
+    // not, or a settle racing a timeout or abort would be lost.
+    assert.deepEqual(
+      settled.sort((a, b) => a.id.localeCompare(b.id)),
+      [
+        { id: quick.id, consumed: false },
+        { id: other.id, consumed: false },
+      ],
+    );
+  });
+});

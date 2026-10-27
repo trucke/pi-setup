@@ -6,6 +6,8 @@
  * - bg-start: fire-and-forget spawn (command, title, working_dir). Max 8
  *   running at once. The model is notified exactly once when a process exits.
  * - bg-status: peek at one terminal's status + tail-truncated output.
+ * - bg-wait: block until all/any listed terminals exit (optional timeout);
+ *   returns their results, which are then not delivered again on exit.
  * - bg-list: list all tracked terminals (running and settled).
  * - bg-kill: SIGTERM→SIGKILL the whole process tree; returns final state.
  *
@@ -20,6 +22,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -43,10 +46,13 @@ import {
   BG_START_TOOL_DESCRIPTION,
   BG_STATUS_PARAMETER_DESCRIPTIONS,
   BG_STATUS_TOOL_DESCRIPTION,
+  BG_WAIT_PARAMETER_DESCRIPTIONS,
+  BG_WAIT_TOOL_DESCRIPTION,
   buildKillReport,
   buildStartResult,
   buildStatusResult,
   buildTerminalResultMessage,
+  buildWaitResult,
   describeTerminal,
   longBashBlockReason,
 } from "./src/prompt.ts";
@@ -290,6 +296,81 @@ export default function (pi: ExtensionAPI) {
           pid: snap.pid,
           exitCode: snap.exitCode,
           signal: snap.signal,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "bg-wait",
+    label: "Wait for Background Terminals",
+    description: BG_WAIT_TOOL_DESCRIPTION,
+    parameters: Type.Object({
+      ids: Type.Array(Type.String(), {
+        minItems: 1,
+        maxItems: 64,
+        description: BG_WAIT_PARAMETER_DESCRIPTIONS.ids,
+      }),
+      mode: Type.Optional(
+        StringEnum(["all", "any"] as const, {
+          description: BG_WAIT_PARAMETER_DESCRIPTIONS.mode,
+        }),
+      ),
+      timeoutMs: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: 2_147_483_647,
+          description: BG_WAIT_PARAMETER_DESCRIPTIONS.timeoutMs,
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, signal, onUpdate) {
+      const manager = await getManager();
+      const ids = [...new Set(params.ids)];
+      const unknown = ids.filter((id) => !manager.view.get(id));
+      if (unknown.length > 0) {
+        const known = manager.view.list().map((snap) => snap.id);
+        throw new Error(
+          `Unknown terminal id(s): ${unknown.join(", ")}. Known: ${known.join(", ") || "none"}.`,
+        );
+      }
+
+      const running = ids.filter(
+        (id) => manager.view.get(id)?.status === "running",
+      );
+      if (running.length > 0) {
+        onUpdate?.({
+          content: [
+            { type: "text", text: `Waiting for ${running.join(", ")}...` },
+          ],
+          details: { pending: running },
+        });
+      }
+
+      const mode = params.mode ?? "all";
+      const result = await runTool(
+        getRuntime(),
+        manager.wait(ids, mode, params.timeoutMs),
+        { signal, interruptMessage: "Wait aborted. Terminals keep running." },
+      );
+
+      // This wait returns these settlements itself; their pending automatic
+      // follow-ups would be duplicates. Terminals still running keep theirs.
+      resultDelivery.consume(result.settled.map((snap) => snap.id));
+
+      return {
+        content: [{ type: "text", text: buildWaitResult(result) }],
+        details: {
+          mode,
+          timedOut: result.timedOut,
+          pending: result.pending,
+          results: result.settled.map((snap) => ({
+            id: snap.id,
+            title: snap.title,
+            status: snap.status,
+            exitCode: snap.exitCode,
+            signal: snap.signal,
+          })),
         },
       };
     },

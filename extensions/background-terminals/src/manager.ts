@@ -124,6 +124,16 @@ export interface KillResult {
   readonly exit: string;
 }
 
+export type WaitMode = "all" | "any";
+
+export interface WaitResult {
+  /** Terminals in the wait that had settled when it returned (live snapshots). */
+  readonly settled: ReadonlyArray<TerminalSnapshot>;
+  /** Ids still running when the wait returned. */
+  readonly pending: ReadonlyArray<string>;
+  readonly timedOut: boolean;
+}
+
 // --- Read model ----------------------------------------------------------------
 
 /** Synchronous bridge for the TUI. Snapshots are live objects; do not mutate. */
@@ -156,6 +166,13 @@ export interface TerminalManagerShape {
   status(id: string): Effect.Effect<TerminalSnapshot, UnknownTerminalError>;
   /** Kill running terminals; resolves only after they have settled. */
   kill(ids: ReadonlyArray<string>): Effect.Effect<ReadonlyArray<KillResult>>;
+  /** Wait until all or any of the terminals settle, or the timeout passes.
+   * Never stops anything. Unknown ids are ignored. */
+  wait(
+    ids: ReadonlyArray<string>,
+    mode: WaitMode,
+    timeoutMs?: number,
+  ): Effect.Effect<WaitResult>;
   readonly list: Effect.Effect<ReadonlyArray<TerminalSnapshot>>;
   readonly disposeAll: Effect.Effect<void>;
   readonly view: TerminalReadModel;
@@ -827,6 +844,48 @@ const makeManager = Effect.gen(function* () {
       );
     });
 
+  // Settlements still reach the settle hook as unconsumed: the tool retracts
+  // the follow-ups for exactly the ids it returns. Pre-marking them consumed
+  // would lose a result that settles after the snapshot below, or during a
+  // wait the user aborts.
+  const wait = (
+    ids: ReadonlyArray<string>,
+    mode: WaitMode,
+    timeoutMs?: number,
+  ) =>
+    Effect.suspend(() => {
+      // Hold the entries themselves: pruning may drop settled ids from the map.
+      const targets = [...new Set(ids)]
+        .map((id) => entries.get(id))
+        .filter((entry): entry is Entry => entry !== undefined);
+      const settledOnes = targets.map((entry) => Deferred.await(entry.settled));
+      const waiting =
+        mode === "any" && settledOnes.length > 0
+          ? Effect.raceAll(settledOnes)
+          : Effect.all(settledOnes, {
+              concurrency: "unbounded",
+              discard: true,
+            });
+      const bounded =
+        timeoutMs === undefined
+          ? Effect.as(waiting, false)
+          : Effect.as(waiting, false).pipe(
+              Effect.timeoutOrElse({
+                duration: timeoutMs,
+                orElse: () => Effect.succeed(true),
+              }),
+            );
+      return Effect.map(bounded, (timedOut): WaitResult => ({
+        timedOut,
+        settled: targets
+          .filter((entry) => entry.snapshot.status !== "running")
+          .map((entry) => entry.snapshot),
+        pending: targets
+          .filter((entry) => entry.snapshot.status === "running")
+          .map((entry) => entry.snapshot.id),
+      }));
+    });
+
   const disposeAll = Effect.gen(function* () {
     disposed = true;
     const all = [...entries.values()];
@@ -895,6 +954,7 @@ const makeManager = Effect.gen(function* () {
     start,
     status,
     kill,
+    wait,
     list: Effect.sync(() => [...entries.values()].map((e) => e.snapshot)),
     disposeAll,
     view,

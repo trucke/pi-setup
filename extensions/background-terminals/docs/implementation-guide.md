@@ -231,9 +231,9 @@ export const TerminalManagerLive: Layer.Layer<TerminalManager> =
 - A scoped `FiberSet.runtime` bridge for fire-and-forget UI kills, process-event settlement,
   and pruning. Completed fibers remove themselves; disposal waits for the set within a bound,
   and scope close interrupts cleanup still live after that bound.
-- `let counter = 0` for ids; `let disposed = false`; `waitInterest` is NOT needed (there is no
-  `bg-wait` tool in v1 — see §8 note), but the "consumed" concept still applies to `bg-kill`
-  and `bg-status` so a settle isn't double-announced (§9.3).
+- `let counter = 0` for ids; `let disposed = false`; `waitInterest` is NOT needed (`bg-wait`
+  retracts follow-ups at the tool boundary — see §8 note), but the "consumed" concept still
+  applies to `bg-kill` and `bg-status` so a settle isn't double-announced (§9.3).
 - `yield* Effect.addFinalizer(() => disposeAll)` — the safety net so `runtime.dispose()` in
   `session_shutdown` kills every process even if the extension forgot (subagents manager.ts
   line 657).
@@ -548,10 +548,16 @@ Report per id: `Killed bt-1 "dev server" (SIGTERM).` or `bt-2 "build" was alread
 Killing marks the settle consumed so the model doesn't also get the async completion message
 (§9.3) — same reason subagents' `cancel` calls `addInterest` before interrupting.
 
-**No `bg-wait` and no `bg_send`.** No stdin is a hard requirement. Blocking wait is
-deliberately omitted in v1: completion notification makes it redundant, and it would drag in
-subagents' full `waitInterest` machinery. If it's ever wanted, each entry already has a
-settlement `Deferred` and the subagents `waitFor` result shaping is the template.
+**No `bg_send`.** No stdin is a hard requirement.
+
+**`bg-wait` was added later.** v1 omitted it, assuming completion notification made it
+redundant. In practice, a model that needed a result before continuing polled the spill files
+with `sleep` loops instead; the tool never saw the result consumed, so the completion message
+arrived after the model had moved on and started a pointless extra turn. `manager.wait` awaits
+the entries' settlement `Deferred`s (all, or `raceAll` for any, with an optional timeout) and
+does not mark anything consumed; the tool retracts the deferred follow-ups for exactly the ids
+it returns, as subagent-wait does. Results settling after the snapshot, or during an aborted
+wait, are still delivered.
 
 ## 9. Completion notification — exactly once, no polling, no turn races
 

@@ -7,7 +7,7 @@ import {
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import { formatElapsed, formatExit, type TerminalSnapshot } from "./domain.ts";
-import { MAX_RUNNING, type KillResult } from "./manager.ts";
+import { MAX_RUNNING, type KillResult, type WaitResult } from "./manager.ts";
 
 /** bg-status stdout tail. */
 export const STATUS_STDOUT_MAX = 16 * 1024;
@@ -33,14 +33,14 @@ export function longBashBlockReason(
   if (timeout === undefined || timeout <= MAX_BASH_TIMEOUT_SECONDS) return;
   return (
     `bash timeout ${timeout}s exceeds ${MAX_BASH_TIMEOUT_SECONDS}s and would block the session. ` +
-    "Run this command with bg-start instead; you will be notified with its output when it exits. " +
+    "Run this command with bg-start instead; you will be notified with its output when it exits, or call bg-wait if you need it before continuing. " +
     `If it reliably finishes sooner, retry bash with a timeout of at most ${MAX_BASH_TIMEOUT_SECONDS}s.`
   );
 }
 
 export const BG_START_TOOL_DESCRIPTION =
   "Start a long-running shell command as a background terminal (executed via the platform shell — sh -c on POSIX, cmd.exe /d /s /c on Windows). " +
-  "Fire-and-forget: this returns immediately with an id, and you get a message with the final output when the process exits. " +
+  "Fire-and-forget: this returns immediately with an id, and you get a message with the final output when the process exits. Use bg-wait when you need that output before continuing. " +
   "The process receives NO stdin (immediate EOF) and there is no way to send input later — interactive commands will not work; use bg-kill to stop a stuck one. " +
   `Terminals are session-scoped: they are killed when the session ends or reloads. Output shown to you is tail-truncated (stdout ${formatSize(STATUS_STDOUT_MAX)}, stderr ${formatSize(STATUS_STDERR_MAX)}); the full logs are captured to files and in the /ps viewer. ` +
   `Max ${MAX_RUNNING} background terminals can run at once.`;
@@ -52,7 +52,7 @@ export const BG_START_PROMPT_GUIDELINES = [
   "Use bg-start for commands expected to run long or indefinitely (servers, watch modes, long builds); use the regular bash tool for quick commands.",
   `Also use bg-start for commands that wait on something else to finish (CI watchers, agent or job waits, sleep or poll loops). bash calls with a timeout above ${MAX_BASH_TIMEOUT_SECONDS}s are rejected.`,
   "bg-start processes receive no stdin — never start a command that requires interactive input.",
-  "After bg-start, keep working; the exit result arrives automatically. Use bg-status only when you need current output before continuing.",
+  "After bg-start, keep working; the exit result arrives automatically. When you cannot continue without it, call bg-wait instead of polling with sleep or reading the terminal's log files. Use bg-status to peek at current output.",
 ];
 
 export const BG_START_PARAMETER_DESCRIPTIONS = {
@@ -69,6 +69,16 @@ export const BG_STATUS_PARAMETER_DESCRIPTIONS = {
   id: 'Terminal id, e.g. "bt-1"',
 };
 
+export const BG_WAIT_TOOL_DESCRIPTION =
+  'Wait until all or any listed background terminals exit, then return their final output. Waited-for results are not sent again as exit messages. An optional timeout stops waiting without stopping the terminals. Defaults to mode "all" and no timeout.';
+
+export const BG_WAIT_PARAMETER_DESCRIPTIONS = {
+  ids: 'Terminal ids, e.g. ["bt-1", "bt-2"]',
+  mode: '"all" waits for every id; "any" returns once at least one exits',
+  timeoutMs:
+    "Optional wait deadline in milliseconds. Timing out leaves terminals running.",
+};
+
 export const BG_LIST_TOOL_DESCRIPTION =
   "List all background terminals (running and settled) with pid, elapsed time, exit status, and output sizes.";
 
@@ -83,7 +93,7 @@ export function buildStartResult(snap: TerminalSnapshot) {
   return (
     `Started background terminal ${snap.id} "${snap.title}" (pid ${snap.pid ?? "?"}, ${snap.cwd}).\n` +
     `It runs in the background with no stdin. You'll get a message when it exits, ` +
-    `or use bg-status(id: "${snap.id}") to peek, bg-kill to stop it, bg-list to see all.`
+    `or use bg-wait to block until it does, bg-status(id: "${snap.id}") to peek, bg-kill to stop it, bg-list to see all.`
   );
 }
 
@@ -141,6 +151,19 @@ export function buildTerminalResultMessage(snap: TerminalSnapshot) {
     text += `\n\n${outputSection("stderr", snap.stderr, RESULT_STDERR_MAX, RESULT_STDERR_MAX_LINES)}`;
   }
   return text;
+}
+
+export function buildWaitResult(result: WaitResult) {
+  const sections = result.settled.map(buildTerminalResultMessage);
+  if (result.pending.length > 0) {
+    const still = `Still running: ${result.pending.join(", ")}.`;
+    sections.push(
+      result.timedOut
+        ? `Wait timed out. ${still} Nothing was stopped.`
+        : `${still} Their results arrive automatically when they exit.`,
+    );
+  }
+  return sections.join("\n\n---\n\n");
 }
 
 export function buildKillReport(results: ReadonlyArray<KillResult>) {

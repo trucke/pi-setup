@@ -19,8 +19,9 @@ Background commands receive no stdin. Never use them for interactive prompts.
 
 After starting, continue useful work instead of polling. The terminal sends one completion message when it exits.
 
-## Inspect and stop
+## Wait, inspect and stop
 
+- Use `bg-wait` when you cannot continue without the result. It returns the final output, and that terminal then sends no completion message. Never poll with `sleep` or read the log files directly.
 - Use `bg-status` only when current output or status is needed.
 - Use `bg-list` to inventory all tracked terminals.
 - Use `bg-kill` when a process is no longer needed or is stuck; termination continues even if the tool wait is aborted.
