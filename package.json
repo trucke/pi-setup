@@ -37,7 +37,7 @@
     "typebox": "*"
   },
   "name": "@trucke/pi-setup",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "packageManager": "pnpm@11.24.0",
   "keywords": [
     "pi-package"

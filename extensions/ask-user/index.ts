@@ -759,7 +759,8 @@ export default function askUser(pi: ExtensionAPI) {
             );
             // Very long questions remain readable by scrolling, rather than being discarded.
             const headingOverflow = heading.splice(headingRows);
-            // The context is shared by every question, so it leads the dialog.
+            // The context is shared by every question, so it opens the dialog,
+            // directly under the title line and above the tabs.
             const intro = [
               ...contextView
                 .render(Math.max(1, renderWidth - 2))
@@ -767,7 +768,8 @@ export default function askUser(pi: ExtensionAPI) {
               "",
             ];
             // One scrollable document runs from the context to the options; the
-            // heading is inserted where the context ends (see the split below).
+            // rest of the heading is inserted where the context ends (see the
+            // split below).
             body.unshift(...intro, ...headingOverflow);
             const offset = intro.length + headingOverflow.length;
             if (focus) focus = [focus[0] + offset, focus[1] + offset];
@@ -808,15 +810,19 @@ export default function askUser(pi: ExtensionAPI) {
                     theme.fg("accent", "─".repeat(renderWidth)),
                   ];
             const visible = body.slice(scrollTop, scrollTop + bodyHeight);
-            // The heading follows the visible context and sticks to the top once
-            // the context has scrolled away, so the question stays in view.
+            // The title line always frames the dialog, so the context reads as
+            // part of it. Tabs and question follow the visible context and stick
+            // under the title once it has scrolled away, keeping the question
+            // in view.
             const split = Math.max(
               0,
               Math.min(intro.length - scrollTop, visible.length),
             );
+            const [titleLine, ...questionHeading] = heading;
             cachedLines = [
+              titleLine,
               ...visible.slice(0, split),
-              ...heading,
+              ...questionHeading,
               ...visible.slice(split),
               ...footer,
             ].map((line) => truncateToWidth(line, renderWidth));

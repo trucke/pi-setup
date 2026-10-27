@@ -254,19 +254,19 @@ function screen(lines: string[]) {
   return lines.map((line) => stripTerminalSequences(line).trimEnd()).join("\n");
 }
 
-test("shows the Markdown context above the question block on every tab", async () => {
+test("shows the Markdown context inside the dialog, under its title and above the tabs, on every tab", async () => {
   const run = await openQuestionnaire({
     ...batch,
     context: "The clone **already finished**; `bt-5` is done.",
   });
   assert.match(
     screen(run.render()),
-    /^ The clone already finished; bt-5 is done\.\n\n─ Questions ─+\n .*Scope.*Priority.*\n Choose scope\n\n ❯ 1\. Small/,
+    /^─ Questions ─+\n The clone already finished; bt-5 is done\.\n\n .*Scope.*Priority.*\n Choose scope\n\n ❯ 1\. Small/,
   );
   run.input(TAB);
   assert.match(
     screen(run.render()),
-    /^ The clone already finished; bt-5 is done\.\n\n─ Questions ─+\n .*\n Choose priority/,
+    /^─ Questions ─+\n The clone already finished; bt-5 is done\.\n\n .*\n Choose priority/,
   );
   run.input(ESC);
   await run.result;
@@ -282,15 +282,15 @@ test("a long context scrolls above the question, which stays in view with the fo
   const initial = screen(run.render());
   assert.match(
     initial,
-    /Point 20\n\n─ Question ─+\n Choose scope\n\n ❯ 1\. Small/,
+    /^─ Question ─+\n - Point \d+\n[^]*Point 20\n\n Choose scope\n\n ❯ 1\. Small/,
   );
   assert.doesNotMatch(initial, /Point 1$/m);
   assert.match(initial, /↑ more above/);
 
   run.input(PAGE_UP, PAGE_UP);
   const top = screen(run.render());
-  assert.match(top, /Point 1$/m);
-  assert.match(top, /─ Question ─+\n Choose scope/);
+  assert.match(top, /^─ Question ─+\n - Point 1\n/);
+  assert.match(top, /\n Choose scope\n/);
   assert.match(top, /↓ more below/);
 
   run.input(DOWN);
