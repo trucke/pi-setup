@@ -2,21 +2,26 @@
  * ask-user - Lets the model ask single- or multi-select questions.
  *
  * - One question, or a batch of up to 4 questions
+ * - A required context, rendered in the dialog above the options: text the
+ *   model writes before the call is not reliably visible, so the dialog has to
+ *   carry everything the user needs to decide
  * - 2 to 5 model-provided options per question, plus "Write my own answer"
  * - Batched questions use tabs and a final review/submit step
  * - "Write my own answer" opens an inline editor (Esc returns to the options)
  * - Esc on the questionnaire dismisses it without submitting partial answers
  */
 
-import type {
-  ExtensionAPI,
-  ExtensionContext,
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  getMarkdownTheme,
 } from "@earendil-works/pi-coding-agent";
 import {
   CURSOR_MARKER,
   Editor,
   type EditorTheme,
   Key,
+  Markdown,
   matchesKey,
   Text,
   truncateToWidth,
@@ -74,6 +79,11 @@ const QuestionSchema = Type.Object({
 });
 
 const AskUserParams = Type.Object({
+  // First, so the model writes the explanation before the questions.
+  context: Type.String({
+    minLength: 1,
+    description: ASK_USER_PARAMETER_DESCRIPTIONS.context,
+  }),
   questions: Type.Array(QuestionSchema, {
     minItems: MIN_QUESTIONS,
     maxItems: MAX_QUESTIONS,
@@ -85,6 +95,10 @@ export type AskUserInput = Static<typeof AskUserParams>;
 type QuestionInput = Static<typeof QuestionSchema>;
 type OptionInput = Static<typeof OptionSchema>;
 type LegacySingleQuestionInput = Pick<QuestionInput, "question" | "options">;
+/** Arguments as stored in sessions, including calls recorded before context existed. */
+type RecordedInput = (
+  Omit<AskUserInput, "context"> | LegacySingleQuestionInput
+) & { context?: string };
 
 interface NormalizedQuestion {
   label: string;
@@ -144,6 +158,7 @@ function prepareAskUserArguments(args: unknown): AskUserInput {
   if (!args || typeof args !== "object") return args as AskUserInput;
 
   const input = args as {
+    context?: unknown;
     questions?: unknown;
     question?: unknown;
     options?: unknown;
@@ -156,14 +171,16 @@ function prepareAskUserArguments(args: unknown): AskUserInput {
     return args as AskUserInput;
   }
 
+  // A missing context still fails validation, telling the model what to add.
   return {
+    context: input.context,
     questions: [
       {
         question: input.question,
         options: input.options as OptionInput[],
       },
     ],
-  };
+  } as AskUserInput;
 }
 
 function validateQuestions(questions: NormalizedQuestion[]) {
@@ -245,6 +262,12 @@ export default function askUser(pi: ExtensionAPI) {
     prepareArguments: prepareAskUserArguments,
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const context = params.context.trim();
+      if (!context) {
+        throw new Error(
+          "ask-user requires a non-empty context. Retry with what the user needs to know to answer.",
+        );
+      }
       const questions = normalizeQuestions(params);
       validateQuestions(questions);
 
@@ -284,6 +307,7 @@ export default function askUser(pi: ExtensionAPI) {
             },
           };
           const editor = new Editor(tui, editorTheme);
+          const contextView = new Markdown(context, 0, 0, getMarkdownTheme());
 
           let currentTab = 0;
           let optionIndex = 0;
@@ -655,6 +679,14 @@ export default function askUser(pi: ExtensionAPI) {
                 heading.push(` ${theme.fg("text", theme.bold(line))}`);
               }
               heading.push("");
+              // Pinned with the question so option navigation never scrolls it
+              // away; an overlong context spills into the scrollable body below.
+              heading.push(
+                ...contextView
+                  .render(Math.max(1, renderWidth - 2))
+                  .map((line) => ` ${line}`),
+                "",
+              );
 
               for (let index = 0; index < options.length; index++) {
                 const option = options[index];
@@ -794,6 +826,7 @@ export default function askUser(pi: ExtensionAPI) {
             invalidate: () => {
               cachedLines = undefined;
               editor.invalidate();
+              contextView.invalidate();
             },
             handleInput,
             dispose: () => {
@@ -861,7 +894,7 @@ export default function askUser(pi: ExtensionAPI) {
       );
     },
 
-    renderCall(args, theme, _context) {
+    renderCall(args, theme, renderContext) {
       const renderSingle = (question: LegacySingleQuestionInput) => {
         let text = theme.fg("toolTitle", theme.bold("ask-user "));
         text += theme.fg("muted", question.question);
@@ -874,18 +907,37 @@ export default function askUser(pi: ExtensionAPI) {
         return new Text(text, 0, 0);
       };
 
-      const input = args as AskUserInput | LegacySingleQuestionInput;
-      if (!("questions" in input)) return renderSingle(input);
+      const renderSummary = (input: RecordedInput) => {
+        if (!("questions" in input)) return renderSingle(input);
 
-      const [singleQuestion] = input.questions;
-      if (input.questions.length === 1 && singleQuestion) {
-        return renderSingle(singleQuestion);
-      }
+        const [singleQuestion] = input.questions;
+        if (input.questions.length === 1 && singleQuestion) {
+          return renderSingle(singleQuestion);
+        }
 
-      // Question labels are shown with each answer in the result.
-      let text = theme.fg("toolTitle", theme.bold("ask-user "));
-      text += theme.fg("muted", `${input.questions.length} questions`);
-      return new Text(text, 0, 0);
+        // Question labels are shown with each answer in the result.
+        let text = theme.fg("toolTitle", theme.bold("ask-user "));
+        text += theme.fg("muted", `${input.questions.length} questions`);
+        return new Text(text, 0, 0);
+      };
+
+      const input = args as RecordedInput;
+      const summary = renderSummary(input);
+      const context = input.context?.trim();
+      if (!renderContext.expanded || !context) return summary;
+
+      // The dialog is gone once answered; expanding the row keeps its context reviewable.
+      const contextView = new Markdown(context, 2, 0, getMarkdownTheme());
+      return {
+        render: (width: number) => [
+          ...summary.render(width),
+          ...contextView.render(width),
+        ],
+        invalidate: () => {
+          summary.invalidate();
+          contextView.invalidate();
+        },
+      };
     },
 
     renderResult(result, _options, theme, _context) {

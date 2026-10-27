@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  CURSOR_MARKER,
+  stripTerminalSequences,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import askUser, { type AskUserInput } from "./index.ts";
+
+// The dialog renders its context through Pi's Markdown theme.
+initTheme();
 
 type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -62,6 +70,7 @@ const PAGE_DOWN = "\u001b[6;5~";
 const PAGE_UP = "\u001b[5;5~";
 
 const batch: AskUserInput = {
+  context: "Scope sets the rollout size; priority sets the order.",
   questions: [
     {
       label: "Scope",
@@ -241,6 +250,36 @@ test("requires every batch question before submitting and preserves single-selec
   ]);
 });
 
+test("shows the context between the pinned question and the options", async () => {
+  const run = await openQuestionnaire({
+    context: "The clone **already finished**; `bt-5` is done.",
+    questions: [batch.questions[0]],
+  });
+  const screen = run
+    .render()
+    .map((line) => stripTerminalSequences(line).trimEnd())
+    .join("\n");
+  assert.match(
+    screen,
+    /Choose scope\n\n The clone already finished; bt-5 is done\.\n\n ❯ 1\. Small/,
+  );
+  run.input(ESC);
+  await run.result;
+});
+
+test("rejects a blank context before showing a dialog", async () => {
+  await assert.rejects(
+    registeredTool().tool.execute(
+      "ask-1",
+      { ...batch, context: "  \n" },
+      undefined,
+      undefined,
+      { mode: "tui", hasUI: true },
+    ),
+    /non-empty context/,
+  );
+});
+
 test("shows a written single-select answer when returning to its tab", async () => {
   const run = await openQuestionnaire(batch);
   run.input("3", "Something else", ENTER, LEFT);
@@ -252,6 +291,7 @@ test("shows a written single-select answer when returning to its tab", async () 
 
 test("multi-select combines checked options and custom text without advancing on a toggle", async () => {
   const run = await openQuestionnaire({
+    ...batch,
     questions: [{ ...batch.questions[0], multiSelect: true }],
   });
   run.input(" ", DOWN, ENTER, "1");
@@ -287,6 +327,7 @@ test("multi-select combines checked options and custom text without advancing on
 
 test("multi-select requires at least one choice or nonblank custom text", async () => {
   const run = await openQuestionnaire({
+    ...batch,
     questions: [{ ...batch.questions[0], multiSelect: true }],
   });
   run.input(DOWN, DOWN, DOWN, ENTER);
@@ -302,6 +343,7 @@ test("multi-select requires at least one choice or nonblank custom text", async 
 
 test("editing a committed multi-select invalidates it until Done is confirmed again", async () => {
   const run = await openQuestionnaire({
+    ...batch,
     questions: [
       { ...batch.questions[0], multiSelect: true },
       batch.questions[1],
@@ -323,6 +365,7 @@ test("editing a committed multi-select invalidates it until Done is confirmed ag
 test("long options scroll inside a bounded view, keeping heading, focus and hints visible after resize", async () => {
   const run = await openQuestionnaire(
     {
+      ...batch,
       questions: [
         {
           question: "Which checks should run?",
@@ -367,6 +410,7 @@ test("long options scroll inside a bounded view, keeping heading, focus and hint
 test("custom-answer cursor remains visible with long options, and Esc still returns to options", async () => {
   const run = await openQuestionnaire(
     {
+      ...batch,
       questions: [
         {
           ...batch.questions[0],
