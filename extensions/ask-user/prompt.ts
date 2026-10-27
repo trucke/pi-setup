@@ -1,7 +1,7 @@
 /** Model-facing schema descriptions for ask-user questions and answer options. */
 export const ASK_USER_PARAMETER_DESCRIPTIONS = {
   context:
-    "What the user needs to know to answer, shown in the dialog above the options: the relevant findings, what the choices mean and your recommendation. Text you wrote before this call may not be visible to the user, so never rely on it. Keep it to a few short lines; Markdown is rendered.",
+    "What the user needs to know to answer, shown at the top of the dialog above all questions: the relevant findings, what the choices mean and your recommendation. Text you wrote before this call may not be visible to the user, so never rely on it. Keep it to a few short lines; Markdown is rendered.",
   optionLabel: "Short display label for this option",
   optionDescription: "Optional one-line description shown below the label",
   question: "The question to ask the user",
@@ -17,7 +17,7 @@ export const ASK_USER_PARAMETER_DESCRIPTIONS = {
 
 /** Describes ask-user's single and batched multiple-choice question shapes. */
 export const ASK_USER_TOOL_DESCRIPTION =
-  "Ask the user one multiple-choice question or a batch of up to 4 questions. Pass every question in the questions array, including when asking only one. Each question has 2-5 options and accepts one answer by default; set multiSelect to true when multiple choices are valid. A free-form 'write my own answer' option is always added automatically and can accompany selections on multi-select questions. Every question must be answered before submitting a batch, and the user may dismiss the whole questionnaire without submitting anything. Every call carries a short context that the dialog shows above the options.";
+  "Ask the user one multiple-choice question or a batch of up to 4 questions. Pass every question in the questions array, including when asking only one. Each question has 2-5 options and accepts one answer by default; set multiSelect to true when multiple choices are valid. A free-form 'write my own answer' option is always added automatically and can accompany selections on multi-select questions. Every question must be answered before submitting a batch, and the user may dismiss the whole questionnaire without submitting anything. Every call carries a short context that the dialog shows above the questions.";
 
 /** Adds ask-user's single and batched multiple-choice capability to the model prompt. */
 export const ASK_USER_PROMPT_SNIPPET =

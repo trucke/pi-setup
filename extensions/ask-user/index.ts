@@ -2,7 +2,7 @@
  * ask-user - Lets the model ask single- or multi-select questions.
  *
  * - One question, or a batch of up to 4 questions
- * - A required context, rendered in the dialog above the options: text the
+ * - A required context, rendered above the questions: text the
  *   model writes before the call is not reliably visible, so the dialog has to
  *   carry everything the user needs to decide
  * - 2 to 5 model-provided options per question, plus "Write my own answer"
@@ -679,14 +679,6 @@ export default function askUser(pi: ExtensionAPI) {
                 heading.push(` ${theme.fg("text", theme.bold(line))}`);
               }
               heading.push("");
-              // Pinned with the question so option navigation never scrolls it
-              // away; an overlong context spills into the scrollable body below.
-              heading.push(
-                ...contextView
-                  .render(Math.max(1, renderWidth - 2))
-                  .map((line) => ` ${line}`),
-                "",
-              );
 
               for (let index = 0; index < options.length; index++) {
                 const option = options[index];
@@ -767,12 +759,18 @@ export default function askUser(pi: ExtensionAPI) {
             );
             // Very long questions remain readable by scrolling, rather than being discarded.
             const headingOverflow = heading.splice(headingRows);
-            body.unshift(...headingOverflow);
-            if (focus)
-              focus = [
-                focus[0] + headingOverflow.length,
-                focus[1] + headingOverflow.length,
-              ];
+            // The context is shared by every question, so it leads the dialog.
+            const intro = [
+              ...contextView
+                .render(Math.max(1, renderWidth - 2))
+                .map((line) => ` ${line}`),
+              "",
+            ];
+            // One scrollable document runs from the context to the options; the
+            // heading is inserted where the context ends (see the split below).
+            body.unshift(...intro, ...headingOverflow);
+            const offset = intro.length + headingOverflow.length;
+            if (focus) focus = [focus[0] + offset, focus[1] + offset];
             bodyHeight = Math.max(1, rowBudget - heading.length - footerRows);
             bodyLength = body.length;
 
@@ -780,10 +778,12 @@ export default function askUser(pi: ExtensionAPI) {
             if (revealFocus && focus) {
               if (focus[0] < scrollTop) scrollTop = focus[0];
               if (focus[1] > scrollTop + bodyHeight) {
-                scrollTop =
-                  focus[1] - focus[0] <= bodyHeight
-                    ? focus[1] - bodyHeight
-                    : focus[0];
+                if (focus[1] - focus[0] <= bodyHeight)
+                  scrollTop = focus[1] - bodyHeight;
+                // Taller than the view: its first line is enough, so the context
+                // above it is not scrolled away while that line is visible.
+                else if (focus[0] >= scrollTop + bodyHeight)
+                  scrollTop = focus[0];
               }
             }
             scrollTop = Math.max(
@@ -807,9 +807,17 @@ export default function askUser(pi: ExtensionAPI) {
                     theme.fg("dim", hint),
                     theme.fg("accent", "─".repeat(renderWidth)),
                   ];
+            const visible = body.slice(scrollTop, scrollTop + bodyHeight);
+            // The heading follows the visible context and sticks to the top once
+            // the context has scrolled away, so the question stays in view.
+            const split = Math.max(
+              0,
+              Math.min(intro.length - scrollTop, visible.length),
+            );
             cachedLines = [
+              ...visible.slice(0, split),
               ...heading,
-              ...body.slice(scrollTop, scrollTop + bodyHeight),
+              ...visible.slice(split),
               ...footer,
             ].map((line) => truncateToWidth(line, renderWidth));
             return cachedLines;
@@ -895,8 +903,17 @@ export default function askUser(pi: ExtensionAPI) {
     },
 
     renderCall(args, theme, renderContext) {
+      const input = args as RecordedInput;
+      const title = theme.fg("toolTitle", theme.bold("ask-user"));
+      // The dialog is gone once answered; expanding the row keeps its context
+      // reviewable, in the dialog's order: the context first, then the questions.
+      const context = renderContext.expanded
+        ? input.context?.trim()
+        : undefined;
+      const prefix = context ? "  " : `${title} `;
+
       const renderSingle = (question: LegacySingleQuestionInput) => {
-        let text = theme.fg("toolTitle", theme.bold("ask-user "));
+        let text = prefix;
         text += theme.fg("muted", question.question);
         if (question.options.length > 0) {
           const numbered = question.options.map(
@@ -916,26 +933,26 @@ export default function askUser(pi: ExtensionAPI) {
         }
 
         // Question labels are shown with each answer in the result.
-        let text = theme.fg("toolTitle", theme.bold("ask-user "));
+        let text = prefix;
         text += theme.fg("muted", `${input.questions.length} questions`);
         return new Text(text, 0, 0);
       };
 
-      const input = args as RecordedInput;
       const summary = renderSummary(input);
-      const context = input.context?.trim();
-      if (!renderContext.expanded || !context) return summary;
+      if (!context) return summary;
 
-      // The dialog is gone once answered; expanding the row keeps its context reviewable.
+      const titleView = new Text(title, 0, 0);
       const contextView = new Markdown(context, 2, 0, getMarkdownTheme());
       return {
         render: (width: number) => [
-          ...summary.render(width),
+          ...titleView.render(width),
           ...contextView.render(width),
+          ...summary.render(width),
         ],
         invalidate: () => {
-          summary.invalidate();
+          titleView.invalidate();
           contextView.invalidate();
+          summary.invalidate();
         },
       };
     },

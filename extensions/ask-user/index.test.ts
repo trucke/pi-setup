@@ -250,18 +250,53 @@ test("requires every batch question before submitting and preserves single-selec
   ]);
 });
 
-test("shows the context between the pinned question and the options", async () => {
+function screen(lines: string[]) {
+  return lines.map((line) => stripTerminalSequences(line).trimEnd()).join("\n");
+}
+
+test("shows the Markdown context above the question block on every tab", async () => {
   const run = await openQuestionnaire({
+    ...batch,
     context: "The clone **already finished**; `bt-5` is done.",
+  });
+  assert.match(
+    screen(run.render()),
+    /^ The clone already finished; bt-5 is done\.\n\n─ Questions ─+\n .*Scope.*Priority.*\n Choose scope\n\n ❯ 1\. Small/,
+  );
+  run.input(TAB);
+  assert.match(
+    screen(run.render()),
+    /^ The clone already finished; bt-5 is done\.\n\n─ Questions ─+\n .*\n Choose priority/,
+  );
+  run.input(ESC);
+  await run.result;
+});
+
+test("a long context scrolls above the question, which stays in view with the focused option", async () => {
+  const run = await openQuestionnaire({
+    context: Array.from({ length: 20 }, (_v, i) => `- Point ${i + 1}`).join(
+      "\n",
+    ),
     questions: [batch.questions[0]],
   });
-  const screen = run
-    .render()
-    .map((line) => stripTerminalSequences(line).trimEnd())
-    .join("\n");
+  const initial = screen(run.render());
   assert.match(
-    screen,
-    /Choose scope\n\n The clone already finished; bt-5 is done\.\n\n ❯ 1\. Small/,
+    initial,
+    /Point 20\n\n─ Question ─+\n Choose scope\n\n ❯ 1\. Small/,
+  );
+  assert.doesNotMatch(initial, /Point 1$/m);
+  assert.match(initial, /↑ more above/);
+
+  run.input(PAGE_UP, PAGE_UP);
+  const top = screen(run.render());
+  assert.match(top, /Point 1$/m);
+  assert.match(top, /─ Question ─+\n Choose scope/);
+  assert.match(top, /↓ more below/);
+
+  run.input(DOWN);
+  assert.match(
+    screen(run.render()),
+    /Choose scope\n\n   1\. Small\n ❯ 2\. Large/,
   );
   run.input(ESC);
   await run.result;
