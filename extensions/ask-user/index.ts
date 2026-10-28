@@ -2,9 +2,7 @@
  * ask-user - Lets the model ask single- or multi-select questions.
  *
  * - One question, or a batch of up to 4 questions
- * - A required context, rendered above the questions: text the
- *   model writes before the call is not reliably visible, so the dialog has to
- *   carry everything the user needs to decide
+ * - Optional, brief context appears directly above the question border
  * - 2 to 5 model-provided options per question, plus "Write my own answer"
  * - Batched questions use tabs and a final review/submit step
  * - "Write my own answer" opens an inline editor (Esc returns to the options)
@@ -43,6 +41,7 @@ import {
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 5;
 const MIN_QUESTIONS = 1;
+const MAX_CONTEXT_LENGTH = 300;
 export const MAX_QUESTIONS = 4;
 
 const OptionSchema = Type.Object({
@@ -79,11 +78,14 @@ const QuestionSchema = Type.Object({
 });
 
 const AskUserParams = Type.Object({
-  // First, so the model writes the explanation before the questions.
-  context: Type.String({
-    minLength: 1,
-    description: ASK_USER_PARAMETER_DESCRIPTIONS.context,
-  }),
+  context: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: MAX_CONTEXT_LENGTH,
+      pattern: "^[^\\r\\n]*$",
+      description: ASK_USER_PARAMETER_DESCRIPTIONS.context,
+    }),
+  ),
   questions: Type.Array(QuestionSchema, {
     minItems: MIN_QUESTIONS,
     maxItems: MAX_QUESTIONS,
@@ -171,7 +173,6 @@ function prepareAskUserArguments(args: unknown): AskUserInput {
     return args as AskUserInput;
   }
 
-  // A missing context still fails validation, telling the model what to add.
   return {
     context: input.context,
     questions: [
@@ -262,12 +263,7 @@ export default function askUser(pi: ExtensionAPI) {
     prepareArguments: prepareAskUserArguments,
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const context = params.context.trim();
-      if (!context) {
-        throw new Error(
-          "ask-user requires a non-empty context. Retry with what the user needs to know to answer.",
-        );
-      }
+      const context = params.context?.trim();
       const questions = normalizeQuestions(params);
       validateQuestions(questions);
 
@@ -307,7 +303,9 @@ export default function askUser(pi: ExtensionAPI) {
             },
           };
           const editor = new Editor(tui, editorTheme);
-          const contextView = new Markdown(context, 0, 0, getMarkdownTheme());
+          const contextView = context
+            ? new Markdown(context, 0, 0, getMarkdownTheme())
+            : undefined;
 
           let currentTab = 0;
           let optionIndex = 0;
@@ -607,9 +605,20 @@ export default function askUser(pi: ExtensionAPI) {
             cachedWidth = renderWidth;
             cachedRows = rows;
 
+            // Plain decision context stays adjacent to the question box, outside
+            // its border and without the transcript tool row's wrapper or gap.
+            const intro = contextView
+              ? [
+                  ...contextView
+                    .render(Math.max(1, renderWidth - 2))
+                    .map((line) => ` ${line}`),
+                  "",
+                ]
+              : [];
             const rowBudget = Math.max(
               4,
-              Math.min(rows - 2, Math.max(12, Math.floor(rows * 0.7))),
+              Math.min(rows - 2, Math.max(12, Math.floor(rows * 0.7))) -
+                intro.length,
             );
             const heading: string[] = [];
             const body: string[] = [];
@@ -759,19 +768,8 @@ export default function askUser(pi: ExtensionAPI) {
             );
             // Very long questions remain readable by scrolling, rather than being discarded.
             const headingOverflow = heading.splice(headingRows);
-            // The context is shared by every question, so it opens the dialog,
-            // directly under the title line and above the tabs.
-            const intro = [
-              ...contextView
-                .render(Math.max(1, renderWidth - 2))
-                .map((line) => ` ${line}`),
-              "",
-            ];
-            // One scrollable document runs from the context to the options; the
-            // rest of the heading is inserted where the context ends (see the
-            // split below).
-            body.unshift(...intro, ...headingOverflow);
-            const offset = intro.length + headingOverflow.length;
+            body.unshift(...headingOverflow);
+            const offset = headingOverflow.length;
             if (focus) focus = [focus[0] + offset, focus[1] + offset];
             bodyHeight = Math.max(1, rowBudget - heading.length - footerRows);
             bodyLength = body.length;
@@ -782,8 +780,7 @@ export default function askUser(pi: ExtensionAPI) {
               if (focus[1] > scrollTop + bodyHeight) {
                 if (focus[1] - focus[0] <= bodyHeight)
                   scrollTop = focus[1] - bodyHeight;
-                // Taller than the view: its first line is enough, so the context
-                // above it is not scrolled away while that line is visible.
+                // For an option taller than the view, keep its first line visible.
                 else if (focus[0] >= scrollTop + bodyHeight)
                   scrollTop = focus[0];
               }
@@ -810,22 +807,9 @@ export default function askUser(pi: ExtensionAPI) {
                     theme.fg("accent", "─".repeat(renderWidth)),
                   ];
             const visible = body.slice(scrollTop, scrollTop + bodyHeight);
-            // The title line always frames the dialog, so the context reads as
-            // part of it. Tabs and question follow the visible context and stick
-            // under the title once it has scrolled away, keeping the question
-            // in view.
-            const split = Math.max(
-              0,
-              Math.min(intro.length - scrollTop, visible.length),
+            cachedLines = [...intro, ...heading, ...visible, ...footer].map(
+              (line) => truncateToWidth(line, renderWidth),
             );
-            const [titleLine, ...questionHeading] = heading;
-            cachedLines = [
-              titleLine,
-              ...visible.slice(0, split),
-              ...questionHeading,
-              ...visible.slice(split),
-              ...footer,
-            ].map((line) => truncateToWidth(line, renderWidth));
             return cachedLines;
           }
 
@@ -840,7 +824,7 @@ export default function askUser(pi: ExtensionAPI) {
             invalidate: () => {
               cachedLines = undefined;
               editor.invalidate();
-              contextView.invalidate();
+              contextView?.invalidate();
             },
             handleInput,
             dispose: () => {
@@ -911,8 +895,7 @@ export default function askUser(pi: ExtensionAPI) {
     renderCall(args, theme, renderContext) {
       const input = args as RecordedInput;
       const title = theme.fg("toolTitle", theme.bold("ask-user"));
-      // The dialog is gone once answered; expanding the row keeps its context
-      // reviewable, in the dialog's order: the context first, then the questions.
+      // Keep context reviewable after the interactive question box is gone.
       const context = renderContext.expanded
         ? input.context?.trim()
         : undefined;
@@ -931,7 +914,11 @@ export default function askUser(pi: ExtensionAPI) {
       };
 
       const renderSummary = (input: RecordedInput) => {
-        if (!("questions" in input)) return renderSingle(input);
+        if (!("questions" in input)) {
+          return "question" in input && Array.isArray(input.options)
+            ? renderSingle(input)
+            : new Text(title, 0, 0);
+        }
 
         const [singleQuestion] = input.questions;
         if (input.questions.length === 1 && singleQuestion) {

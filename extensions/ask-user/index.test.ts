@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   type ExtensionAPI,
   type ExtensionContext,
+  type Theme,
+  type ToolRenderers,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -10,9 +12,13 @@ import {
   stripTerminalSequences,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { askUserRow } from "../ui/ask-user.ts";
+import { compactToolRows } from "../ui/tool-rows.ts";
+import { type TSchema } from "typebox";
+import { Value } from "typebox/value";
 import askUser, { type AskUserInput } from "./index.ts";
 
-// The dialog renders its context through Pi's Markdown theme.
+// The transcript renders decision context through Pi's Markdown theme.
 initTheme();
 
 type ToolResult = {
@@ -52,6 +58,8 @@ type TestContext = {
 };
 
 type TestTool = {
+  parameters: TSchema;
+  renderCall: NonNullable<ToolRenderers["renderCall"]>;
   execute(
     toolCallId: string,
     params: AskUserInput,
@@ -254,45 +262,74 @@ function screen(lines: string[]) {
   return lines.map((line) => stripTerminalSequences(line).trimEnd()).join("\n");
 }
 
-test("shows the Markdown context inside the dialog, under its title and above the tabs, on every tab", async () => {
-  const run = await openQuestionnaire({
+function renderCall(
+  params: AskUserInput,
+  { isPartial = true, expanded = false, compact = true } = {},
+) {
+  const { tool } = registeredTool();
+  const renderer = compact
+    ? compactToolRows({ "ask-user": askUserRow })("ask-user", () => tool)
+    : tool;
+  assert.ok(renderer?.renderCall);
+  const theme = {
+    fg: (_color, text) => text,
+    bg: (_color, text) => text,
+    bold: (text) => text,
+  } as Theme;
+  return screen(
+    renderer
+      .renderCall(params, theme, {
+        args: params,
+        toolCallId: "ask-1",
+        invalidate() {},
+        lastComponent: undefined,
+        state: {},
+        cwd: process.cwd(),
+        executionStarted: true,
+        argsComplete: true,
+        isPartial,
+        expanded,
+        showImages: false,
+        isError: false,
+        durationMs: isPartial ? undefined : 1000,
+        outputPad: 0,
+      })
+      .render(80),
+  );
+}
+
+test("keeps context out of the running tool row and reviewable after answering", () => {
+  const params = {
     ...batch,
     context: "The clone **already finished**; `bt-5` is done.",
-  });
+  };
+  for (const compact of [false, true]) {
+    assert.match(renderCall(params, { compact }), /ask-user/);
+    assert.doesNotMatch(renderCall(params, { compact }), /The clone/);
+  }
+  assert.doesNotMatch(renderCall(params, { isPartial: false }), /The clone/);
   assert.match(
-    screen(run.render()),
-    /^─ Questions ─+\n The clone already finished; bt-5 is done\.\n\n .*Scope.*Priority.*\n Choose scope\n\n ❯ 1\. Small/,
+    renderCall(params, { isPartial: false, expanded: true }),
+    /The clone already finished; bt-5 is done\./,
   );
-  run.input(TAB);
-  assert.match(
-    screen(run.render()),
-    /^─ Questions ─+\n The clone already finished; bt-5 is done\.\n\n .*\n Choose priority/,
-  );
-  run.input(ESC);
-  await run.result;
 });
 
-test("a long context scrolls above the question, which stays in view with the focused option", async () => {
-  const run = await openQuestionnaire({
-    context: Array.from({ length: 20 }, (_v, i) => `- Point ${i + 1}`).join(
-      "\n",
-    ),
-    questions: [batch.questions[0]],
-  });
-  const initial = screen(run.render());
-  assert.match(
-    initial,
-    /^─ Question ─+\n - Point \d+\n[^]*Point 20\n\n Choose scope\n\n ❯ 1\. Small/,
-  );
-  assert.doesNotMatch(initial, /Point 1$/m);
-  assert.match(initial, /↑ more above/);
-
-  run.input(PAGE_UP, PAGE_UP);
-  const top = screen(run.render());
-  assert.match(top, /^─ Question ─+\n - Point 1\n/);
-  assert.match(top, /\n Choose scope\n/);
-  assert.match(top, /↓ more below/);
-
+test("shows brief context directly above the question border on every tab", async () => {
+  const params = {
+    ...batch,
+    context:
+      "I recommend **Small**: easier to undo. Choose Large for a full rollout.",
+  };
+  const run = await openQuestionnaire(params);
+  for (let tab = 0; tab < 3; tab++) {
+    const lines = screen(run.render());
+    assert.match(
+      lines,
+      /^ I recommend Small: easier to undo\. Choose Large for a full rollout\.\n\n─ Questions ─+\n/,
+    );
+    assert.equal((lines.match(/I recommend/g) ?? []).length, 1);
+    run.input(TAB);
+  }
   run.input(DOWN);
   assert.match(
     screen(run.render()),
@@ -302,17 +339,29 @@ test("a long context scrolls above the question, which stays in view with the fo
   await run.result;
 });
 
-test("rejects a blank context before showing a dialog", async () => {
-  await assert.rejects(
-    registeredTool().tool.execute(
-      "ask-1",
-      { ...batch, context: "  \n" },
-      undefined,
-      undefined,
-      { mode: "tui", hasUI: true },
-    ),
-    /non-empty context/,
+test("allows simple questions without context and rejects verbose context at the tool boundary", async () => {
+  const params = { questions: batch.questions };
+  const { tool } = registeredTool();
+  assert.equal(Value.Check(tool.parameters, params), true);
+  assert.equal(
+    Value.Check(tool.parameters, { ...params, context: "x".repeat(300) }),
+    true,
   );
+  assert.equal(
+    Value.Check(tool.parameters, { ...params, context: "x".repeat(301) }),
+    false,
+  );
+  assert.equal(
+    Value.Check(tool.parameters, {
+      ...params,
+      context: "First paragraph.\n\nSecond paragraph.",
+    }),
+    false,
+  );
+  const run = await openQuestionnaire(params);
+  assert.match(screen(run.render()), /^─ Questions ─+\n/);
+  run.input("1", "2", ENTER);
+  assert.equal((await run.result).details.cancelled, false);
 });
 
 test("shows a written single-select answer when returning to its tab", async () => {
