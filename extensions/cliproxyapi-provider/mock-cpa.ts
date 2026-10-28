@@ -34,6 +34,8 @@ export interface Faults {
   rejectUpgrade?: number;
   /** Close the socket with this code after the next request arrives, before any event. */
   closeAfterRequest?: number;
+  /** Stream the next response up to `response.completed`, then close with this code. */
+  closeBeforeCompleted?: number;
   /** Answer the next continuation with `previous_response_not_found`. */
   forgetContinuation?: boolean;
   /** Never answer the next request. */
@@ -378,6 +380,21 @@ export async function startMockCpa(options: {
         const { events, output, id } = responseEvents(
           options.reply(merged, body),
         );
+        const dropCode = mock.faults.closeBeforeCompleted;
+        if (dropCode !== undefined) {
+          delete mock.faults.closeBeforeCompleted;
+          const partial = events.slice(0, -1);
+          partial.forEach((event, index) =>
+            ws.send(JSON.stringify(event), () => {
+              if (index < partial.length - 1) return;
+              // No close frame carries 1006: clients report it when the connection just ends.
+              // Waiting for the last write keeps the drop from discarding buffered events.
+              if (dropCode === 1006) ws.terminate();
+              else ws.close(dropCode, "test close");
+            }),
+          );
+          return;
+        }
         for (const event of events) ws.send(JSON.stringify(event));
         last = { input: merged, output, id };
       });

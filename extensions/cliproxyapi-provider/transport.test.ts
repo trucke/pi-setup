@@ -3,6 +3,7 @@ import test, { type TestContext } from "node:test";
 import {
   createModels,
   InMemoryModelsStore,
+  retryAssistantCall,
   Type,
   type AssistantMessage,
   type Message,
@@ -310,6 +311,45 @@ test("uses SSE only when nothing reached CPA", async (t) => {
     ]),
     [["websocket", 2]],
   );
+});
+
+test("lets Pi retry a response dropped before response.completed", async (t) => {
+  for (const [code, closed] of [
+    [1000, "1000: test close"],
+    [1006, "1006"],
+  ] as const) {
+    const f = await fixture(t);
+    f.mock.faults.closeBeforeCompleted = code;
+    const attempts: AssistantMessage[] = [];
+    // Pi's own bounded retry loop and classifier, as used for agent turns.
+    const result = await retryAssistantCall(
+      async () => {
+        const attempt = await f.turn([user("a")]);
+        attempts.push(attempt);
+        return attempt;
+      },
+      { enabled: true, maxRetries: 1, baseDelayMs: 0 },
+      undefined,
+    );
+    const [dropped] = attempts;
+    assert.equal(result.stopReason, "stop", dropped?.errorMessage);
+    assert.equal(text(result), "reply to a 👋");
+    assert.equal(dropped?.stopReason, "error");
+    assert.equal(
+      dropped.errorMessage,
+      `WebSocket closed before the response completed (${closed})`,
+    );
+    // The drop came after streamed content, not before CPA answered.
+    assert.equal(text(dropped), "reply to a 👋");
+    // One request per Pi attempt: the extension never resent the delivered request itself.
+    assert.deepEqual(
+      f.mock.requests.map((request) => [request.transport, request.connection]),
+      [
+        ["websocket", 1],
+        ["websocket", 2],
+      ],
+    );
+  }
 });
 
 test("aborts a stalled request and recovers on a new connection", async (t) => {

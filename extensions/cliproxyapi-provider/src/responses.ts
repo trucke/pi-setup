@@ -259,6 +259,11 @@ export function continuationDelta(
 
 function socketErrorMessage(error: Socket.SocketError): string {
   const reason = error.reason;
+  if (reason._tag === "SocketCloseError") {
+    // Pi retries transient failures by their message and recognizes "WebSocket closed", which
+    // its own WebSocket transport reports. A bare code such as "WebSocket 1000" reads as final.
+    return `WebSocket closed before the response completed (${reason.message})`;
+  }
   if (reason._tag === "SocketOpenError" && reason.kind === "Unknown") {
     const cause: unknown = reason.cause;
     if (isObject(cause) && typeof cause.message === "string" && cause.message) {
